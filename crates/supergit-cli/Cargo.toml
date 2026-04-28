@@ -1,0 +1,14 @@
+[package]
+name = "supergit-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "sg"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+supergit-core = { path = "../supergit-core" }

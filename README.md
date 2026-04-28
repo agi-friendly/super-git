@@ -27,6 +27,21 @@ The first version focuses on repository registration, repository status,
 worktree listing, worktree creation, worktree removal, and opening worktrees
 in external tools such as VS Code, IntelliJ IDEA, or terminal.
 
+## Stage 1 CLI MVP
+
+The current implementation starts with a small CLI-first skeleton.
+
+```bash
+sg doctor
+sg repo add <path>
+sg repo list
+sg status [path]
+sg wt list [path]
+```
+
+The CLI binary is named `sg`. It wraps the installed system `git` command and
+keeps repository registration in a simple cross-platform config file.
+
 ## Non-goals for Early Versions
 
 - Reimplementing Git
