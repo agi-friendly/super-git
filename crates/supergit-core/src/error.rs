@@ -12,6 +12,9 @@ pub enum SuperGitError {
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 
+    #[error("path is not a directory: {0}")]
+    PathIsNotDirectory(PathBuf),
+
     #[error("path is not a Git repository or inside a Git work tree: {0}")]
     NotGitRepository(PathBuf),
 

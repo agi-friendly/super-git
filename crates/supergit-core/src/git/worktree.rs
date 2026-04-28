@@ -5,7 +5,7 @@ use crate::model::WorktreeInfo;
 use crate::Result;
 
 pub fn list_worktrees(path: &Path) -> Result<Vec<WorktreeInfo>> {
-    let output = Git::default().run_in(path, &["worktree", "list", "--porcelain"])?;
+    let output = Git::default().run_in(path, ["worktree", "list", "--porcelain"])?;
     Ok(parse_worktree_list(&output.stdout))
 }
 

@@ -5,7 +5,7 @@ use crate::model::StatusOutput;
 use crate::Result;
 
 pub fn read_status(path: &Path) -> Result<StatusOutput> {
-    let output = Git::default().run_in(path, &["status", "--porcelain=v1", "--branch"])?;
+    let output = Git::default().run_in(path, ["status", "--porcelain=v1", "--branch"])?;
     Ok(parse_status_porcelain(&output.stdout))
 }
 

@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -5,7 +6,7 @@ use crate::{Result, SuperGitError};
 
 #[derive(Debug, Clone)]
 pub struct Git {
-    program: String,
+    program: OsString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,40 +18,55 @@ pub struct GitOutput {
 impl Default for Git {
     fn default() -> Self {
         Self {
-            program: "git".to_string(),
+            program: OsString::from("git"),
         }
     }
 }
 
 impl Git {
     pub fn version(&self) -> Result<String> {
-        let output = self.run(&["--version"])?;
+        let output = self.run(["--version"])?;
         Ok(output.stdout.trim().to_string())
     }
 
-    pub fn run(&self, args: &[&str]) -> Result<GitOutput> {
-        let output = Command::new(&self.program).args(args).output()?;
-        self.output_or_error(args_to_strings(args), output)
+    pub fn run<I, S>(&self, args: I) -> Result<GitOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        let output = Command::new(&self.program).args(&args).output()?;
+        self.output_or_error(display_args(&args), output)
     }
 
-    pub fn run_in(&self, path: &Path, args: &[&str]) -> Result<GitOutput> {
+    pub fn run_in<I, S>(&self, path: &Path, args: I) -> Result<GitOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
         let output = Command::new(&self.program)
             .arg("-C")
             .arg(path)
-            .args(args)
+            .args(&args)
             .output()?;
 
-        let mut display_args = vec!["-C".to_string(), path.display().to_string()];
-        display_args.extend(args_to_strings(args));
+        let mut shown_args = vec!["-C".to_string(), path.display().to_string()];
+        shown_args.extend(display_args(&args));
 
-        self.output_or_error(display_args, output)
+        self.output_or_error(shown_args, output)
     }
 
-    pub fn try_run_in(&self, path: &Path, args: &[&str]) -> Result<GitCommandResult> {
+    pub fn try_run_in<I, S>(&self, path: &Path, args: I) -> Result<GitCommandResult>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
         let output = Command::new(&self.program)
             .arg("-C")
             .arg(path)
-            .args(args)
+            .args(&args)
             .output()?;
 
         Ok(GitCommandResult::from_output(output))
@@ -93,6 +109,18 @@ impl GitCommandResult {
     }
 }
 
-fn args_to_strings(args: &[&str]) -> Vec<String> {
-    args.iter().map(|arg| (*arg).to_string()).collect()
+fn collect_args<I, S>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    args.into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect()
+}
+
+fn display_args(args: &[OsString]) -> Vec<String> {
+    args.iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
 }
