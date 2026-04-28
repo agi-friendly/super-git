@@ -1,14 +1,35 @@
 # super-git
 
-- 내가 써왔던 Git 도구들의 장점을 모두 살리고 싶다.
-- 하지만, 가장 중요한건 기본.
-  기본은 충실하게 구현하는 Git 도구를 만들고 싶다.
+super-git은 여러 Git 도구를 사용하며 느꼈던 장점을 모아,
+가볍고 기본에 충실한 Git 작업 도구를 만드는 실험 프로젝트다.
 
-- Windows, MAC, Linux 모두 지원 해야 한다.
-- 무조건 가벼워야 한다.
-- 무거운건 Plugin 형태로 제공한다.
-- 모든 기능은 커맨드 라인에서 사용 가능해야 한다.
-- Tortoise Git 처럼 Windows 탐색기에서 바로 사용 가능해야 한다.
-- Fork 처럼 싱글 프로그램으로, 여러 저장소 통합 관리 가능해야 한다.
-- vscode 플로그인의 워크트리는 완벽하다.
-  하지만 난 더 완벽한 워크트리 도구를 만들어 낼 수 있다.
+## Product Principles
+
+- Git의 기본 동작을 신뢰성 있게 지원한다.
+- 모든 핵심 기능은 CLI에서 사용할 수 있어야 한다.
+- Desktop UI는 CLI/Core 기능을 감싸는 얇은 레이어로 둔다.
+- Windows, macOS, Linux를 지원한다.
+- 기본 앱은 가볍게 유지하고, 무거운 기능은 Plugin 형태로 분리한다.
+- 여러 저장소를 하나의 프로그램에서 관리할 수 있어야 한다.
+- Git worktree 작업을 가장 편하고 안전하게 수행할 수 있어야 한다.
+- OS 파일 탐색기에서 바로 실행할 수 있어야 한다.
+
+## Inspiration
+
+- TortoiseGit: Windows Explorer integration, rebase UX, lightweight usage
+- Fork: multi-repository management
+- IntelliJ IDEA Git: conflict handling, patch, interactive rebase support
+- VS Code Git Worktree Manager: worktree creation and workspace opening flow
+
+## Initial Scope
+
+The first version focuses on repository registration, repository status,
+worktree listing, worktree creation, worktree removal, and opening worktrees
+in external tools such as VS Code, IntelliJ IDEA, or terminal.
+
+## Non-goals for Early Versions
+
+- Reimplementing Git
+- Replacing all features of existing Git GUI tools
+- Building complex merge/rebase UI from the beginning
+- Building a full plugin system before the core workflow is stable
