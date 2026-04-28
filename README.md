@@ -42,6 +42,11 @@ sg wt list [path]
 The CLI binary is named `sg`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.
 
+## Development Setup
+
+See [docs/setup.md](docs/setup.md) for required tools and OS-specific setup
+notes.
+
 ## Non-goals for Early Versions
 
 - Reimplementing Git
