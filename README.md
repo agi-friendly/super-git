@@ -32,14 +32,14 @@ in external tools such as VS Code, IntelliJ IDEA, or terminal.
 The current implementation starts with a small CLI-first skeleton.
 
 ```bash
-sg doctor
-sg repo add <path>
-sg repo list
-sg status [path]
-sg wt list [path]
+super-git doctor
+super-git repo add <path>
+super-git repo list
+super-git status [path]
+super-git wt list [path]
 ```
 
-The CLI binary is named `sg`. It wraps the installed system `git` command and
+The CLI binary is named `super-git`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.
 
 ## Development Setup

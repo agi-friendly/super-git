@@ -5,13 +5,13 @@
 ## Stage 1: CLI Skeleton
 
 - Rust workspace 구성
-- `supergit-core`와 `supergit-cli` 분리
-- `sg` CLI 바이너리 제공
-- `sg doctor`
-- `sg repo add <path>`
-- `sg repo list`
-- `sg status [path]`
-- `sg wt list [path]`
+- `supergit-core`와 `super-git-cli` 분리
+- `super-git` CLI 바이너리 제공
+- `super-git doctor`
+- `super-git repo add <path>`
+- `super-git repo list`
+- `super-git status [path]`
+- `super-git wt list [path]`
 - 설정 파일에 저장소 목록 저장
 - worktree/status 기본 파싱 테스트
 

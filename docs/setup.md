@@ -12,7 +12,7 @@
 - rustfmt
 - Clippy
 
-`super-git`은 Git을 직접 재구현하지 않는다. 실행 시 설치된 시스템 `git` 명령을 호출하므로, Rust로 빌드할 때뿐 아니라 `sg doctor`, `sg status`, `sg wt list` 같은 명령을 실행할 때도 `git`이 필요하다.
+`super-git`은 Git을 직접 재구현하지 않는다. 실행 시 설치된 시스템 `git` 명령을 호출하므로, Rust로 빌드할 때뿐 아니라 `super-git doctor`, `super-git status`, `super-git wt list` 같은 명령을 실행할 때도 `git`이 필요하다.
 
 ## Why Each Tool Is Needed
 
@@ -26,7 +26,7 @@ Git은 두 가지 이유로 필요하다.
 git clone <repository-url>
 ```
 
-둘째, `sg` 자체가 내부에서 시스템 `git` 명령을 실행한다.
+둘째, `super-git` 자체가 내부에서 시스템 `git` 명령을 실행한다.
 
 예를 들어 Stage 1에서는 다음 Git 명령들을 Rust에서 안전하게 감싼다.
 
@@ -62,7 +62,7 @@ Cargo는 Rust 프로젝트에서 가장 자주 쓰는 명령 도구다.
 
 ```bash
 cargo build
-cargo run -p supergit-cli -- doctor
+cargo run -p super-git-cli -- doctor
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
@@ -144,7 +144,7 @@ Git for Windows를 설치한 뒤 PowerShell 또는 Windows Terminal에서 확인
 git --version
 ```
 
-`sg`는 시스템 `git` 명령을 호출하므로, `git`이 PATH에 잡혀 있어야 한다.
+`super-git` 명령은 시스템 `git` 명령을 호출하므로, `git`이 PATH에 잡혀 있어야 한다.
 
 ### Rust via rustup
 
@@ -201,7 +201,7 @@ git clone <repository-url>
 cd super-git
 cargo test
 cargo clippy --all-targets -- -D warnings
-cargo run -p supergit-cli -- doctor
+cargo run -p super-git-cli -- doctor
 ```
 
 정상이라면 `doctor`에서 Git 버전, OS, config 파일 위치가 출력된다.
@@ -217,12 +217,12 @@ Config: /Users/<name>/Library/Application Support/com.super-git.super-git/config
 
 ## Runtime Config Location
 
-`sg repo add <path>`는 등록한 저장소 목록을 사용자별 config directory에 저장한다.
+`super-git repo add <path>`는 등록한 저장소 목록을 사용자별 config directory에 저장한다.
 
 정확한 위치는 OS마다 다르며, 다음 명령으로 확인할 수 있다.
 
 ```bash
-cargo run -p supergit-cli -- doctor
+cargo run -p super-git-cli -- doctor
 ```
 
 예상 위치는 대략 다음과 같다.
@@ -249,10 +249,10 @@ Windows에서 우선 확인해야 할 명령은 다음과 같다.
 ```powershell
 cargo test
 cargo clippy --all-targets -- -D warnings
-cargo run -p supergit-cli -- doctor
-cargo run -p supergit-cli -- repo add .
-cargo run -p supergit-cli -- status
-cargo run -p supergit-cli -- wt list
+cargo run -p super-git-cli -- doctor
+cargo run -p super-git-cli -- repo add .
+cargo run -p super-git-cli -- status
+cargo run -p super-git-cli -- wt list
 ```
 
 ## Optional Tools

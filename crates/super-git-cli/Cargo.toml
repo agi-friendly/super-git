@@ -1,11 +1,11 @@
 [package]
-name = "supergit-cli"
+name = "super-git-cli"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "sg"
+name = "super-git"
 path = "src/main.rs"
 
 [dependencies]

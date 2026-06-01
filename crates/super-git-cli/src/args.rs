@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "sg")]
+#[command(name = "super-git")]
 #[command(about = "A small CLI-first foundation for super-git")]
 #[command(version)]
 pub struct Cli {

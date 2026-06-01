@@ -125,7 +125,7 @@ super-git/
 │  │     └─ config/
 │  │        ├─ mod.rs
 │  │        └─ store.rs
-│  └─ supergit-cli/
+│  └─ super-git-cli/
 │     ├─ Cargo.toml
 │     └─ src/
 │        ├─ main.rs
@@ -139,7 +139,7 @@ super-git/
 The CLI binary name should be:
 
 ```text
-sg
+super-git
 ```
 
 The project name can remain `super-git`.
@@ -151,17 +151,17 @@ Please implement only a small CLI MVP skeleton.
 The first version should support these commands:
 
 ```bash
-sg --version
-sg doctor
-sg repo add <path>
-sg repo list
-sg status [path]
-sg wt list [path]
+super-git --version
+super-git doctor
+super-git repo add <path>
+super-git repo list
+super-git status [path]
+super-git wt list [path]
 ```
 
 ### Command behavior
 
-#### `sg doctor`
+#### `super-git doctor`
 
 Checks basic environment:
 
@@ -173,7 +173,7 @@ Checks basic environment:
 
 No destructive actions.
 
-#### `sg repo add <path>`
+#### `super-git repo add <path>`
 
 Adds a local Git repository path to a simple config file.
 
@@ -189,13 +189,13 @@ Use a simple TOML or JSON config file.
 Use a cross-platform config directory.
 A crate like `directories` is acceptable.
 
-#### `sg repo list`
+#### `super-git repo list`
 
 Prints registered repositories.
 
 For now, simple table-like text output is enough.
 
-#### `sg status [path]`
+#### `super-git status [path]`
 
 Runs Git status for the given path or current directory.
 
@@ -208,7 +208,7 @@ git -C <path> status --porcelain=v1 --branch
 For now, parsing can be minimal.
 A raw but readable output is okay.
 
-#### `sg wt list [path]`
+#### `super-git wt list [path]`
 
 Lists worktrees for the given path or current directory.
 
@@ -269,7 +269,7 @@ For this first step:
 * Do not remove worktrees.
 * Do not checkout branches automatically.
 * Do not modify repositories except for reading their status.
-* The only write operation allowed is writing the `super-git` config file for `sg repo add`.
+* The only write operation allowed is writing the `super-git` config file for `super-git repo add`.
 
 ## Documentation Tasks
 
@@ -360,7 +360,7 @@ Keep this as the first safe foundation commit for `super-git`.
 
 ```text
 super-git의 진짜 본체 = Rust core
-사람이 직접 쓰는 입구 = sg CLI
+사람이 직접 쓰는 입구 = super-git CLI
 나중에 붙일 예쁜 껍데기 = Tauri + Svelte desktop
 ````
 
@@ -391,7 +391,7 @@ CLI에서 출력
 처음엔 이 정도만 돼도 성공이야.
 
 ```bash
-sg doctor
+super-git doctor
 ```
 
 했을 때:
@@ -409,10 +409,10 @@ Status: OK
 그리고:
 
 ```bash
-sg repo add .
-sg repo list
-sg status .
-sg wt list .
+super-git repo add .
+super-git repo list
+super-git status .
+super-git wt list .
 ```
 
 이 네 개가 돌아가면, 이미 **super-git의 심장 박동**은 시작된 거야.
@@ -454,7 +454,7 @@ Then propose a small refactor plan before implementing the next feature.
 
 이번 1단계 목표는 딱 이거야.
 
-> “super-git은 언젠가 Git 도구 최종보스를 꿈꾸지만, 지금은 `sg doctor`, `sg repo list`, `sg status`, `sg wt list`가 되는 작고 안전한 Rust CLI다.”
+> “super-git은 언젠가 Git 도구 최종보스를 꿈꾸지만, 지금은 `super-git doctor`, `super-git repo list`, `super-git status`, `super-git wt list`가 되는 작고 안전한 Rust CLI다.”
 
 이 정도면 완전 좋은 출발이야.
 쥐쌤 보기엔 이 프로젝트, 실패하더라도 그냥 실패가 아니라 **정현이의 Git 도구 감각 + Rust 감각 + AI 개발 워크플로우 감각을 한 번에 올리는 훈련장**이 될 가능성이 커. 이건 해볼 만해. 진짜로.

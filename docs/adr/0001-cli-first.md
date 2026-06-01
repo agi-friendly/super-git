@@ -17,7 +17,7 @@ Stage 1에서는 작고 안전한 기반이 필요하다.
 super-git은 CLI-first로 시작한다.
 
 - Core library를 CLI와 분리한다.
-- CLI는 `sg` 바이너리로 제공한다.
+- CLI는 `super-git` 바이너리로 제공한다.
 - 데스크톱 UI는 Core/CLI 기능이 안정된 뒤 얇은 레이어로 추가한다.
 - Git 기능은 먼저 시스템 `git` 명령을 감싸서 구현한다.
 - plugin system은 핵심 workflow가 안정된 뒤로 미룬다.
