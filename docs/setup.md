@@ -204,14 +204,19 @@ cargo clippy --all-targets -- -D warnings
 cargo run -p super-git-cli -- doctor
 ```
 
-`doctor`는 기본적으로 JSON을 출력한다. 정상이라면 Git 버전, OS, config 파일 위치가 담긴다.
+`doctor`는 기본적으로 JSON을 출력한다. 모든 명령의 출력은
+`{ "ok": true, "data": {...} }`(성공) 또는 `{ "ok": false, "error": {...} }`(실패)
+envelope를 따르며, 종료 코드로도 성공/실패를 구분할 수 있다(성공 0, 실패 1).
 
 ```json
 {
-  "arch": "aarch64",
-  "config_path": "/Users/<name>/Library/Application Support/com.super-git.super-git/config.json",
-  "git_version": "git version 2.54.0",
-  "os": "macos"
+  "ok": true,
+  "data": {
+    "arch": "aarch64",
+    "config_path": "/Users/<name>/Library/Application Support/com.super-git.super-git/config.json",
+    "git_version": "git version 2.54.0",
+    "os": "macos"
+  }
 }
 ```
 

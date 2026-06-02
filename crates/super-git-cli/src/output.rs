@@ -13,9 +13,12 @@ pub enum OutputMode {
     Human,
 }
 
-/// 단일 JSON 출력 지점. C3에서 core의 report 레이어로 옮겨갈 자리다.
-fn emit_json(value: impl Serialize) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&value)?);
+/// 성공 출력의 단일 JSON 지점. 실패의 `{ ok: false, error }`와 대칭이 되도록
+/// 성공도 `{ ok: true, data: {...} }` envelope로 감싼다. AI가 `ok` 필드 하나로 분기한다.
+/// C3에서 core의 report 레이어로 옮겨갈 자리다.
+fn emit_success(data: impl Serialize) -> Result<()> {
+    let envelope = json!({ "ok": true, "data": data });
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
     Ok(())
 }
 
@@ -74,7 +77,7 @@ pub fn print_parse_error(mode: OutputMode, err: &clap::Error) {
 
 pub fn print_doctor(mode: OutputMode, git_version: &str, config_path: &Path) -> Result<()> {
     match mode {
-        OutputMode::Json => emit_json(json!({
+        OutputMode::Json => emit_success(json!({
             "git_version": git_version,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
@@ -92,7 +95,7 @@ pub fn print_doctor(mode: OutputMode, git_version: &str, config_path: &Path) -> 
 
 pub fn print_repo_add(mode: OutputMode, path: &Path, added: bool) -> Result<()> {
     match mode {
-        OutputMode::Json => emit_json(json!({
+        OutputMode::Json => emit_success(json!({
             "path": path,
             "added": added,
         })),
@@ -109,7 +112,7 @@ pub fn print_repo_add(mode: OutputMode, path: &Path, added: bool) -> Result<()> 
 
 pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<()> {
     match mode {
-        OutputMode::Json => emit_json(json!({ "repositories": repositories })),
+        OutputMode::Json => emit_success(json!({ "repositories": repositories })),
         OutputMode::Human => {
             if repositories.is_empty() {
                 println!("No repositories registered yet.");
@@ -127,7 +130,7 @@ pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<
 
 pub fn print_status(mode: OutputMode, path: &Path, status: &StatusOutput) -> Result<()> {
     match mode {
-        OutputMode::Json => emit_json(json!({
+        OutputMode::Json => emit_success(json!({
             "repository": path,
             "branch_header": status.branch_header,
             "entries": status.entries,
@@ -156,7 +159,7 @@ pub fn print_status(mode: OutputMode, path: &Path, status: &StatusOutput) -> Res
 
 pub fn print_worktrees(mode: OutputMode, worktrees: &[WorktreeInfo]) -> Result<()> {
     match mode {
-        OutputMode::Json => emit_json(json!({ "worktrees": worktrees })),
+        OutputMode::Json => emit_success(json!({ "worktrees": worktrees })),
         OutputMode::Human => {
             if worktrees.is_empty() {
                 println!("No worktrees found.");
