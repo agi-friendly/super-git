@@ -29,15 +29,21 @@ in external tools such as VS Code, IntelliJ IDEA, or terminal.
 
 ## Stage 1 CLI MVP
 
-The current implementation starts with a small CLI-first skeleton.
+The current implementation starts with a small, AI-first CLI skeleton.
 
 ```bash
 super-git doctor
 super-git repo add <path>
 super-git repo list
 super-git status [path]
+super-git inspect [path]
 super-git wt list [path]
 ```
+
+`super-git inspect` is the flagship command: it surfaces the repository's
+hidden state machine — current HEAD and any in-progress operation (merge,
+rebase, am, cherry-pick, revert, bisect) — as a structured JSON envelope, so
+an agent can tell where the repo is before acting.
 
 The CLI binary is named `super-git`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.

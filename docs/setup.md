@@ -202,6 +202,7 @@ cd super-git
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo run -p super-git-cli -- doctor
+cargo run -p super-git-cli -- inspect
 ```
 
 `doctor`는 기본적으로 JSON을 출력한다. 모든 명령의 출력은
@@ -232,6 +233,10 @@ Git: OK (git version 2.54.0)
 OS: macos aarch64
 Config: /Users/<name>/Library/Application Support/com.super-git.super-git/config.json
 ```
+
+`super-git inspect [path]`는 저장소의 상태(HEAD와 진행 중인 작업)를 조회하는
+AI-first 핵심 명령이다. 출력의 `repository`는 입력이 하위 디렉토리여도 항상 절대
+worktree root로 정규화된다.
 
 ## Runtime Config Location
 

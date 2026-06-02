@@ -2,18 +2,19 @@
 
 이 로드맵은 작게 실패하고 안전하게 배우기 위한 단계 계획이다. 각 단계는 이전 단계가 실제로 쓸 만해졌을 때만 넘어간다.
 
-## Stage 1: CLI Skeleton
+## Stage 1: CLI Skeleton (AI-first)
 
 - Rust workspace 구성
 - `super-git-core`와 `super-git-cli` 분리
-- `super-git` CLI 바이너리 제공
+- `super-git` CLI 바이너리 제공 (기본 출력은 JSON envelope, `--human` 지원)
 - `super-git doctor`
 - `super-git repo add <path>`
 - `super-git repo list`
 - `super-git status [path]`
+- `super-git inspect [path]` — HEAD + 진행 중인 작업 상태머신 조회
 - `super-git wt list [path]`
 - 설정 파일에 저장소 목록 저장
-- worktree/status 기본 파싱 테스트
+- worktree/status/state 파싱 + inspect 통합 테스트
 
 ## Stage 2: Safe Worktree Create Dry-run
 
