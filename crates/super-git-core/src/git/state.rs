@@ -7,9 +7,14 @@ use crate::Result;
 /// 저장소의 HEAD 위치와 진행 중인 작업을 한 번에 읽는다.
 pub fn read_state(path: &Path) -> Result<RepoState> {
     let git = Git::default();
+    let root = repo_root(&git, path)?;
     let head = read_head(&git, path)?;
     let operation = detect_operation(&git, path)?;
-    Ok(RepoState { head, operation })
+    Ok(RepoState {
+        root,
+        head,
+        operation,
+    })
 }
 
 fn read_head(git: &Git, path: &Path) -> Result<HeadInfo> {
@@ -92,6 +97,19 @@ fn sequencer_operation(git_dir: &Path) -> Option<Operation> {
         };
     }
     None
+}
+
+/// 입력 경로가 하위 디렉토리여도 저장소(워크트리) 루트의 절대경로를 반환한다.
+/// worktree가 없는 bare 저장소 등에서는 입력 경로를 정규화해 fallback한다.
+fn repo_root(git: &Git, path: &Path) -> Result<PathBuf> {
+    let result = git.try_run_in(path, ["rev-parse", "--show-toplevel"])?;
+    if result.success {
+        let root = result.stdout.trim();
+        if !root.is_empty() {
+            return Ok(PathBuf::from(root));
+        }
+    }
+    Ok(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 /// worktree/submodule에서도 정확한 git 디렉토리를 얻기 위해 git에게 직접 물어본다.

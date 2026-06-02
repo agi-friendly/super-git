@@ -155,3 +155,50 @@ fn inspect_reports_applying_during_am_conflict() {
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "applying");
 }
+
+#[test]
+fn inspect_normalizes_repository_to_worktree_root() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    init_repo_with_commit(tmp.path());
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).expect("mkdir sub");
+
+    // 하위 디렉토리에서 실행해도 repository는 워크트리 root(절대경로)여야 한다.
+    let output = super_git(&sub)
+        .arg("inspect")
+        .output()
+        .expect("run inspect");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+
+    let repo = json["data"]["repository"]
+        .as_str()
+        .expect("repository is a string");
+    assert!(
+        Path::new(repo).is_absolute(),
+        "repository should be absolute"
+    );
+
+    // symlink 차이(macOS /var -> /private/var)를 없애기 위해 양쪽 모두 canonicalize 후 비교한다.
+    let repo_canon = std::fs::canonicalize(repo).expect("canonicalize repo");
+    let root_canon = std::fs::canonicalize(tmp.path()).expect("canonicalize root");
+    assert_eq!(repo_canon, root_canon);
+}
+
+#[test]
+fn inspect_non_repo_fails_with_json_envelope() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    // git init을 하지 않아 git 저장소가 아니다.
+
+    let output = super_git(tmp.path())
+        .arg("inspect")
+        .output()
+        .expect("run inspect");
+    assert!(!output.status.success(), "inspect on non-repo should fail");
+
+    // 실패해도 JSON envelope 계약을 지켜야 한다: stdout에 { ok: false, error }, exit 1.
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("error envelope on stdout");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["message"].is_string());
+}

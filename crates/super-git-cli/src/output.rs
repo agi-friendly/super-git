@@ -157,15 +157,15 @@ pub fn print_status(mode: OutputMode, path: &Path, status: &StatusOutput) -> Res
     }
 }
 
-pub fn print_inspect(mode: OutputMode, path: &Path, state: &RepoState) -> Result<()> {
+pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({
-            "repository": path,
+            "repository": state.root,
             "head": state.head,
             "operation": state.operation,
         })),
         OutputMode::Human => {
-            println!("Repository: {}", path.display());
+            println!("Repository: {}", state.root.display());
 
             match &state.head.branch {
                 Some(branch) => println!("Branch: {branch}"),

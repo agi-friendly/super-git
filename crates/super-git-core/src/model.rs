@@ -75,6 +75,8 @@ pub struct HeadInfo {
 /// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepoState {
+    /// 저장소(워크트리) 루트의 절대경로. 입력이 하위 디렉토리여도 root로 정규화된다.
+    pub root: PathBuf,
     pub head: HeadInfo,
     pub operation: Operation,
 }

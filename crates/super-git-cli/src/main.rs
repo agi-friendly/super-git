@@ -117,7 +117,7 @@ fn run_inspect(mode: OutputMode, path: Option<PathBuf>) -> Result<()> {
     let state = state::read_state(&path)
         .with_context(|| format!("could not inspect {}", path.display()))?;
 
-    output::print_inspect(mode, &path, &state)
+    output::print_inspect(mode, &state)
 }
 
 fn run_worktree(mode: OutputMode, command: WorktreeCommands) -> Result<()> {
