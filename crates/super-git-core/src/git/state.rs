@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::git::command::Git;
-use crate::model::{HeadInfo, Operation, RepoState};
+use crate::model::{HeadInfo, Operation, RepoState, UpstreamInfo};
 use crate::Result;
 
 /// 저장소의 HEAD 위치와 진행 중인 작업을 한 번에 읽는다.
@@ -9,10 +9,12 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let git = Git::default();
     let root = repo_root(&git, path)?;
     let head = read_head(&git, path)?;
+    let upstream = read_upstream(&git, path)?;
     let operation = detect_operation(&git, path)?;
     Ok(RepoState {
         root,
         head,
+        upstream,
         operation,
     })
 }
@@ -42,6 +44,48 @@ fn read_head(git: &Git, path: &Path) -> Result<HeadInfo> {
         commit,
         detached,
     })
+}
+
+/// upstream 추적 브랜치 이름과 ahead/behind를 읽는다. 미설정이면 None.
+fn read_upstream(git: &Git, path: &Path) -> Result<Option<UpstreamInfo>> {
+    let name_result = git.try_run_in(
+        path,
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    )?;
+    if !name_result.success {
+        // upstream 미설정, detached HEAD, unborn branch 등.
+        return Ok(None);
+    }
+    let name = name_result.stdout.trim().to_string();
+    if name.is_empty() {
+        return Ok(None);
+    }
+
+    // 출력은 "<behind>\t<ahead>". left=@{upstream}쪽(behind), right=HEAD쪽(ahead).
+    let counts = git.try_run_in(
+        path,
+        ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"],
+    )?;
+    let (behind, ahead) = parse_ahead_behind(&counts.stdout);
+
+    Ok(Some(UpstreamInfo {
+        name,
+        ahead,
+        behind,
+    }))
+}
+
+/// `rev-list --count --left-right @{upstream}...HEAD` 출력("<behind>\t<ahead>")을 파싱한다.
+fn parse_ahead_behind(output: &str) -> (u32, u32) {
+    let mut parts = output.split_whitespace();
+    let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (behind, ahead)
 }
 
 fn detect_operation(git: &Git, path: &Path) -> Result<Operation> {
@@ -224,5 +268,19 @@ mod tests {
         fs::create_dir(dir.path().join("sequencer")).expect("create dir");
         fs::write(dir.path().join("sequencer/todo"), "# comment only\n\n").expect("write");
         assert_eq!(classify_operation(dir.path()), Operation::None);
+    }
+
+    #[test]
+    fn parses_ahead_behind_counts() {
+        // 출력 형식: "<behind>\t<ahead>"
+        assert_eq!(parse_ahead_behind("0\t2\n"), (0, 2));
+        assert_eq!(parse_ahead_behind("3\t0\n"), (3, 0));
+        assert_eq!(parse_ahead_behind("1\t4"), (1, 4));
+    }
+
+    #[test]
+    fn parse_ahead_behind_tolerates_garbage() {
+        assert_eq!(parse_ahead_behind(""), (0, 0));
+        assert_eq!(parse_ahead_behind("oops"), (0, 0));
     }
 }

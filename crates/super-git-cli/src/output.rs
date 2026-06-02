@@ -162,6 +162,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
         OutputMode::Json => emit_success(json!({
             "repository": state.root,
             "head": state.head,
+            "upstream": state.upstream,
             "operation": state.operation,
         })),
         OutputMode::Human => {
@@ -174,6 +175,13 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             match &state.head.commit {
                 Some(commit) => println!("HEAD: {commit}"),
                 None => println!("HEAD: (unborn)"),
+            }
+            match &state.upstream {
+                Some(upstream) => println!(
+                    "Upstream: {} (ahead {}, behind {})",
+                    upstream.name, upstream.ahead, upstream.behind
+                ),
+                None => println!("Upstream: (none)"),
             }
             println!("Operation: {}", operation_label(state.operation));
             Ok(())

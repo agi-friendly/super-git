@@ -72,11 +72,24 @@ pub struct HeadInfo {
     pub detached: bool,
 }
 
+/// upstream(추적 브랜치) 대비 위치.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpstreamInfo {
+    /// upstream 브랜치 이름 (예: "origin/main").
+    pub name: String,
+    /// HEAD가 upstream보다 앞선 커밋 수.
+    pub ahead: u32,
+    /// HEAD가 upstream보다 뒤처진 커밋 수.
+    pub behind: u32,
+}
+
 /// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepoState {
     /// 저장소(워크트리) 루트의 절대경로. 입력이 하위 디렉토리여도 root로 정규화된다.
     pub root: PathBuf,
     pub head: HeadInfo,
+    /// upstream 추적 브랜치 정보. 미설정/detached/unborn이면 None.
+    pub upstream: Option<UpstreamInfo>,
     pub operation: Operation,
 }

@@ -42,6 +42,27 @@ fn init_repo_with_commit(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "init"]);
 }
 
+/// bare origin을 만들고 clone한 뒤 첫 커밋을 push해 upstream을 설정한다. work 경로를 반환한다.
+fn clone_repo_with_upstream(parent: &Path) -> std::path::PathBuf {
+    let origin = parent.join("origin.git");
+    let work = parent.join("work");
+    git(parent, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    git(
+        parent,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(work.join("file.txt"), "hello\n").expect("write file");
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "init"]);
+    git(&work, &["push", "-q", "-u", "origin", "HEAD"]);
+    work
+}
+
 fn inspect_json(dir: &Path) -> serde_json::Value {
     let output = super_git(dir).arg("inspect").output().expect("run inspect");
     assert!(
@@ -201,4 +222,36 @@ fn inspect_non_repo_fails_with_json_envelope() {
         serde_json::from_slice(&output.stdout).expect("error envelope on stdout");
     assert_eq!(json["ok"], false);
     assert!(json["error"]["message"].is_string());
+}
+
+#[test]
+fn inspect_reports_no_upstream_without_remote() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    init_repo_with_commit(tmp.path());
+
+    let json = inspect_json(tmp.path());
+    assert_eq!(json["data"]["upstream"], serde_json::Value::Null);
+}
+
+#[test]
+fn inspect_reports_upstream_ahead() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let work = clone_repo_with_upstream(tmp.path());
+
+    // 로컬에만 커밋을 추가하면 upstream 대비 ahead 1, behind 0이 된다.
+    std::fs::write(work.join("file.txt"), "more\n").expect("write");
+    git(&work, &["commit", "-q", "-am", "local change"]);
+
+    let json = inspect_json(&work);
+    let upstream = &json["data"]["upstream"];
+    assert!(
+        upstream["name"]
+            .as_str()
+            .expect("upstream name")
+            .starts_with("origin/"),
+        "upstream name should be origin/*, got {:?}",
+        upstream["name"]
+    );
+    assert_eq!(upstream["ahead"], 1);
+    assert_eq!(upstream["behind"], 0);
 }
