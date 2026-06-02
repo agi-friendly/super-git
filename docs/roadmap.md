@@ -5,7 +5,7 @@
 ## Stage 1: CLI Skeleton
 
 - Rust workspace 구성
-- `supergit-core`와 `super-git-cli` 분리
+- `super-git-core`와 `super-git-cli` 분리
 - `super-git` CLI 바이너리 제공
 - `super-git doctor`
 - `super-git repo add <path>`

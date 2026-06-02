@@ -11,4 +11,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-supergit-core = { path = "../supergit-core" }
+serde.workspace = true
+serde_json.workspace = true
+super-git-core = { path = "../super-git-core" }

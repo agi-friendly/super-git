@@ -416,11 +416,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "supergit-core",
+ "serde",
+ "serde_json",
+ "super-git-core",
 ]
 
 [[package]]
-name = "supergit-core"
+name = "super-git-core"
 version = "0.1.0"
 dependencies = [
  "directories",

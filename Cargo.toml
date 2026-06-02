@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/supergit-core",
+    "crates/super-git-core",
     "crates/super-git-cli",
 ]
 resolver = "2"

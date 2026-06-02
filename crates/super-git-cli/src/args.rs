@@ -7,6 +7,10 @@ use clap::{Parser, Subcommand};
 #[command(about = "A small CLI-first foundation for super-git")]
 #[command(version)]
 pub struct Cli {
+    /// Render human-readable output instead of the default JSON.
+    #[arg(long, global = true)]
+    pub human: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }

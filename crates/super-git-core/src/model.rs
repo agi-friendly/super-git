@@ -13,7 +13,7 @@ impl Repository {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StatusOutput {
     pub branch_header: Option<String>,
     pub entries: Vec<String>,
@@ -25,7 +25,7 @@ impl StatusOutput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorktreeInfo {
     pub path: PathBuf,
     pub head: Option<String>,

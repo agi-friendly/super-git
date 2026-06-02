@@ -1,5 +1,5 @@
 [package]
-name = "supergit-core"
+name = "super-git-core"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
