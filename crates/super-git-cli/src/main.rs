@@ -44,14 +44,15 @@ fn output_mode(human: bool) -> OutputMode {
 }
 
 /// clap 파싱 결과를 출력 계약에 맞춰 처리한다.
-/// `--help`/`--version`/인자 없는 호출은 실패가 아니라 의도된 출력이므로 clap 기본 동작을
-/// 유지하고, 진짜 인자 오류만 JSON/human 에러 계약을 따른다.
+/// 오직 명시적 `--help`/`--version`만 의도된 출력(exit 0)으로 두고, 서브커맨드/인자 누락을
+/// 포함한 나머지 파싱 오류는 JSON/human 에러 계약(exit 1)을 따른다.
 fn handle_parse_error(err: clap::Error) -> ExitCode {
+    // `super-git`처럼 서브커맨드 없이 호출하면 clap은 help를 띄우며 끝낸다.
+    // 이를 exit 0으로 두면 자동화 입장에서 "성공인데 stdout 비어 있음"이 되어 위험하므로
+    // 정상 출력으로 취급하지 않는다.
     if matches!(
         err.kind(),
-        ErrorKind::DisplayHelp
-            | ErrorKind::DisplayVersion
-            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
     ) {
         let _ = err.print();
         return ExitCode::SUCCESS;
