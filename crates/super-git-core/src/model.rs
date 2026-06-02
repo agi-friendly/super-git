@@ -45,3 +45,34 @@ impl WorktreeInfo {
         }
     }
 }
+
+/// 진행 중인 Git 작업. `.git` 내부의 상태 파일 존재 여부로 판별한다.
+/// super-git의 핵심 가치: git의 숨은 상태머신을 명시적으로 드러낸다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Operation {
+    None,
+    Merging,
+    Rebasing,
+    CherryPicking,
+    Reverting,
+    Bisecting,
+}
+
+/// HEAD가 가리키는 위치.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HeadInfo {
+    /// 현재 브랜치명. detached HEAD이면 None.
+    pub branch: Option<String>,
+    /// HEAD 커밋 SHA. 커밋이 아직 없는 새 저장소(unborn)이면 None.
+    pub commit: Option<String>,
+    /// HEAD가 브랜치가 아닌 커밋을 직접 가리키는 상태.
+    pub detached: bool,
+}
+
+/// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepoState {
+    pub head: HeadInfo,
+    pub operation: Operation,
+}
