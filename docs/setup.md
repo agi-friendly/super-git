@@ -204,13 +204,26 @@ cargo clippy --all-targets -- -D warnings
 cargo run -p super-git-cli -- doctor
 ```
 
-정상이라면 `doctor`에서 Git 버전, OS, config 파일 위치가 출력된다.
+`doctor`는 기본적으로 JSON을 출력한다. 정상이라면 Git 버전, OS, config 파일 위치가 담긴다.
 
-예시:
+```json
+{
+  "arch": "aarch64",
+  "config_path": "/Users/<name>/Library/Application Support/com.super-git.super-git/config.json",
+  "git_version": "git version 2.54.0",
+  "os": "macos"
+}
+```
+
+사람이 읽기 좋은 형태로 보려면 `--human`을 붙인다.
+
+```bash
+cargo run -p super-git-cli -- --human doctor
+```
 
 ```text
 super-git doctor
-Git: OK (git version 2.53.0)
+Git: OK (git version 2.54.0)
 OS: macos aarch64
 Config: /Users/<name>/Library/Application Support/com.super-git.super-git/config.json
 ```

@@ -19,6 +19,59 @@ fn emit_json(value: impl Serialize) -> Result<()> {
     Ok(())
 }
 
+/// 실패도 출력 계약을 지킨다.
+/// JSON 모드: stdout에 `{ "ok": false, "error": {...} }`를 내보낸다.
+/// 성공/실패를 같은 스트림(stdout)에서 파싱하고 exit code로 구분하도록 한다.
+/// Human 모드: 기존처럼 stderr에 사람용 텍스트를 쓴다.
+pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
+    match mode {
+        OutputMode::Json => {
+            // anyhow의 context 체인을 펼쳐 최상위 메시지와 원인들을 분리한다.
+            let causes: Vec<String> = err.chain().skip(1).map(|cause| cause.to_string()).collect();
+            let value = json!({
+                "ok": false,
+                "error": {
+                    "message": err.to_string(),
+                    "causes": causes,
+                }
+            });
+
+            // 에러 직렬화 자체가 실패하는 극단적 경우의 최후 수단.
+            match serde_json::to_string_pretty(&value) {
+                Ok(json) => println!("{json}"),
+                Err(_) => eprintln!("Error: {err:#}"),
+            }
+        }
+        OutputMode::Human => {
+            eprintln!("Error: {err:#}");
+        }
+    }
+}
+
+/// clap 파싱 에러도 같은 출력 계약을 따른다.
+/// JSON 모드: stdout에 envelope. Human 모드: clap 기본 렌더링(usage 포함)을 stderr에.
+pub fn print_parse_error(mode: OutputMode, err: &clap::Error) {
+    match mode {
+        OutputMode::Json => {
+            let value = json!({
+                "ok": false,
+                "error": {
+                    "message": "invalid command-line arguments",
+                    "causes": [err.to_string()],
+                }
+            });
+
+            match serde_json::to_string_pretty(&value) {
+                Ok(json) => println!("{json}"),
+                Err(_) => eprintln!("{err}"),
+            }
+        }
+        OutputMode::Human => {
+            let _ = err.print();
+        }
+    }
+}
+
 pub fn print_doctor(mode: OutputMode, git_version: &str, config_path: &Path) -> Result<()> {
     match mode {
         OutputMode::Json => emit_json(json!({

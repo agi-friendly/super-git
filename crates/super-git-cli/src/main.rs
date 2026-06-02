@@ -2,8 +2,10 @@ mod args;
 mod output;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
+use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::ConfigStore;
 use super_git_core::git::command::Git;
@@ -12,17 +14,61 @@ use super_git_core::git::{status, worktree};
 use crate::args::{Cli, Commands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() -> ExitCode {
+    // 파싱 단계의 실패도 출력 계약을 지켜야 하므로 parse() 대신 try_parse()를 쓴다.
+    // parse()는 에러 시 스스로 stderr에 평문을 찍고 종료해 JSON 계약을 우회한다.
+    match Cli::try_parse() {
+        Ok(cli) => {
+            let mode = output_mode(cli.human);
 
-    // 기본은 JSON. `--human`을 줄 때만 사람용 출력으로 전환한다.
-    let mode = if cli.human {
+            // 실패도 출력 계약을 지킨다: JSON 모드면 런타임 에러도 구조화해서 내보낸다.
+            match run(mode, cli.command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    output::print_error(mode, &err);
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Err(err) => handle_parse_error(err),
+    }
+}
+
+/// `--human` 여부로 출력 모드를 정한다. 기본은 JSON.
+fn output_mode(human: bool) -> OutputMode {
+    if human {
+        OutputMode::Human
+    } else {
+        OutputMode::Json
+    }
+}
+
+/// clap 파싱 결과를 출력 계약에 맞춰 처리한다.
+/// `--help`/`--version`/인자 없는 호출은 실패가 아니라 의도된 출력이므로 clap 기본 동작을
+/// 유지하고, 진짜 인자 오류만 JSON/human 에러 계약을 따른다.
+fn handle_parse_error(err: clap::Error) -> ExitCode {
+    if matches!(
+        err.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        let _ = err.print();
+        return ExitCode::SUCCESS;
+    }
+
+    // 파싱이 실패해 Cli를 못 만들었으니 `--human` 여부만 직접 확인한다.
+    let mode = if std::env::args().any(|arg| arg == "--human") {
         OutputMode::Human
     } else {
         OutputMode::Json
     };
+    output::print_parse_error(mode, &err);
+    ExitCode::FAILURE
+}
 
-    match cli.command {
+fn run(mode: OutputMode, command: Commands) -> Result<()> {
+    match command {
         Commands::Doctor => run_doctor(mode),
         Commands::Repo { command } => run_repo(mode, command),
         Commands::Status { path } => run_status(mode, path),
