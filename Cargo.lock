@@ -419,6 +419,7 @@ dependencies = [
  "serde",
  "serde_json",
  "super-git-core",
+ "tempfile",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::ConfigStore;
 use super_git_core::git::command::Git;
-use super_git_core::git::{status, worktree};
+use super_git_core::git::{state, status, worktree};
 
 use crate::args::{Cli, Commands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -73,6 +73,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Doctor => run_doctor(mode),
         Commands::Repo { command } => run_repo(mode, command),
         Commands::Status { path } => run_status(mode, path),
+        Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Wt { command } => run_worktree(mode, command),
     }
 }
@@ -109,6 +110,14 @@ fn run_status(mode: OutputMode, path: Option<PathBuf>) -> Result<()> {
         .with_context(|| format!("could not read Git status for {}", path.display()))?;
 
     output::print_status(mode, &path, &status)
+}
+
+fn run_inspect(mode: OutputMode, path: Option<PathBuf>) -> Result<()> {
+    let path = path_or_current_dir(path)?;
+    let state = state::read_state(&path)
+        .with_context(|| format!("could not inspect {}", path.display()))?;
+
+    output::print_inspect(mode, &path, &state)
 }
 
 fn run_worktree(mode: OutputMode, command: WorktreeCommands) -> Result<()> {

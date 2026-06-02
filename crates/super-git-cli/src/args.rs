@@ -29,6 +29,9 @@ pub enum Commands {
     /// Show Git status for a repository path or the current directory.
     Status { path: Option<PathBuf> },
 
+    /// Inspect full repository state: HEAD and any in-progress operation.
+    Inspect { path: Option<PathBuf> },
+
     /// Inspect Git worktrees.
     Wt {
         #[command(subcommand)]

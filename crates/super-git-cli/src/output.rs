@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::model::{Repository, StatusOutput, WorktreeInfo};
+use super_git_core::model::{Operation, RepoState, Repository, StatusOutput, WorktreeInfo};
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
 /// 사람이 직접 읽을 때만 `--human`으로 Human을 고른다.
@@ -154,6 +154,41 @@ pub fn print_status(mode: OutputMode, path: &Path, status: &StatusOutput) -> Res
             }
             Ok(())
         }
+    }
+}
+
+pub fn print_inspect(mode: OutputMode, path: &Path, state: &RepoState) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "repository": path,
+            "head": state.head,
+            "operation": state.operation,
+        })),
+        OutputMode::Human => {
+            println!("Repository: {}", path.display());
+
+            match &state.head.branch {
+                Some(branch) => println!("Branch: {branch}"),
+                None => println!("Branch: (detached)"),
+            }
+            match &state.head.commit {
+                Some(commit) => println!("HEAD: {commit}"),
+                None => println!("HEAD: (unborn)"),
+            }
+            println!("Operation: {}", operation_label(state.operation));
+            Ok(())
+        }
+    }
+}
+
+fn operation_label(operation: Operation) -> &'static str {
+    match operation {
+        Operation::None => "none",
+        Operation::Merging => "merging",
+        Operation::Rebasing => "rebasing",
+        Operation::CherryPicking => "cherry-picking",
+        Operation::Reverting => "reverting",
+        Operation::Bisecting => "bisecting",
     }
 }
 
