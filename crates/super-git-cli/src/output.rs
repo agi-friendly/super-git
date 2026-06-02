@@ -163,6 +163,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             "repository": state.root,
             "head": state.head,
             "upstream": state.upstream,
+            "working_tree": state.working_tree,
             "operation": state.operation,
         })),
         OutputMode::Human => {
@@ -183,6 +184,20 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                 ),
                 None => println!("Upstream: (none)"),
             }
+
+            let wt = &state.working_tree;
+            if wt.clean {
+                println!("Working tree: clean");
+            } else {
+                println!(
+                    "Working tree: staged {}, unstaged {}, untracked {}, conflicts {}",
+                    wt.staged, wt.unstaged, wt.untracked, wt.conflict_count
+                );
+                for conflict in &wt.conflicts {
+                    println!("  conflict: {conflict}");
+                }
+            }
+
             println!("Operation: {}", operation_label(state.operation));
             Ok(())
         }

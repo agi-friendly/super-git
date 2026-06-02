@@ -83,6 +83,19 @@ pub struct UpstreamInfo {
     pub behind: u32,
 }
 
+/// 워킹 트리 변경 요약. 상세 파일 목록은 `status` 명령이 담당하고,
+/// 여기서는 AI가 다음 행동을 판단할 만큼의 카운트와 충돌 목록만 둔다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkingTree {
+    pub clean: bool,
+    pub staged: u32,
+    pub unstaged: u32,
+    pub untracked: u32,
+    pub conflict_count: u32,
+    /// 충돌(unmerged) 파일 경로 목록. 해결 대상이라 목록으로 노출한다.
+    pub conflicts: Vec<String>,
+}
+
 /// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepoState {
@@ -91,5 +104,6 @@ pub struct RepoState {
     pub head: HeadInfo,
     /// upstream 추적 브랜치 정보. 미설정/detached/unborn이면 None.
     pub upstream: Option<UpstreamInfo>,
+    pub working_tree: WorkingTree,
     pub operation: Operation,
 }

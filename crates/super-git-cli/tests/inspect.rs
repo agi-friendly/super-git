@@ -85,6 +85,7 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
     assert_eq!(json["data"]["head"]["branch"], "main");
     assert_eq!(json["data"]["head"]["detached"], false);
     assert!(json["data"]["head"]["commit"].is_string());
+    assert_eq!(json["data"]["working_tree"]["clean"], true);
 }
 
 #[test]
@@ -120,6 +121,11 @@ fn inspect_reports_merging_during_conflict() {
 
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "merging");
+    // 충돌 파일이 working_tree.conflicts에 잡힌다.
+    let wt = &json["data"]["working_tree"];
+    assert_eq!(wt["conflict_count"], 1);
+    assert_eq!(wt["conflicts"][0], "file.txt");
+    assert_eq!(wt["clean"], false);
 }
 
 #[test]
@@ -254,4 +260,88 @@ fn inspect_reports_upstream_ahead() {
     );
     assert_eq!(upstream["ahead"], 1);
     assert_eq!(upstream["behind"], 0);
+}
+
+#[test]
+fn inspect_reports_working_tree_changes() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // staged 1, unstaged 1, untracked 1 상태를 만든다.
+    std::fs::write(dir.join("staged.txt"), "s\n").expect("write");
+    git(dir, &["add", "staged.txt"]);
+    std::fs::write(dir.join("file.txt"), "modified\n").expect("write"); // 추적 파일 수정 → unstaged
+    std::fs::write(dir.join("untracked.txt"), "u\n").expect("write");
+
+    let json = inspect_json(dir);
+    let wt = &json["data"]["working_tree"];
+    assert_eq!(wt["clean"], false);
+    assert_eq!(wt["staged"], 1);
+    assert_eq!(wt["unstaged"], 1);
+    assert_eq!(wt["untracked"], 1);
+    assert_eq!(wt["conflict_count"], 0);
+}
+
+#[test]
+fn inspect_reports_upstream_behind() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let work = clone_repo_with_upstream(tmp.path());
+    let origin = tmp.path().join("origin.git");
+
+    // 다른 clone에서 커밋을 push해 origin을 앞서게 만든다.
+    let work2 = tmp.path().join("work2");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            work2.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(work2.join("file.txt"), "remote\n").expect("write");
+    git(&work2, &["commit", "-q", "-am", "remote change"]);
+    git(&work2, &["push", "-q"]);
+
+    // work는 fetch만 하면 upstream보다 뒤처진다.
+    git(&work, &["fetch", "-q"]);
+
+    let json = inspect_json(&work);
+    let upstream = &json["data"]["upstream"];
+    assert_eq!(upstream["ahead"], 0);
+    assert_eq!(upstream["behind"], 1);
+}
+
+#[test]
+fn inspect_reports_upstream_diverged() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let work = clone_repo_with_upstream(tmp.path());
+    let origin = tmp.path().join("origin.git");
+
+    // 다른 clone이 origin을 앞서게 한다.
+    let work2 = tmp.path().join("work2");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            work2.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(work2.join("file.txt"), "remote\n").expect("write");
+    git(&work2, &["commit", "-q", "-am", "remote change"]);
+    git(&work2, &["push", "-q"]);
+
+    // work는 로컬 커밋(ahead) 후 fetch(behind)로 갈라진다.
+    std::fs::write(work.join("local.txt"), "local\n").expect("write");
+    git(&work, &["add", "local.txt"]);
+    git(&work, &["commit", "-q", "-m", "local change"]);
+    git(&work, &["fetch", "-q"]);
+
+    let json = inspect_json(&work);
+    let upstream = &json["data"]["upstream"];
+    assert_eq!(upstream["ahead"], 1);
+    assert_eq!(upstream["behind"], 1);
 }
