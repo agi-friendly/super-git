@@ -49,12 +49,24 @@ fn detect_operation(git: &Git, path: &Path) -> Result<Operation> {
 fn classify_operation(git_dir: &Path) -> Operation {
     let has = |name: &str| git_dir.join(name).exists();
 
-    if has("rebase-merge") || has("rebase-apply") {
+    if has("rebase-merge") {
         Operation::Rebasing
+    } else if has("rebase-apply") {
+        // rebase-apply/는 `git am`과 apply-backend `git rebase`가 공용으로 쓴다.
+        // applying marker가 있으면 am 세션이다.
+        if has("rebase-apply/applying") {
+            Operation::Applying
+        } else {
+            Operation::Rebasing
+        }
     } else if has("CHERRY_PICK_HEAD") {
         Operation::CherryPicking
     } else if has("REVERT_HEAD") {
         Operation::Reverting
+    } else if let Some(op) = sequencer_operation(git_dir) {
+        // multi-commit cherry-pick/revert에서 충돌 해결 후 직접 commit하면
+        // CHERRY_PICK_HEAD/REVERT_HEAD가 사라지고 sequencer/todo만 남는다.
+        op
     } else if has("MERGE_HEAD") {
         Operation::Merging
     } else if has("BISECT_LOG") {
@@ -62,6 +74,24 @@ fn classify_operation(git_dir: &Path) -> Operation {
     } else {
         Operation::None
     }
+}
+
+/// sequencer/todo의 첫 명령으로 진행 중인 cherry-pick/revert를 판별한다.
+/// rebase의 todo는 rebase-merge/에 따로 있으므로 여기엔 pick/revert만 나타난다.
+fn sequencer_operation(git_dir: &Path) -> Option<Operation> {
+    let todo = std::fs::read_to_string(git_dir.join("sequencer/todo")).ok()?;
+    for line in todo.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        return match line.split_whitespace().next()? {
+            "pick" | "p" => Some(Operation::CherryPicking),
+            "revert" => Some(Operation::Reverting),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// worktree/submodule에서도 정확한 git 디렉토리를 얻기 위해 git에게 직접 물어본다.
@@ -133,5 +163,48 @@ mod tests {
     fn classifies_bisecting() {
         let dir = git_dir_with(&["BISECT_LOG"]);
         assert_eq!(classify_operation(dir.path()), Operation::Bisecting);
+    }
+
+    #[test]
+    fn classifies_am_session_via_applying_marker() {
+        let dir = git_dir_with(&["rebase-apply"]);
+        fs::write(dir.path().join("rebase-apply/applying"), "").expect("write");
+        assert_eq!(classify_operation(dir.path()), Operation::Applying);
+    }
+
+    #[test]
+    fn rebase_apply_without_applying_is_rebasing() {
+        // apply-backend git rebase: rebase-apply는 있지만 applying은 없다.
+        let dir = git_dir_with(&["rebase-apply"]);
+        assert_eq!(classify_operation(dir.path()), Operation::Rebasing);
+    }
+
+    #[test]
+    fn classifies_cherry_pick_from_sequencer_only() {
+        // CHERRY_PICK_HEAD 없이 sequencer/todo만 남은 상태(충돌 해결 후 직접 commit).
+        let dir = tempfile::tempdir().expect("create temp dir");
+        fs::create_dir(dir.path().join("sequencer")).expect("create dir");
+        fs::write(
+            dir.path().join("sequencer/todo"),
+            "pick abc123 A\npick def456 B\n",
+        )
+        .expect("write");
+        assert_eq!(classify_operation(dir.path()), Operation::CherryPicking);
+    }
+
+    #[test]
+    fn classifies_revert_from_sequencer_only() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        fs::create_dir(dir.path().join("sequencer")).expect("create dir");
+        fs::write(dir.path().join("sequencer/todo"), "revert abc123 undo\n").expect("write");
+        assert_eq!(classify_operation(dir.path()), Operation::Reverting);
+    }
+
+    #[test]
+    fn sequencer_with_only_comments_is_none() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        fs::create_dir(dir.path().join("sequencer")).expect("create dir");
+        fs::write(dir.path().join("sequencer/todo"), "# comment only\n\n").expect("write");
+        assert_eq!(classify_operation(dir.path()), Operation::None);
     }
 }

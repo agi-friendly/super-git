@@ -54,6 +54,8 @@ pub enum Operation {
     None,
     Merging,
     Rebasing,
+    /// `git am` 세션 (mailbox 패치 적용 중).
+    Applying,
     CherryPicking,
     Reverting,
     Bisecting,

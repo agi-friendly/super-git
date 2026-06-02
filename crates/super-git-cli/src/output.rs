@@ -186,6 +186,7 @@ fn operation_label(operation: Operation) -> &'static str {
         Operation::None => "none",
         Operation::Merging => "merging",
         Operation::Rebasing => "rebasing",
+        Operation::Applying => "applying",
         Operation::CherryPicking => "cherry-picking",
         Operation::Reverting => "reverting",
         Operation::Bisecting => "bisecting",

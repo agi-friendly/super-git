@@ -100,3 +100,58 @@ fn inspect_reports_merging_during_conflict() {
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "merging");
 }
+
+#[test]
+fn inspect_reports_cherry_picking_from_sequencer_after_manual_commit() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // cherry-pick 대상 두 커밋을 만든다.
+    git(dir, &["checkout", "-q", "-b", "src"]);
+    std::fs::write(dir.join("file.txt"), "hello\nA\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "A"]);
+    std::fs::write(dir.join("file.txt"), "hello\nA\nB\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "B"]);
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("file.txt"), "conflict\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "conflict"]);
+
+    // multi-commit cherry-pick → 충돌.
+    let pick = run_git(dir, &["cherry-pick", "src~1", "src"]);
+    assert!(!pick.status.success(), "cherry-pick should have conflicted");
+
+    // --continue 대신 직접 commit하면 CHERRY_PICK_HEAD는 사라지고 sequencer/todo만 남는다.
+    std::fs::write(dir.join("file.txt"), "resolved\n").expect("write");
+    git(dir, &["add", "file.txt"]);
+    git(dir, &["commit", "-q", "-m", "resolved"]);
+
+    let json = inspect_json(dir);
+    assert_eq!(json["data"]["operation"], "cherry-picking");
+}
+
+#[test]
+fn inspect_reports_applying_during_am_conflict() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // feature 커밋의 패치를 만들어 둔다.
+    git(dir, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(dir.join("file.txt"), "feature\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "feature"]);
+    let patch = run_git(dir, &["format-patch", "-1", "--stdout", "HEAD"]);
+    assert!(patch.status.success(), "format-patch failed");
+    std::fs::write(dir.join("change.patch"), &patch.stdout).expect("write patch");
+
+    // 같은 줄을 다르게 바꾼 main에 am을 적용해 충돌을 유발한다.
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("file.txt"), "other\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "other"]);
+
+    let am = run_git(dir, &["am", "change.patch"]);
+    assert!(!am.status.success(), "am should have conflicted");
+
+    let json = inspect_json(dir);
+    assert_eq!(json["data"]["operation"], "applying");
+}
