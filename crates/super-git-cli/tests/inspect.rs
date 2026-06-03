@@ -363,3 +363,32 @@ fn inspect_reports_upstream_diverged() {
     assert_eq!(upstream["ahead"], 1);
     assert_eq!(upstream["behind"], 1);
 }
+
+#[test]
+fn inspect_reports_merge_continue_when_conflicts_resolved() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    git(dir, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(dir.join("file.txt"), "feature\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "feature change"]);
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("file.txt"), "main\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "main change"]);
+
+    let merge = run_git(dir, &["merge", "feature"]);
+    assert!(!merge.status.success(), "merge should have conflicted");
+
+    // 충돌 해결 후 add까지(commit은 하지 않음) → 여전히 merging, 충돌 0.
+    std::fs::write(dir.join("file.txt"), "resolved\n").expect("write");
+    git(dir, &["add", "file.txt"]);
+
+    let json = inspect_json(dir);
+    assert_eq!(json["data"]["operation"], "merging");
+    assert_eq!(json["data"]["working_tree"]["conflict_count"], 0);
+
+    let ks = action_kinds(&json);
+    assert!(ks.iter().any(|k| k == "merge-continue"));
+    assert!(!ks.iter().any(|k| k == "resolve-conflicts"));
+}

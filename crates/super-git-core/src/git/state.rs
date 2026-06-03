@@ -166,7 +166,17 @@ fn compute_allowed_next(
     match operation {
         Operation::None => {}
         Operation::Merging => {
-            push_resolve_if_conflicts(&mut actions, working_tree);
+            if working_tree.conflict_count > 0 {
+                push_resolve_if_conflicts(&mut actions, working_tree);
+            } else {
+                // 충돌이 없으면 해결 완료 또는 --no-commit 상태다. 커밋해서 merge를 마친다.
+                actions.push(action(
+                    "merge-continue",
+                    "conflicts resolved; complete the merge",
+                    Some(&["git", "merge", "--continue"]),
+                    None,
+                ));
+            }
             actions.push(action(
                 "merge-abort",
                 "a merge is in progress",
@@ -202,7 +212,8 @@ fn compute_allowed_next(
 
     // 진행 중인 작업이 없을 때만 일반 흐름(commit/push/pull)을 제안한다.
     if operation == Operation::None {
-        if working_tree.staged > 0 || working_tree.unstaged > 0 {
+        // untracked만 있어도 dirty이고 커밋할 거리가 있다.
+        if !working_tree.clean {
             actions.push(action(
                 "commit",
                 "there are uncommitted changes",
@@ -212,6 +223,9 @@ fn compute_allowed_next(
         }
 
         if let Some(u) = upstream {
+            // pull/integrate는 워킹 트리를 건드리므로 dirty면 제안하지 않는다(commit/stash로 먼저
+            // 정리하도록 유도). push는 워킹 트리에 영향이 없어 그대로 둔다.
+            let clean = working_tree.clean;
             match (u.ahead, u.behind) {
                 (a, 0) if a > 0 => actions.push(action(
                     "push",
@@ -219,13 +233,13 @@ fn compute_allowed_next(
                     Some(&["git", "push"]),
                     None,
                 )),
-                (0, b) if b > 0 => actions.push(action(
+                (0, b) if b > 0 && clean => actions.push(action(
                     "pull",
                     "upstream is ahead of local",
                     Some(&["git", "pull"]),
                     None,
                 )),
-                (a, b) if a > 0 && b > 0 => actions.push(action(
+                (a, b) if a > 0 && b > 0 && clean => actions.push(action(
                     "integrate-diverged",
                     "local and upstream have diverged",
                     Some(&["git", "pull", "--rebase"]),
@@ -615,5 +629,58 @@ mod tests {
             abort.command.as_deref(),
             Some(["git", "merge", "--abort"].map(String::from).as_slice())
         );
+    }
+
+    #[test]
+    fn allowed_next_merge_resolved_suggests_continue() {
+        // 충돌 해결(add)했지만 아직 commit 전: merging + conflict 0 + staged.
+        let wt = WorkingTree {
+            clean: false,
+            staged: 1,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        let actions = compute_allowed_next(Operation::Merging, &wt, &None);
+        let ks = kinds(&actions);
+        assert!(ks.contains(&"merge-continue"));
+        assert!(ks.contains(&"merge-abort"));
+        assert!(!ks.contains(&"resolve-conflicts"));
+    }
+
+    #[test]
+    fn allowed_next_untracked_only_suggests_commit() {
+        let wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 1,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        assert!(kinds(&compute_allowed_next(Operation::None, &wt, &None)).contains(&"commit"));
+    }
+
+    #[test]
+    fn allowed_next_dirty_suppresses_pull_but_keeps_commit() {
+        // dirty + behind: pull은 워킹 트리를 건드리니 억제하고 commit을 먼저 유도한다.
+        let wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 1,
+            untracked: 0,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        let behind = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 0,
+            behind: 2,
+        });
+        let actions = compute_allowed_next(Operation::None, &wt, &behind);
+        let ks = kinds(&actions);
+        assert!(ks.contains(&"commit"));
+        assert!(!ks.contains(&"pull"));
     }
 }
