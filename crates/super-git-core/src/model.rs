@@ -25,7 +25,32 @@ impl StatusOutput {
     }
 }
 
-pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.2";
+pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
+
+pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
+    "stage_changes",
+    "commit",
+    "push",
+    "pull",
+    "integrate_diverged",
+    "resolve_conflicts",
+    "continue_operation",
+    "merge_continue",
+    "merge_abort",
+    "rebase_continue",
+    "rebase_skip",
+    "rebase_abort",
+    "am_continue",
+    "am_skip",
+    "am_abort",
+    "cherry_pick_continue",
+    "cherry_pick_skip",
+    "cherry_pick_abort",
+    "revert_continue",
+    "revert_skip",
+    "revert_abort",
+    "bisect_reset",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorktreeInfo {
@@ -120,6 +145,8 @@ pub struct InspectWarning {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InspectSummary {
     pub state: String,
+    pub state_scope: String,
+    pub execution_permission: String,
     pub codes: Vec<String>,
     pub message: String,
 }
@@ -141,6 +168,7 @@ pub struct RiskFactor {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InspectRiskHint {
+    pub scope: String,
     pub level: RiskLevel,
     pub factors: Vec<RiskFactor>,
 }
@@ -166,10 +194,9 @@ pub struct NextAction {
     pub kind: String,
     /// 이 행동이 가능한 이유(현재 상태 근거).
     pub reason: String,
-    /// 참고용 git 명령(canonical reference). 환경(EDITOR 등)에 따라 그대로 실행되지 않을 수도
-    /// 있다 — execute 단계에서 환경에 맞게 보정한다. 없을 수도 있다(예: resolve_conflicts).
+    /// 참고용 git 명령(canonical reference). 실행 허가가 아니라 문서화용 예시다.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<Vec<String>>,
+    pub reference_command: Option<Vec<String>>,
     /// 되돌림 가능성 힌트("reversible" 등). 확실한 경우에만 채운다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<String>,
@@ -177,6 +204,13 @@ pub struct NextAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NextGuardrails {
+    pub scope: String,
+    pub execution_contract: String,
+    pub allowed_semantics: String,
+    pub blocked_semantics: String,
+    pub needs_human_review_scope: String,
+    pub raw_git_allowed: bool,
+    pub evaluated_actions: Vec<String>,
     /// 안전한 preview 후보. raw Git 명령을 바로 실행해도 된다는 뜻은 아니다.
     pub allowed: Vec<NextAction>,
     /// 현재 상태에서 precondition이 맞지 않아 막아야 하는 행동.

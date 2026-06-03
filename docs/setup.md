@@ -239,10 +239,11 @@ Config: /Users/<name>/Library/Application Support/com.super-git.super-git/config
 항상 절대 worktree root로 정규화된다.
 
 inspect JSON은 `summary`, `risk_hint`, `warnings`, `next`를 함께 제공한다.
-`next.allowed`는 바로 실행하라는 뜻이 아니라 preview 후보이고, `next.blocked`는
-현재 상태에서 precondition이 맞지 않는 행동을 알려주는 guardrail이다.
-`next.needs_human_review`는 이후 preview/execute 단계에서 채울 예약 bucket이며,
-현재 inspect-only 레이어에서는 빈 배열이다.
+`summary.execution_permission`은 `not_granted_by_inspect`, `risk_hint.scope`는
+`current_state_only`, `next.execution_contract`는 `preview_required`다.
+`next.allowed`는 바로 실행하라는 뜻이 아니라 preview 후보이고, `next.raw_git_allowed`는
+항상 `false`다. action의 `reference_command`는 문서화용 참고 명령이지 실행 계약이 아니다.
+`next.needs_human_review`는 `evaluated_actions` catalog 안에서만 해석한다.
 
 ## Runtime Config Location
 

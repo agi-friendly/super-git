@@ -44,9 +44,10 @@ super-git wt list [path]
 hidden state machine as a versioned safety snapshot. The JSON includes HEAD,
 worktree-family context, upstream comparison, working-tree summary, in-progress
 operation, warnings, a current-state risk hint, and `next` guardrail buckets.
-`next.allowed` is a safe preview candidate list, not permission to execute raw
-Git commands. `next.needs_human_review` is reserved for the later
-preview/execute lifecycle and is empty in the current inspect-only layer.
+The JSON is self-describing: `summary.execution_permission` is
+`not_granted_by_inspect`, `next.execution_contract` is `preview_required`, and
+`next.raw_git_allowed` is `false`. Action `reference_command` values are
+documentation references, not commands to execute directly.
 
 The CLI binary is named `super-git`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.

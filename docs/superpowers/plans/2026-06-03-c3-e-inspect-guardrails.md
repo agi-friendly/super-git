@@ -1,5 +1,9 @@
 # C3-E Inspect Guardrails Implementation Plan
 
+> **Historical note:** this file is the original C3-E implementation plan. Later
+> commits may bump inspect schema versions or rename fields; use README and
+> architecture/setup docs for the current public contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Evolve `super-git inspect` from a raw state snapshot into a versioned, lightly interpreted safety snapshot without entering write execution yet.

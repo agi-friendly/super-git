@@ -120,7 +120,65 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
         .as_array()
         .expect("risk factors")
         .is_empty());
-    assert_eq!(json["data"]["schema_version"], "super-git.inspect.v0.2");
+    assert_eq!(json["data"]["schema_version"], "super-git.inspect.v0.3");
+    assert_eq!(json["data"]["summary"]["state_scope"], "repository_posture");
+    assert_eq!(
+        json["data"]["summary"]["execution_permission"],
+        "not_granted_by_inspect"
+    );
+    assert_eq!(
+        json["data"]["summary"]["message"],
+        "Repository is ready for preview selection."
+    );
+    assert_eq!(json["data"]["risk_hint"]["scope"], "current_state_only");
+    assert_eq!(json["data"]["next"]["scope"], "inspect_state_only");
+    assert_eq!(
+        json["data"]["next"]["execution_contract"],
+        "preview_required"
+    );
+    assert_eq!(
+        json["data"]["next"]["allowed_semantics"],
+        "preview_candidate"
+    );
+    assert_eq!(json["data"]["next"]["blocked_semantics"], "state_guardrail");
+    assert_eq!(
+        json["data"]["next"]["needs_human_review_scope"],
+        "evaluated_inspect_actions_only"
+    );
+    assert_eq!(json["data"]["next"]["raw_git_allowed"], false);
+    let evaluated_actions: Vec<_> = json["data"]["next"]["evaluated_actions"]
+        .as_array()
+        .expect("evaluated_actions array")
+        .iter()
+        .map(|action| action.as_str().expect("evaluated action string"))
+        .collect();
+    assert_eq!(
+        evaluated_actions,
+        vec![
+            "stage_changes",
+            "commit",
+            "push",
+            "pull",
+            "integrate_diverged",
+            "resolve_conflicts",
+            "continue_operation",
+            "merge_continue",
+            "merge_abort",
+            "rebase_continue",
+            "rebase_skip",
+            "rebase_abort",
+            "am_continue",
+            "am_skip",
+            "am_abort",
+            "cherry_pick_continue",
+            "cherry_pick_skip",
+            "cherry_pick_abort",
+            "revert_continue",
+            "revert_skip",
+            "revert_abort",
+            "bisect_reset",
+        ]
+    );
     assert!(!json["data"]
         .as_object()
         .expect("inspect data object")
@@ -212,9 +270,13 @@ fn inspect_reports_cherry_picking_from_sequencer_after_manual_commit() {
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "cherry-picking");
     assert_eq!(
-        next_action(&json, "allowed", "cherry_pick_abort")["command"],
+        next_action(&json, "allowed", "cherry_pick_abort")["reference_command"],
         serde_json::json!(["git", "cherry-pick", "--abort"])
     );
+    assert!(!next_action(&json, "allowed", "cherry_pick_abort")
+        .as_object()
+        .expect("action object")
+        .contains_key("command"));
 }
 
 #[test]

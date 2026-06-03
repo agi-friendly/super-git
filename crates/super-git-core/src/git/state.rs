@@ -6,6 +6,7 @@ use crate::model::{
     HeadInfo, InspectRiskHint, InspectSummary, InspectWarning, NextAction, NextGuardrails,
     Operation, RepoState, RiskFactor, RiskLevel, UpstreamComparisonBasis, UpstreamComparisonStatus,
     UpstreamInfo, WarningSeverity, WorkingTree, WorktreeContext, WorktreeKind,
+    EVALUATED_INSPECT_ACTIONS,
 };
 use crate::Result;
 
@@ -169,12 +170,14 @@ fn compute_summary(
         "blocked" => "Resolve conflicts before continuing Git operations.",
         "in_progress" => "A Git operation is in progress.",
         "dirty" => "Working tree has local changes.",
-        _ => "Repository is ready for a safe next action.",
+        _ => "Repository is ready for preview selection.",
     }
     .to_string();
 
     InspectSummary {
         state: state.to_string(),
+        state_scope: "repository_posture".to_string(),
+        execution_permission: "not_granted_by_inspect".to_string(),
         codes,
         message,
     }
@@ -216,7 +219,11 @@ fn compute_risk_hint(operation: Operation, working_tree: &WorkingTree) -> Inspec
         RiskLevel::Low
     };
 
-    InspectRiskHint { level, factors }
+    InspectRiskHint {
+        scope: "current_state_only".to_string(),
+        level,
+        factors,
+    }
 }
 
 fn operation_code(operation: Operation) -> &'static str {
@@ -322,6 +329,16 @@ fn compute_next_guardrails(
     upstream: &Option<UpstreamInfo>,
 ) -> NextGuardrails {
     NextGuardrails {
+        scope: "inspect_state_only".to_string(),
+        execution_contract: "preview_required".to_string(),
+        allowed_semantics: "preview_candidate".to_string(),
+        blocked_semantics: "state_guardrail".to_string(),
+        needs_human_review_scope: "evaluated_inspect_actions_only".to_string(),
+        raw_git_allowed: false,
+        evaluated_actions: EVALUATED_INSPECT_ACTIONS
+            .iter()
+            .map(|action| (*action).to_string())
+            .collect(),
         allowed: compute_allowed_actions(operation, working_tree, upstream),
         blocked: compute_blocked_actions(operation, working_tree, upstream),
         needs_human_review: Vec::new(),
@@ -523,11 +540,17 @@ fn push_sequence_actions(
     ));
 }
 
-fn action(kind: &str, reason: &str, command: Option<&[&str]>, risk: Option<&str>) -> NextAction {
+fn action(
+    kind: &str,
+    reason: &str,
+    reference_command: Option<&[&str]>,
+    risk: Option<&str>,
+) -> NextAction {
     NextAction {
         kind: kind.to_string(),
         reason: reason.to_string(),
-        command: command.map(|parts| parts.iter().map(|s| s.to_string()).collect()),
+        reference_command: reference_command
+            .map(|parts| parts.iter().map(|s| s.to_string()).collect()),
         risk: risk.map(|r| r.to_string()),
     }
 }
@@ -849,12 +872,81 @@ mod tests {
         actions.iter().map(|a| a.kind.as_str()).collect()
     }
 
+    fn assert_actions_are_cataloged(next: &NextGuardrails) {
+        let catalog: std::collections::BTreeSet<&str> =
+            EVALUATED_INSPECT_ACTIONS.iter().copied().collect();
+
+        for action in next
+            .allowed
+            .iter()
+            .chain(next.blocked.iter())
+            .chain(next.needs_human_review.iter())
+        {
+            assert!(
+                catalog.contains(action.kind.as_str()),
+                "missing action kind in EVALUATED_INSPECT_ACTIONS: {}",
+                action.kind
+            );
+        }
+    }
+
     #[test]
     fn next_clean_without_upstream_is_empty() {
         let next = compute_next_guardrails(Operation::None, &clean_wt(), &None);
         assert!(next.allowed.is_empty());
         assert!(next.blocked.is_empty());
         assert!(next.needs_human_review.is_empty());
+    }
+
+    #[test]
+    fn emitted_next_actions_are_all_in_the_inspect_action_catalog() {
+        let staged_wt = WorkingTree {
+            clean: false,
+            staged: 1,
+            unstaged: 1,
+            untracked: 1,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        let conflict_wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 1,
+            conflicts: vec!["f.txt".to_string()],
+        };
+        let behind = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 0,
+            behind: 1,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
+        });
+        let diverged = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 1,
+            behind: 1,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
+        });
+
+        let cases = [
+            compute_next_guardrails(Operation::None, &staged_wt, &behind),
+            compute_next_guardrails(Operation::None, &clean_wt(), &diverged),
+            compute_next_guardrails(Operation::Merging, &conflict_wt, &None),
+            compute_next_guardrails(Operation::Merging, &staged_wt, &None),
+            compute_next_guardrails(Operation::Rebasing, &conflict_wt, &None),
+            compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None),
+            compute_next_guardrails(Operation::Applying, &clean_wt(), &None),
+            compute_next_guardrails(Operation::CherryPicking, &clean_wt(), &None),
+            compute_next_guardrails(Operation::Reverting, &clean_wt(), &None),
+            compute_next_guardrails(Operation::Bisecting, &clean_wt(), &None),
+        ];
+
+        for next in &cases {
+            assert_actions_are_cataloged(next);
+        }
     }
 
     #[test]
@@ -946,7 +1038,7 @@ mod tests {
             .unwrap();
         assert_eq!(abort.risk.as_deref(), Some("reversible"));
         assert_eq!(
-            abort.command.as_deref(),
+            abort.reference_command.as_deref(),
             Some(["git", "merge", "--abort"].map(String::from).as_slice())
         );
     }
