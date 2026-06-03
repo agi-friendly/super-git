@@ -52,6 +52,11 @@ documentation references, not commands to execute directly.
 The CLI binary is named `super-git`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.
 
+The next write-side stage is not raw execution. It is the
+`inspect -> preview -> execute -> undo` lifecycle: preview emits a validated plan,
+execute re-checks the current state and regenerates Git commands from an internal
+allowlist, and undo uses an execute-issued token rather than preview hints.
+
 ## Development Setup
 
 See [docs/setup.md](docs/setup.md) for required tools and OS-specific setup
