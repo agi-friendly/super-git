@@ -118,7 +118,7 @@ fn passed(code: &str) -> PreviewPrecondition {
     }
 }
 
-fn compute_plan_id(plan: &PreviewPlan) -> Result<String> {
+pub fn compute_plan_id(plan: &PreviewPlan) -> Result<String> {
     let hash_input = PlanHashInput {
         schema_version: &plan.schema_version,
         action: &plan.action,

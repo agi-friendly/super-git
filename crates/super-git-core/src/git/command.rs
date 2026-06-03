@@ -83,6 +83,25 @@ impl Git {
         self.bytes_output_or_error(shown_args, output)
     }
 
+    pub fn run_write_in<I, S>(&self, path: &Path, args: I) -> Result<GitOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        let output = self
+            .write_command()
+            .arg("-C")
+            .arg(path)
+            .args(&args)
+            .output()?;
+
+        let mut shown_args = vec!["-C".to_string(), path.display().to_string()];
+        shown_args.extend(display_args(&args));
+
+        self.output_or_error(shown_args, output)
+    }
+
     pub fn try_run_in<I, S>(&self, path: &Path, args: I) -> Result<GitCommandResult>
     where
         I: IntoIterator<Item = S>,
@@ -117,10 +136,30 @@ impl Git {
     }
 
     fn read_command(&self) -> Command {
-        let mut command = Command::new(&self.program);
+        let mut command = self.base_command();
         // Read-side commands must not opportunistically refresh or lock the index.
-        // Future write actions can add a write-specific runner when they need one.
+        // Write actions use `write_command` so Git can take the locks it needs.
         command.env("GIT_OPTIONAL_LOCKS", "0");
+        command
+    }
+
+    fn write_command(&self) -> Command {
+        self.base_command()
+    }
+
+    fn base_command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        // Plans must bind to the repository selected by `git -C`, not ambient
+        // Git environment inherited from an agent shell.
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_PREFIX",
+        ] {
+            command.env_remove(key);
+        }
         command
     }
 

@@ -253,8 +253,17 @@ cargo run -p super-git-cli -- preview stage-changes
 ```
 
 출력은 JSON envelope 안에 `super-git.plan.v0.1` plan을 담는다. `plan_id`는 실행 계약
-필드만 해시하고, `reference_commands`는 설명용이다. `execute`와 `undo`는 아직 구현되지
-않았다.
+필드만 해시하고, `reference_commands`는 설명용이다. 만든 plan은 파일 또는 stdin으로
+execute에 넘길 수 있다.
+
+```bash
+cargo run -p super-git-cli -- preview stage-changes > /tmp/super-git-plan.json
+cargo run -p super-git-cli -- execute --plan /tmp/super-git-plan.json
+```
+
+`execute`는 실행 직전 fingerprint와 resolved pathset을 다시 확인하고, plan 안의
+`reference_commands`를 실행하지 않는다. `undo`는 아직 구현되지 않았지만 execute 결과에는
+나중 `undo`가 검증할 `undo_token`이 포함된다.
 
 ## Runtime Config Location
 

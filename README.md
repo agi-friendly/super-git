@@ -56,9 +56,10 @@ keeps repository registration in a simple cross-platform config file.
 The next write-side stage is not raw execution. It is the
 `inspect -> preview -> execute -> undo` lifecycle. `preview stage-changes` now
 emits a validated, read-only plan for staging current unstaged/untracked changes.
-`execute` and `undo` are not implemented yet; when they land, execute will
-re-check current state and regenerate Git commands from an internal allowlist,
-and undo will use an execute-issued token rather than preview hints.
+`execute --plan <file|->` re-checks that plan, rejects stale or tampered state,
+and stages only through the internal `stage_changes` allowlist. `undo` is not
+implemented yet, but execute already returns an undo token rather than treating
+preview hints as authority.
 
 ## Development Setup
 

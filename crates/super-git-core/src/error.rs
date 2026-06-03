@@ -32,6 +32,18 @@ pub enum SuperGitError {
         message: String,
     },
 
+    #[error("execute plan invalid: {code} ({message})")]
+    ExecutePlanInvalid { code: String, message: String },
+
+    #[error(
+        "execute precondition mismatch: {field} expected {expected} but current state is {actual}"
+    )]
+    ExecutePreconditionMismatch {
+        field: String,
+        expected: String,
+        actual: String,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

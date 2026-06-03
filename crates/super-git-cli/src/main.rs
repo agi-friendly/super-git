@@ -9,7 +9,7 @@ use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::ConfigStore;
 use super_git_core::git::command::Git;
-use super_git_core::git::{preview, state, status, worktree};
+use super_git_core::git::{execute, preview, state, status, worktree};
 
 use crate::args::{Cli, Commands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -75,6 +75,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
+        Commands::Execute { plan } => run_execute(mode, plan),
         Commands::Wt { command } => run_worktree(mode, command),
     }
 }
@@ -131,6 +132,23 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
             output::print_preview_plan(mode, &plan)
         }
     }
+}
+
+fn run_execute(mode: OutputMode, plan: PathBuf) -> Result<()> {
+    let current_dir = std::env::current_dir().context("could not read current directory")?;
+    let bytes = if plan.as_os_str() == "-" {
+        let mut bytes = Vec::new();
+        let mut stdin = std::io::stdin();
+        std::io::Read::read_to_end(&mut stdin, &mut bytes)
+            .context("could not read plan from stdin")?;
+        bytes
+    } else {
+        std::fs::read(&plan).with_context(|| format!("could not read plan {}", plan.display()))?
+    };
+
+    let result =
+        execute::execute_plan_bytes(&current_dir, &bytes).context("could not execute plan")?;
+    output::print_execute_result(mode, &result)
 }
 
 fn run_worktree(mode: OutputMode, command: WorktreeCommands) -> Result<()> {

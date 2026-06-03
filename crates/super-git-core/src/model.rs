@@ -28,6 +28,8 @@ impl StatusOutput {
 pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
+pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
+pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -77,7 +79,7 @@ impl WorktreeInfo {
 
 /// 진행 중인 Git 작업. `.git` 내부의 상태 파일 존재 여부로 판별한다.
 /// super-git의 핵심 가치: git의 숨은 상태머신을 명시적으로 드러낸다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Operation {
     None,
@@ -264,7 +266,8 @@ pub struct RepoState {
     pub risk_hint: InspectRiskHint,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewPlan {
     pub schema_version: String,
     pub plan_id: String,
@@ -279,14 +282,16 @@ pub struct PreviewPlan {
     pub undo_preview: UndoPreview,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewAction {
     pub kind: String,
     pub scope: String,
     pub resolved_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StateFingerprint {
     pub schema_version: String,
     pub repository: PathBuf,
@@ -298,27 +303,56 @@ pub struct StateFingerprint {
     pub untracked_content_sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewPrecondition {
     pub code: String,
     pub status: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActionRisk {
     pub severity: String,
     pub reversibility: String,
     pub requires_human_confirmation: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UndoStrategy {
     pub kind: String,
     pub requires_index_snapshot: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UndoPreview {
     pub kind: String,
     pub available_after_execute: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecuteResult {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub action: String,
+    pub repository: PathBuf,
+    pub executed: bool,
+    pub effects: Vec<String>,
+    pub undo_token: UndoToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UndoToken {
+    pub schema_version: String,
+    pub kind: String,
+    pub repository: PathBuf,
+    pub action: String,
+    pub plan_id: String,
+    pub target_paths: Vec<String>,
+    pub index_snapshot_path: PathBuf,
+    pub pre_index_existed: bool,
+    pub pre_index_sha256: String,
+    pub post_index_sha256: String,
 }

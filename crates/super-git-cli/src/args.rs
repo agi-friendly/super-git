@@ -38,6 +38,13 @@ pub enum Commands {
         command: PreviewCommands,
     },
 
+    /// Execute a previously previewed plan after re-validation.
+    Execute {
+        /// Plan file to execute. Use '-' to read from stdin.
+        #[arg(long)]
+        plan: PathBuf,
+    },
+
     /// Inspect Git worktrees.
     Wt {
         #[command(subcommand)]

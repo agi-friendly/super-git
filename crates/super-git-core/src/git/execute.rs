@@ -1,0 +1,390 @@
+use std::ffi::OsString;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
+
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::git::command::Git;
+use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
+use crate::git::preview::compute_plan_id;
+use crate::git::state;
+use crate::model::{
+    ExecuteResult, Operation, PreviewPlan, PreviewPrecondition, UndoToken, EXECUTE_SCHEMA_VERSION,
+    PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
+};
+use crate::{Result, SuperGitError};
+
+const ACTION_STAGE_CHANGES: &str = "stage_changes";
+
+pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteResult> {
+    let plan = parse_plan(bytes)?;
+    execute_plan(current_path, plan)
+}
+
+fn parse_plan(bytes: &[u8]) -> Result<PreviewPlan> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if value.get("ok").is_some() {
+        if value.get("ok") != Some(&Value::Bool(true)) {
+            return invalid_plan(
+                "plan_envelope_not_success",
+                "plan envelope must have ok=true",
+            );
+        }
+
+        let data = value
+            .get("data")
+            .ok_or_else(|| SuperGitError::ExecutePlanInvalid {
+                code: "missing_data".to_string(),
+                message: "plan envelope must contain data".to_string(),
+            })?;
+        return Ok(serde_json::from_value(data.clone())?);
+    }
+
+    Ok(serde_json::from_value(value)?)
+}
+
+fn execute_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult> {
+    validate_static_contract(&plan)?;
+
+    let git = Git::default();
+    let state = state::read_state(current_path)?;
+    ensure_match(
+        "repository",
+        &plan.repository.display().to_string(),
+        &state.root.display().to_string(),
+    )?;
+
+    validate_current_preconditions(&state)?;
+    validate_current_fingerprint(&git, &state, &plan)?;
+    validate_resolved_paths(&git, &state.root, &plan)?;
+
+    let snapshot = snapshot_index(&git, &state.root, &plan)?;
+    let mut args = vec![
+        OsString::from("add"),
+        OsString::from("--all"),
+        OsString::from("--"),
+    ];
+    args.extend(plan.action.resolved_paths.iter().map(OsString::from));
+
+    if let Err(err) = git.run_write_in(&state.root, args) {
+        let _ = fs::remove_file(&snapshot.path);
+        return Err(err);
+    }
+
+    let post_index_sha256 = hash_index(&snapshot.index_path)?;
+    let undo_token = UndoToken {
+        schema_version: UNDO_TOKEN_SCHEMA_VERSION.to_string(),
+        kind: "restore_index_snapshot".to_string(),
+        repository: state.root.clone(),
+        action: ACTION_STAGE_CHANGES.to_string(),
+        plan_id: plan.plan_id.clone(),
+        target_paths: plan.action.resolved_paths.clone(),
+        index_snapshot_path: snapshot.path,
+        pre_index_existed: snapshot.pre_index_existed,
+        pre_index_sha256: snapshot.pre_index_sha256,
+        post_index_sha256,
+    };
+
+    Ok(ExecuteResult {
+        schema_version: EXECUTE_SCHEMA_VERSION.to_string(),
+        plan_id: plan.plan_id,
+        action: ACTION_STAGE_CHANGES.to_string(),
+        repository: state.root,
+        executed: true,
+        effects: vec!["Staged previewed paths in the current worktree index.".to_string()],
+        undo_token,
+    })
+}
+
+fn validate_static_contract(plan: &PreviewPlan) -> Result<()> {
+    if plan.schema_version != PLAN_SCHEMA_VERSION {
+        return invalid_plan(
+            "unsupported_schema_version",
+            "execute supports only super-git.plan.v0.1",
+        );
+    }
+
+    let expected_plan_id = compute_plan_id(plan)?;
+    ensure_match("plan_id", &plan.plan_id, &expected_plan_id)?;
+
+    if plan.action.kind != ACTION_STAGE_CHANGES {
+        return invalid_plan("unsupported_action", "execute supports only stage_changes");
+    }
+    if plan.action.scope != "all" {
+        return invalid_plan("unsupported_scope", "stage_changes supports only scope=all");
+    }
+    validate_pathset(&plan.action.resolved_paths)?;
+
+    if plan.preconditions != expected_preconditions() {
+        return invalid_plan(
+            "unsupported_preconditions",
+            "stage_changes plan preconditions do not match the supported execute contract",
+        );
+    }
+    if plan.risk.severity != "low"
+        || plan.risk.reversibility != "reversible"
+        || plan.risk.requires_human_confirmation
+    {
+        return invalid_plan(
+            "unsupported_risk",
+            "stage_changes execute requires low reversible risk without human confirmation",
+        );
+    }
+    if plan.undo_strategy.kind != "restore_index_snapshot"
+        || !plan.undo_strategy.requires_index_snapshot
+    {
+        return invalid_plan(
+            "unsupported_undo_strategy",
+            "stage_changes execute requires restore_index_snapshot undo strategy",
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_current_preconditions(state: &crate::model::RepoState) -> Result<()> {
+    if state.operation != Operation::None {
+        return mismatch("operation_none", "true", "false");
+    }
+    if state.working_tree.conflict_count != 0 {
+        return mismatch("no_conflicts", "true", "false");
+    }
+    if state.working_tree.staged != 0 {
+        return mismatch("index_clean", "true", "false");
+    }
+    if state.working_tree.unstaged == 0 && state.working_tree.untracked == 0 {
+        return mismatch("has_unstaged_or_untracked_changes", "true", "false");
+    }
+    Ok(())
+}
+
+fn validate_current_fingerprint(
+    git: &Git,
+    state: &crate::model::RepoState,
+    plan: &PreviewPlan,
+) -> Result<()> {
+    let current = read_state_fingerprint(
+        git,
+        &state.root,
+        &state.root,
+        state.head.commit.clone(),
+        state.operation,
+    )?;
+
+    if current == plan.state_fingerprint {
+        return Ok(());
+    }
+
+    ensure_match(
+        "state_fingerprint",
+        &serde_json::to_string(&plan.state_fingerprint)?,
+        &serde_json::to_string(&current)?,
+    )
+}
+
+fn validate_resolved_paths(git: &Git, root: &Path, plan: &PreviewPlan) -> Result<()> {
+    let current = resolved_stage_changes_paths(git, root)?;
+    if current == plan.action.resolved_paths {
+        return Ok(());
+    }
+
+    ensure_match(
+        "action.resolved_paths",
+        &serde_json::to_string(&plan.action.resolved_paths)?,
+        &serde_json::to_string(&current)?,
+    )
+}
+
+fn validate_pathset(paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return invalid_plan("empty_resolved_paths", "resolved_paths must not be empty");
+    }
+
+    let mut previous: Option<&str> = None;
+    for path in paths {
+        validate_relative_path(path)?;
+        if let Some(previous) = previous {
+            if previous >= path.as_str() {
+                return invalid_plan(
+                    "unstable_resolved_paths",
+                    "resolved_paths must be sorted and unique",
+                );
+            }
+        }
+        previous = Some(path);
+    }
+    Ok(())
+}
+
+fn validate_relative_path(path: &str) -> Result<()> {
+    if path.is_empty() || path.contains('\0') {
+        return invalid_plan(
+            "unsafe_resolved_path",
+            "resolved path must be a non-empty repository-relative path",
+        );
+    }
+
+    let mut components = Path::new(path).components();
+    let Some(first) = components.next() else {
+        return invalid_plan(
+            "unsafe_resolved_path",
+            "resolved path must contain at least one normal component",
+        );
+    };
+
+    if !matches!(first, Component::Normal(_)) || first.as_os_str() == ".git" {
+        return invalid_plan(
+            "unsafe_resolved_path",
+            "resolved path must stay inside the worktree and outside .git",
+        );
+    }
+    for component in components {
+        if !matches!(component, Component::Normal(_)) {
+            return invalid_plan(
+                "unsafe_resolved_path",
+                "resolved path must not contain absolute, parent, or current-directory components",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+struct IndexSnapshot {
+    path: PathBuf,
+    index_path: PathBuf,
+    pre_index_existed: bool,
+    pre_index_sha256: String,
+}
+
+fn snapshot_index(git: &Git, root: &Path, plan: &PreviewPlan) -> Result<IndexSnapshot> {
+    let index_path = git_path(git, root, "index")?;
+    let index_state = read_index_state(&index_path)?;
+    let pre_index_sha256 = sha256_hex(&index_state.bytes);
+    let execution_id = execution_id(plan, &pre_index_sha256);
+    let snapshot_path = git_path(git, root, &format!("super-git/undo/{execution_id}.index"))?;
+
+    if index_state.existed {
+        if let Some(parent) = snapshot_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&snapshot_path, &index_state.bytes)?;
+    }
+
+    Ok(IndexSnapshot {
+        path: snapshot_path,
+        index_path,
+        pre_index_existed: index_state.existed,
+        pre_index_sha256,
+    })
+}
+
+fn git_path(git: &Git, root: &Path, path: &str) -> Result<PathBuf> {
+    let output = git.run_in(
+        root,
+        ["rev-parse", "--path-format=absolute", "--git-path", path],
+    )?;
+    Ok(PathBuf::from(output.stdout.trim()))
+}
+
+fn hash_index(path: &Path) -> Result<String> {
+    Ok(sha256_hex(&read_index_state(path)?.bytes))
+}
+
+struct IndexState {
+    existed: bool,
+    bytes: Vec<u8>,
+}
+
+fn read_index_state(path: &Path) -> Result<IndexState> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(IndexState {
+            existed: true,
+            bytes,
+        }),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(IndexState {
+            existed: false,
+            bytes: Vec::new(),
+        }),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn execution_id(plan: &PreviewPlan, pre_index_sha256: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"super-git-execute-v0.1\n");
+    hasher.update(plan.plan_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(pre_index_sha256.as_bytes());
+    format_hex_digest(hasher.finalize().as_slice())
+}
+
+fn expected_preconditions() -> Vec<PreviewPrecondition> {
+    vec![
+        passed("operation_none"),
+        passed("no_conflicts"),
+        passed("index_clean"),
+        passed("has_unstaged_or_untracked_changes"),
+    ]
+}
+
+fn passed(code: &str) -> PreviewPrecondition {
+    PreviewPrecondition {
+        code: code.to_string(),
+        status: "passed".to_string(),
+    }
+}
+
+fn invalid_plan<T>(code: &str, message: &str) -> Result<T> {
+    Err(SuperGitError::ExecutePlanInvalid {
+        code: code.to_string(),
+        message: message.to_string(),
+    })
+}
+
+fn ensure_match(field: &str, expected: &str, actual: &str) -> Result<()> {
+    if expected == actual {
+        return Ok(());
+    }
+    mismatch(field, expected, actual)
+}
+
+fn mismatch<T>(field: &str, expected: &str, actual: &str) -> Result<T> {
+    Err(SuperGitError::ExecutePreconditionMismatch {
+        field: field.to_string(),
+        expected: expected.to_string(),
+        actual: actual.to_string(),
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format_digest(hasher.finalize().as_slice())
+}
+
+fn format_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity("sha256:".len() + bytes.len() * 2);
+    output.push_str("sha256:");
+    output.push_str(&format_hex_digest(bytes));
+    output
+}
+
+fn format_hex_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(hex_char(byte >> 4));
+        output.push(hex_char(byte & 0x0f));
+    }
+    output
+}
+
+fn hex_char(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'a' + value - 10) as char,
+        _ => unreachable!("nibble is always <= 15"),
+    }
+}
