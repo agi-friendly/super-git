@@ -59,8 +59,11 @@ read-side Git 명령을 실행해 index refresh 같은 부수효과를 피한다
 core의 allowlist에서 다시 만든다. 현재 execute action은 `stage_changes` 하나다.
 
 `undo_preview`는 preview가 설명하는 가능성이고, `undo_token`은 execute가 성공한 뒤에만
-발급하는 권한이다. `stage_changes` 같은 첫 쓰기 작업은 index snapshot을 기반으로 되돌림을
-설계하고, undo 시점의 index가 execute 직후 상태와 다르면 새 작업을 덮어쓰지 않고 실패한다.
+발급하는 복구 입력이다. token 파일 자체는 신뢰하지 않으므로 `undo --token <file|->`는
+repository, snapshot path, snapshot checksum, 현재 index checksum을 다시 검증한다.
+`stage_changes` 같은 첫 쓰기 작업은 index snapshot을 기반으로 되돌림을 설계한다. 현재 index가
+token의 post-execute checksum과 맞을 때만 pre-execute index snapshot을 복원한다. checksum이
+다르면 새 작업을 덮어쓰지 않고 실패하며, working-tree 파일 내용은 바꾸지 않는다.
 
 ## Config
 

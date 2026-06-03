@@ -141,7 +141,7 @@ super-git undo --token token.json
 
 `undo_strategy` is the machine-readable strategy that `execute` validates and includes in the plan hash.
 
-`undo_token` is authoritative. It is created only by `execute` after a successful write and must contain enough data to validate that undo is still safe.
+`undo_token` is the recovery input produced by `execute` after a successful write. The token file is still untrusted input at undo time, so `undo` must validate repository scope, snapshot path, snapshot checksum, and current state before restoring anything.
 
 For `stage_changes`, the safest first undo model is index-snapshot based:
 

@@ -30,6 +30,7 @@ pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
+pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -332,7 +333,8 @@ pub struct UndoPreview {
     pub available_after_execute: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteResult {
     pub schema_version: String,
     pub plan_id: String,
@@ -343,7 +345,8 @@ pub struct ExecuteResult {
     pub undo_token: UndoToken,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UndoToken {
     pub schema_version: String,
     pub kind: String,
@@ -355,4 +358,14 @@ pub struct UndoToken {
     pub pre_index_existed: bool,
     pub pre_index_sha256: String,
     pub post_index_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UndoResult {
+    pub schema_version: String,
+    pub action: String,
+    pub repository: PathBuf,
+    pub plan_id: String,
+    pub undone: bool,
+    pub effects: Vec<String>,
 }

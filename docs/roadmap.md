@@ -24,6 +24,7 @@
 - `execute --plan <file|->` trust boundary 추가
 - plan hash, state fingerprint, precondition mismatch 처리
 - `undo_preview`와 execute 이후 `undo_token` 분리
+- `undo --token <file|->` index snapshot 복원
 - 첫 write action은 `stage_changes`로 제한
 - execute는 plan의 `reference_commands`를 믿지 않고 내부 allowlist로 Git 명령 재생성
 

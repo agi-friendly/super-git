@@ -44,6 +44,18 @@ pub enum SuperGitError {
         actual: String,
     },
 
+    #[error("undo token invalid: {code} ({message})")]
+    UndoTokenInvalid { code: String, message: String },
+
+    #[error(
+        "undo precondition mismatch: {field} expected {expected} but current state is {actual}"
+    )]
+    UndoPreconditionMismatch {
+        field: String,
+        expected: String,
+        actual: String,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

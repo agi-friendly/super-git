@@ -57,9 +57,10 @@ The next write-side stage is not raw execution. It is the
 `inspect -> preview -> execute -> undo` lifecycle. `preview stage-changes` now
 emits a validated, read-only plan for staging current unstaged/untracked changes.
 `execute --plan <file|->` re-checks that plan, rejects stale or tampered state,
-and stages only through the internal `stage_changes` allowlist. `undo` is not
-implemented yet, but execute already returns an undo token rather than treating
-preview hints as authority.
+and stages only through the internal `stage_changes` allowlist. `undo --token
+<file|->` treats token input as untrusted, validates repository/snapshot/checksum
+preconditions, restores the pre-execute index only when the current index still
+matches the token, and never edits working-tree files.
 
 ## Development Setup
 

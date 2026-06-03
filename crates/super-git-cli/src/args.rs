@@ -45,6 +45,13 @@ pub enum Commands {
         plan: PathBuf,
     },
 
+    /// Undo a write using a validated undo token.
+    Undo {
+        /// Undo token file. Use '-' to read from stdin.
+        #[arg(long)]
+        token: PathBuf,
+    },
+
     /// Inspect Git worktrees.
     Wt {
         #[command(subcommand)]

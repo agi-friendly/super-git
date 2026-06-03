@@ -9,7 +9,7 @@ use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::ConfigStore;
 use super_git_core::git::command::Git;
-use super_git_core::git::{execute, preview, state, status, worktree};
+use super_git_core::git::{execute, preview, state, status, undo, worktree};
 
 use crate::args::{Cli, Commands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -76,6 +76,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
         Commands::Execute { plan } => run_execute(mode, plan),
+        Commands::Undo { token } => run_undo(mode, token),
         Commands::Wt { command } => run_worktree(mode, command),
     }
 }
@@ -136,19 +137,31 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
 
 fn run_execute(mode: OutputMode, plan: PathBuf) -> Result<()> {
     let current_dir = std::env::current_dir().context("could not read current directory")?;
-    let bytes = if plan.as_os_str() == "-" {
-        let mut bytes = Vec::new();
-        let mut stdin = std::io::stdin();
-        std::io::Read::read_to_end(&mut stdin, &mut bytes)
-            .context("could not read plan from stdin")?;
-        bytes
-    } else {
-        std::fs::read(&plan).with_context(|| format!("could not read plan {}", plan.display()))?
-    };
+    let bytes = read_json_arg(&plan, "plan")?;
 
     let result =
         execute::execute_plan_bytes(&current_dir, &bytes).context("could not execute plan")?;
     output::print_execute_result(mode, &result)
+}
+
+fn run_undo(mode: OutputMode, token: PathBuf) -> Result<()> {
+    let current_dir = std::env::current_dir().context("could not read current directory")?;
+    let bytes = read_json_arg(&token, "token")?;
+
+    let result = undo::undo_token_bytes(&current_dir, &bytes).context("could not undo token")?;
+    output::print_undo_result(mode, &result)
+}
+
+fn read_json_arg(path: &PathBuf, label: &str) -> Result<Vec<u8>> {
+    if path.as_os_str() == "-" {
+        let mut bytes = Vec::new();
+        let mut stdin = std::io::stdin();
+        std::io::Read::read_to_end(&mut stdin, &mut bytes)
+            .with_context(|| format!("could not read {label} from stdin"))?;
+        return Ok(bytes);
+    }
+
+    std::fs::read(path).with_context(|| format!("could not read {label} {}", path.display()))
 }
 
 fn run_worktree(mode: OutputMode, command: WorktreeCommands) -> Result<()> {
