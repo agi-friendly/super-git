@@ -1,13 +1,18 @@
 use std::path::{Path, PathBuf};
 
 use crate::git::command::Git;
-use crate::model::{HeadInfo, NextAction, Operation, RepoState, UpstreamInfo, WorkingTree};
+use crate::git::worktree;
+use crate::model::{
+    HeadInfo, NextAction, Operation, RepoState, UpstreamInfo, WorkingTree, WorktreeContext,
+    WorktreeKind,
+};
 use crate::Result;
 
 /// 저장소의 HEAD 위치와 진행 중인 작업을 한 번에 읽는다.
 pub fn read_state(path: &Path) -> Result<RepoState> {
     let git = Git::default();
     let root = repo_root(&git, path)?;
+    let worktree_context = read_worktree_context(&git, path, &root)?;
     let head = read_head(&git, path)?;
     let upstream = read_upstream(&git, path)?;
     let working_tree = read_working_tree(&git, path)?;
@@ -15,6 +20,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let allowed_next = compute_allowed_next(operation, &working_tree, &upstream);
     Ok(RepoState {
         root,
+        worktree_context,
         head,
         upstream,
         working_tree,
@@ -381,6 +387,55 @@ fn absolute_git_dir(git: &Git, path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(output.stdout.trim()))
 }
 
+/// 현재 worktree가 family에서 어떤 위치인지 요약한다.
+fn read_worktree_context(git: &Git, path: &Path, root: &Path) -> Result<WorktreeContext> {
+    let worktrees = worktree::list_worktrees(path)?;
+
+    // main 판정은 경로 비교 대신 git에게 맡긴다.
+    // linked worktree는 git-dir이 .git/worktrees/<name>이라 공통 git-dir과 다르다.
+    let git_dir = git.run_in(path, ["rev-parse", "--absolute-git-dir"])?;
+    let common_dir = git.run_in(
+        path,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let is_bare = git
+        .try_run_in(path, ["rev-parse", "--is-bare-repository"])?
+        .stdout
+        .trim()
+        == "true";
+
+    let kind = classify_worktree_kind(is_bare, git_dir.stdout.trim(), common_dir.stdout.trim());
+
+    // main worktree 경로는 worktree list의 (bare가 아닌) 첫 항목이다.
+    let main = worktrees
+        .iter()
+        .find(|wt| !wt.bare)
+        .or_else(|| worktrees.first())
+        .map(|wt| wt.path.clone())
+        .unwrap_or_else(|| root.to_path_buf());
+
+    let family_count = worktrees.len() as u32;
+    let linked_count = family_count.saturating_sub(1);
+
+    Ok(WorktreeContext {
+        kind,
+        main,
+        family_count,
+        linked_count,
+    })
+}
+
+/// git-dir과 공통 git-dir 비교로 현재 worktree 종류를 판별한다.
+fn classify_worktree_kind(is_bare: bool, git_dir: &str, common_dir: &str) -> WorktreeKind {
+    if is_bare {
+        WorktreeKind::Bare
+    } else if git_dir == common_dir {
+        WorktreeKind::Main
+    } else {
+        WorktreeKind::Linked
+    }
+}
+
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
@@ -717,5 +772,29 @@ mod tests {
         assert!(ks.contains(&"rebase-abort"));
         // 충돌 중에는 continue를 제안하지 않는다.
         assert!(!ks.contains(&"rebase-continue"));
+    }
+
+    #[test]
+    fn worktree_kind_main_when_git_dirs_match() {
+        assert_eq!(
+            classify_worktree_kind(false, "/repo/.git", "/repo/.git"),
+            WorktreeKind::Main
+        );
+    }
+
+    #[test]
+    fn worktree_kind_linked_when_git_dirs_differ() {
+        assert_eq!(
+            classify_worktree_kind(false, "/repo/.git/worktrees/wt", "/repo/.git"),
+            WorktreeKind::Linked
+        );
+    }
+
+    #[test]
+    fn worktree_kind_bare_regardless_of_dirs() {
+        assert_eq!(
+            classify_worktree_kind(true, "/repo.git", "/repo.git"),
+            WorktreeKind::Bare
+        );
     }
 }

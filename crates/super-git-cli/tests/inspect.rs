@@ -423,3 +423,38 @@ fn inspect_reports_rebase_conflict_without_continue() {
     // 충돌 해결 전에는 continue를 제안하지 않는다.
     assert!(!ks.iter().any(|k| k == "rebase-continue"));
 }
+
+#[test]
+fn inspect_main_worktree_context() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    init_repo_with_commit(tmp.path());
+
+    let json = inspect_json(tmp.path());
+    let wc = &json["data"]["worktree_context"];
+    assert_eq!(wc["kind"], "main");
+    assert_eq!(wc["family_count"], 1);
+    assert_eq!(wc["linked_count"], 0);
+}
+
+#[test]
+fn inspect_linked_worktree_context() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // linked worktree를 추가하고 그 안에서 inspect한다.
+    let linked = dir.join("linked");
+    git(dir, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+
+    let json = inspect_json(&linked);
+    let wc = &json["data"]["worktree_context"];
+    assert_eq!(wc["kind"], "linked");
+    assert_eq!(wc["family_count"], 2);
+    assert_eq!(wc["linked_count"], 1);
+
+    // main은 원본 repo를 가리킨다(symlink 차이 제거 위해 canonicalize 후 비교).
+    let main_canon =
+        std::fs::canonicalize(wc["main"].as_str().expect("main path")).expect("canon main");
+    let dir_canon = std::fs::canonicalize(dir).expect("canon dir");
+    assert_eq!(main_canon, dir_canon);
+}

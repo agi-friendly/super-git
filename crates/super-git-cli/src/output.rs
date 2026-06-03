@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::model::{Operation, RepoState, Repository, StatusOutput, WorktreeInfo};
+use super_git_core::model::{
+    Operation, RepoState, Repository, StatusOutput, WorktreeInfo, WorktreeKind,
+};
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
 /// 사람이 직접 읽을 때만 `--human`으로 Human을 고른다.
@@ -161,6 +163,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({
             "repository": state.root,
+            "worktree_context": state.worktree_context,
             "head": state.head,
             "upstream": state.upstream,
             "working_tree": state.working_tree,
@@ -169,6 +172,17 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
         })),
         OutputMode::Human => {
             println!("Repository: {}", state.root.display());
+
+            let wc = &state.worktree_context;
+            println!(
+                "Worktree: {} (family {}, linked {})",
+                worktree_kind_label(wc.kind),
+                wc.family_count,
+                wc.linked_count
+            );
+            if wc.kind == WorktreeKind::Linked {
+                println!("  main: {}", wc.main.display());
+            }
 
             match &state.head.branch {
                 Some(branch) => println!("Branch: {branch}"),
@@ -209,6 +223,15 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn worktree_kind_label(kind: WorktreeKind) -> &'static str {
+    match kind {
+        WorktreeKind::Main => "main",
+        WorktreeKind::Linked => "linked",
+        WorktreeKind::Bare => "bare",
+        WorktreeKind::Unknown => "unknown",
     }
 }
 

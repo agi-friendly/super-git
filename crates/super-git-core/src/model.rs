@@ -113,11 +113,36 @@ pub struct NextAction {
     pub risk: Option<String>,
 }
 
+/// 현재 worktree가 worktree family에서 어떤 위치인지 나타낸다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeKind {
+    Main,
+    Linked,
+    Bare,
+    Unknown,
+}
+
+/// 현재 worktree의 family 내 위치 요약.
+/// 전체 worktree 목록은 `wt list`가 담당하고, 여기서는 "나는 어디인가"만 요약한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorktreeContext {
+    pub kind: WorktreeKind,
+    /// main worktree 경로(linked에서도 main을 가리킨다).
+    pub main: PathBuf,
+    /// family의 전체 worktree 수(main/bare 포함).
+    pub family_count: u32,
+    /// linked worktree 수(main/bare 제외).
+    pub linked_count: u32,
+}
+
 /// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepoState {
     /// 저장소(워크트리) 루트의 절대경로. 입력이 하위 디렉토리여도 root로 정규화된다.
     pub root: PathBuf,
+    /// 현재 worktree의 family 내 위치.
+    pub worktree_context: WorktreeContext,
     pub head: HeadInfo,
     /// upstream 추적 브랜치 정보. 미설정/detached/unborn이면 None.
     pub upstream: Option<UpstreamInfo>,
