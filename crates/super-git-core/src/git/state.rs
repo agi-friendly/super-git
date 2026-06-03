@@ -186,19 +186,19 @@ fn compute_allowed_next(
         }
         Operation::Rebasing => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "rebase");
+            push_sequence_actions(&mut actions, "rebase", working_tree);
         }
         Operation::Applying => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "am");
+            push_sequence_actions(&mut actions, "am", working_tree);
         }
         Operation::CherryPicking => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "cherry-pick");
+            push_sequence_actions(&mut actions, "cherry-pick", working_tree);
         }
         Operation::Reverting => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "revert");
+            push_sequence_actions(&mut actions, "revert", working_tree);
         }
         Operation::Bisecting => {
             actions.push(action(
@@ -212,11 +212,20 @@ fn compute_allowed_next(
 
     // 진행 중인 작업이 없을 때만 일반 흐름(commit/push/pull)을 제안한다.
     if operation == Operation::None {
-        // untracked만 있어도 dirty이고 커밋할 거리가 있다.
-        if !working_tree.clean {
+        // staged 변경이 있어야 실제 commit이 가능하다.
+        if working_tree.staged > 0 {
             actions.push(action(
                 "commit",
-                "there are uncommitted changes",
+                "staged changes are ready to commit",
+                None,
+                None,
+            ));
+        }
+        // unstaged/untracked는 아직 commit 대상이 아니므로 먼저 stage하도록 유도한다.
+        if working_tree.unstaged > 0 || working_tree.untracked > 0 {
+            actions.push(action(
+                "stage-changes",
+                "there are unstaged or untracked changes",
                 None,
                 None,
             ));
@@ -265,13 +274,16 @@ fn push_resolve_if_conflicts(actions: &mut Vec<NextAction>, working_tree: &Worki
 }
 
 /// continue/skip/abort 3종을 가진 sequencer류(rebase/am/cherry-pick/revert) 행동을 추가한다.
-fn push_sequence_actions(actions: &mut Vec<NextAction>, op: &str) {
-    actions.push(action(
-        &format!("{op}-continue"),
-        "resume after resolving",
-        Some(&["git", op, "--continue"]),
-        None,
-    ));
+fn push_sequence_actions(actions: &mut Vec<NextAction>, op: &str, working_tree: &WorkingTree) {
+    // continue는 충돌이 없을 때만 안전하다. `git <op> --continue`는 충돌 해결 전엔 실패한다.
+    if working_tree.conflict_count == 0 {
+        actions.push(action(
+            &format!("{op}-continue"),
+            "resume after resolving",
+            Some(&["git", op, "--continue"]),
+            None,
+        ));
+    }
     actions.push(action(
         &format!("{op}-skip"),
         "skip the current commit",
@@ -650,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn allowed_next_untracked_only_suggests_commit() {
+    fn allowed_next_untracked_only_suggests_stage() {
         let wt = WorkingTree {
             clean: false,
             staged: 0,
@@ -659,12 +671,16 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        assert!(kinds(&compute_allowed_next(Operation::None, &wt, &None)).contains(&"commit"));
+        let actions = compute_allowed_next(Operation::None, &wt, &None);
+        let ks = kinds(&actions);
+        // untracked는 아직 commit 대상이 아니므로 stage-changes를 제안한다.
+        assert!(ks.contains(&"stage-changes"));
+        assert!(!ks.contains(&"commit"));
     }
 
     #[test]
-    fn allowed_next_dirty_suppresses_pull_but_keeps_commit() {
-        // dirty + behind: pull은 워킹 트리를 건드리니 억제하고 commit을 먼저 유도한다.
+    fn allowed_next_dirty_suppresses_pull() {
+        // dirty + behind: pull은 워킹 트리를 건드리니 억제하고 stage/commit을 먼저 유도한다.
         let wt = WorkingTree {
             clean: false,
             staged: 0,
@@ -680,7 +696,26 @@ mod tests {
         });
         let actions = compute_allowed_next(Operation::None, &wt, &behind);
         let ks = kinds(&actions);
-        assert!(ks.contains(&"commit"));
+        assert!(ks.contains(&"stage-changes"));
         assert!(!ks.contains(&"pull"));
+    }
+
+    #[test]
+    fn allowed_next_rebase_conflict_hides_continue() {
+        let wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 1,
+            conflicts: vec!["f.txt".to_string()],
+        };
+        let actions = compute_allowed_next(Operation::Rebasing, &wt, &None);
+        let ks = kinds(&actions);
+        assert!(ks.contains(&"resolve-conflicts"));
+        assert!(ks.contains(&"rebase-skip"));
+        assert!(ks.contains(&"rebase-abort"));
+        // 충돌 중에는 continue를 제안하지 않는다.
+        assert!(!ks.contains(&"rebase-continue"));
     }
 }

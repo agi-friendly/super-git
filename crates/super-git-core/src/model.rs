@@ -104,7 +104,8 @@ pub struct NextAction {
     pub kind: String,
     /// 이 행동이 가능한 이유(현재 상태 근거).
     pub reason: String,
-    /// 참고용 git 명령. 없을 수도 있다(예: resolve-conflicts).
+    /// 참고용 git 명령(canonical reference). 환경(EDITOR 등)에 따라 그대로 실행되지 않을 수도
+    /// 있다 — execute 단계에서 환경에 맞게 보정한다. 없을 수도 있다(예: resolve-conflicts).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     /// 되돌림 가능성 힌트("reversible" 등). 확실한 경우에만 채운다.

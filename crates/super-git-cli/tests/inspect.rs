@@ -392,3 +392,31 @@ fn inspect_reports_merge_continue_when_conflicts_resolved() {
     assert!(ks.iter().any(|k| k == "merge-continue"));
     assert!(!ks.iter().any(|k| k == "resolve-conflicts"));
 }
+
+#[test]
+fn inspect_reports_rebase_conflict_without_continue() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    git(dir, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(dir.join("file.txt"), "feature\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "feature change"]);
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("file.txt"), "main\n").expect("write");
+    git(dir, &["commit", "-q", "-am", "main change"]);
+
+    // feature를 main 위로 rebase하면 file.txt에서 충돌한다.
+    git(dir, &["checkout", "-q", "feature"]);
+    let rebase = run_git(dir, &["rebase", "main"]);
+    assert!(!rebase.status.success(), "rebase should have conflicted");
+
+    let json = inspect_json(dir);
+    assert_eq!(json["data"]["operation"], "rebasing");
+
+    let ks = action_kinds(&json);
+    assert!(ks.iter().any(|k| k == "resolve-conflicts"));
+    assert!(ks.iter().any(|k| k == "rebase-abort"));
+    // 충돌 해결 전에는 continue를 제안하지 않는다.
+    assert!(!ks.iter().any(|k| k == "rebase-continue"));
+}
