@@ -89,12 +89,230 @@ fn write_token_file(dir: &Path, execute_output: &serde_json::Value) -> PathBuf {
     token_path
 }
 
+fn registry_path_from_execute_output(execute_output: &serde_json::Value) -> PathBuf {
+    let mut path = PathBuf::from(
+        execute_output["data"]["undo_token"]["index_snapshot_path"]
+            .as_str()
+            .expect("snapshot path"),
+    );
+    path.set_extension("json");
+    path
+}
+
 fn undo_token(dir: &Path, token: &Path) -> Output {
     super_git(dir)
         .args(["undo", "--token"])
         .arg(token)
         .output()
         .expect("run undo")
+}
+
+#[test]
+fn undo_stage_changes_fails_when_registry_record_is_missing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    std::fs::remove_file(registry_path_from_execute_output(&execute_output))
+        .expect("remove registry record");
+
+    let output = undo_token(dir, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject tokens without registry provenance"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("registry_missing")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[test]
+fn undo_stage_changes_fails_when_registry_record_token_differs() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    let registry_path = registry_path_from_execute_output(&execute_output);
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).expect("read registry"))
+            .expect("parse registry");
+    registry["undo_token"]["plan_id"] = serde_json::json!("sha256:tampered");
+    std::fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).expect("serialize registry"),
+    )
+    .expect("write registry");
+
+    let output = undo_token(dir, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject registry/token mismatch"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("registry_token_mismatch")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[test]
+fn undo_stage_changes_fails_when_registry_token_hash_differs() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    let registry_path = registry_path_from_execute_output(&execute_output);
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).expect("read registry"))
+            .expect("parse registry");
+    registry["token_sha256"] = serde_json::json!("sha256:tampered");
+    std::fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).expect("serialize registry"),
+    )
+    .expect("write registry");
+
+    let output = undo_token(dir, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject registry hash mismatch"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("registry.token_sha256")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_stage_changes_rejects_registry_symlink() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    let registry_path = registry_path_from_execute_output(&execute_output);
+    let target = dir.join(".git").join("fake-registry.json");
+    std::fs::copy(&registry_path, &target).expect("copy registry target");
+    std::fs::remove_file(&registry_path).expect("remove registry");
+    symlink(&target, &registry_path).expect("replace registry with symlink");
+
+    let output = undo_token(dir, &token);
+
+    assert!(!output.status.success(), "registry symlink should fail");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsafe_registry_file")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[test]
+fn undo_stage_changes_rejects_malformed_registry_json() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    std::fs::write(registry_path_from_execute_output(&execute_output), "{")
+        .expect("write malformed registry");
+
+    let output = undo_token(dir, &token);
+
+    assert!(!output.status.success(), "malformed registry should fail");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("registry_json_invalid")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[test]
+fn undo_stage_changes_rejects_registry_unknown_fields() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let execute_output = execute_plan(dir, &plan);
+    let token = write_token_file(dir, &execute_output);
+    let registry_path = registry_path_from_execute_output(&execute_output);
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).expect("read registry"))
+            .expect("parse registry");
+    registry["unexpected"] = serde_json::json!(true);
+    std::fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).expect("serialize registry"),
+    )
+    .expect("write registry");
+
+    let output = undo_token(dir, &token);
+
+    assert!(
+        !output.status.success(),
+        "registry unknown fields should fail"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("registry_json_invalid")));
+    assert_eq!(status_porcelain(dir), "M  file.txt\n");
 }
 
 #[test]

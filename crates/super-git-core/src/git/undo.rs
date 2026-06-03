@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
 use crate::git::state;
+use crate::git::undo_registry;
 use crate::model::{
     ExecuteResult, UndoResult, UndoToken, UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
 };
@@ -71,6 +72,7 @@ fn undo_token(current_path: &Path, token: UndoToken) -> Result<UndoResult> {
     let index_lock_path = git_path(&git, &state.root, "index.lock")?;
     let undo_dir = git_path(&git, &state.root, "super-git/undo")?;
     validate_snapshot_path(&token.index_snapshot_path, &undo_dir)?;
+    undo_registry::validate_record(&token, &undo_dir)?;
     let snapshot = if token.pre_index_existed {
         Some(read_snapshot(&token)?)
     } else {

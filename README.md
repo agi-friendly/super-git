@@ -59,7 +59,8 @@ emits a validated, read-only plan for staging current unstaged/untracked changes
 `execute --plan <file|->` re-checks that plan, rejects stale or tampered state,
 and stages only through the internal `stage_changes` allowlist. `undo --token
 <file|->` treats token input as untrusted, validates repository/snapshot/checksum
-preconditions, restores the pre-execute index only when the current index still
+preconditions, cross-checks the token against the local undo registry created by
+`execute`, restores the pre-execute index only when the current index still
 matches the token, and never edits working-tree files.
 
 ## Development Setup

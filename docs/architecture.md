@@ -60,10 +60,13 @@ core의 allowlist에서 다시 만든다. 현재 execute action은 `stage_change
 
 `undo_preview`는 preview가 설명하는 가능성이고, `undo_token`은 execute가 성공한 뒤에만
 발급하는 복구 입력이다. token 파일 자체는 신뢰하지 않으므로 `undo --token <file|->`는
-repository, snapshot path, snapshot checksum, 현재 index checksum을 다시 검증한다.
+repository, snapshot path, snapshot checksum, 현재 index checksum을 다시 검증하고,
+execute가 로컬 registry에 남긴 token provenance record와 대조한다.
 `stage_changes` 같은 첫 쓰기 작업은 index snapshot을 기반으로 되돌림을 설계한다. 현재 index가
 token의 post-execute checksum과 맞을 때만 pre-execute index snapshot을 복원한다. checksum이
 다르면 새 작업을 덮어쓰지 않고 실패하며, working-tree 파일 내용은 바꾸지 않는다.
+execute는 registry record를 저장하지 못하면 성공으로 보고하지 않고, 이미 바뀐 index를
+pre-execute snapshot으로 되돌린 뒤 실패한다.
 
 ## Config
 

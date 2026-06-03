@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
@@ -10,6 +12,7 @@ use crate::git::command::Git;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
 use crate::git::preview::compute_plan_id;
 use crate::git::state;
+use crate::git::undo_registry;
 use crate::model::{
     ExecuteResult, Operation, PreviewPlan, PreviewPrecondition, UndoToken, EXECUTE_SCHEMA_VERSION,
     PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
@@ -81,11 +84,20 @@ fn execute_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult>
         action: ACTION_STAGE_CHANGES.to_string(),
         plan_id: plan.plan_id.clone(),
         target_paths: plan.action.resolved_paths.clone(),
-        index_snapshot_path: snapshot.path,
+        index_snapshot_path: snapshot.path.clone(),
         pre_index_existed: snapshot.pre_index_existed,
-        pre_index_sha256: snapshot.pre_index_sha256,
+        pre_index_sha256: snapshot.pre_index_sha256.clone(),
         post_index_sha256,
     };
+    if let Err(err) = undo_registry::write_record(&undo_token, &snapshot.undo_dir) {
+        if let Err(rollback_err) = rollback_index_after_registry_failure(&snapshot) {
+            return Err(SuperGitError::ExecuteRollbackFailed {
+                original_error: err.to_string(),
+                rollback_error: rollback_err.to_string(),
+            });
+        }
+        return Err(err);
+    }
 
     Ok(ExecuteResult {
         schema_version: EXECUTE_SCHEMA_VERSION.to_string(),
@@ -254,31 +266,85 @@ fn validate_relative_path(path: &str) -> Result<()> {
 
 struct IndexSnapshot {
     path: PathBuf,
+    undo_dir: PathBuf,
     index_path: PathBuf,
+    index_lock_path: PathBuf,
     pre_index_existed: bool,
     pre_index_sha256: String,
 }
 
 fn snapshot_index(git: &Git, root: &Path, plan: &PreviewPlan) -> Result<IndexSnapshot> {
     let index_path = git_path(git, root, "index")?;
+    let index_lock_path = git_path(git, root, "index.lock")?;
     let index_state = read_index_state(&index_path)?;
     let pre_index_sha256 = sha256_hex(&index_state.bytes);
     let execution_id = execution_id(plan, &pre_index_sha256);
-    let snapshot_path = git_path(git, root, &format!("super-git/undo/{execution_id}.index"))?;
+    let undo_dir = git_path(git, root, "super-git/undo")?;
+    let snapshot_path = undo_dir.join(format!("{execution_id}.index"));
 
     if index_state.existed {
-        if let Some(parent) = snapshot_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        fs::create_dir_all(&undo_dir)?;
         fs::write(&snapshot_path, &index_state.bytes)?;
     }
 
     Ok(IndexSnapshot {
         path: snapshot_path,
+        undo_dir,
         index_path,
+        index_lock_path,
         pre_index_existed: index_state.existed,
         pre_index_sha256,
     })
+}
+
+fn rollback_index_after_registry_failure(snapshot: &IndexSnapshot) -> Result<()> {
+    let lock = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&snapshot.index_lock_path)?;
+
+    if snapshot.pre_index_existed {
+        let bytes = fs::read(&snapshot.path)?;
+        restore_index_from_bytes(
+            lock,
+            &snapshot.index_path,
+            &snapshot.index_lock_path,
+            &bytes,
+        )
+    } else {
+        remove_index_after_failed_execute(lock, &snapshot.index_path, &snapshot.index_lock_path)
+    }
+}
+
+fn restore_index_from_bytes(
+    mut lock: fs::File,
+    index_path: &Path,
+    lock_path: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    lock.write_all(bytes)?;
+    lock.sync_all()?;
+    drop(lock);
+    fs::rename(lock_path, index_path)?;
+    Ok(())
+}
+
+fn remove_index_after_failed_execute(
+    lock: fs::File,
+    index_path: &Path,
+    lock_path: &Path,
+) -> Result<()> {
+    drop(lock);
+    match fs::remove_file(index_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            let _ = fs::remove_file(lock_path);
+            return Err(err.into());
+        }
+    }
+    fs::remove_file(lock_path)?;
+    Ok(())
 }
 
 fn git_path(git: &Git, root: &Path, path: &str) -> Result<PathBuf> {

@@ -264,8 +264,8 @@ cargo run -p super-git-cli -- undo --token /tmp/super-git-token.json
 
 `execute`는 실행 직전 fingerprint와 resolved pathset을 다시 확인하고, plan 안의
 `reference_commands`를 실행하지 않는다. `undo`는 execute 결과의 `undo_token`을 검증하고,
-현재 index가 execute 직후 checksum과 같을 때만 pre-execute index snapshot을 복원한다.
-working-tree 파일 내용은 바꾸지 않는다.
+execute가 남긴 로컬 registry record와 대조한 뒤, 현재 index가 execute 직후 checksum과
+같을 때만 pre-execute index snapshot을 복원한다. working-tree 파일 내용은 바꾸지 않는다.
 
 ## Runtime Config Location
 

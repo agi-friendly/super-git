@@ -16,4 +16,5 @@ serde_json.workspace = true
 super-git-core = { path = "../super-git-core" }
 
 [dev-dependencies]
+sha2.workspace = true
 tempfile.workspace = true

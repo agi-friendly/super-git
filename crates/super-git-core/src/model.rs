@@ -30,6 +30,7 @@ pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
+pub const UNDO_REGISTRY_SCHEMA_VERSION: &str = "super-git.undo-registry.v0.1";
 pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
@@ -358,6 +359,14 @@ pub struct UndoToken {
     pub pre_index_existed: bool,
     pub pre_index_sha256: String,
     pub post_index_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UndoRegistryRecord {
+    pub schema_version: String,
+    pub token_sha256: String,
+    pub undo_token: UndoToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

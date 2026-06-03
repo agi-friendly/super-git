@@ -44,6 +44,14 @@ pub enum SuperGitError {
         actual: String,
     },
 
+    #[error(
+        "execute rollback failed after post-write failure: original error: {original_error}; rollback error: {rollback_error}"
+    )]
+    ExecuteRollbackFailed {
+        original_error: String,
+        rollback_error: String,
+    },
+
     #[error("undo token invalid: {code} ({message})")]
     UndoTokenInvalid { code: String, message: String },
 

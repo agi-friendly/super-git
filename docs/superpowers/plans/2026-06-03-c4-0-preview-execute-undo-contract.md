@@ -141,12 +141,13 @@ super-git undo --token token.json
 
 `undo_strategy` is the machine-readable strategy that `execute` validates and includes in the plan hash.
 
-`undo_token` is the recovery input produced by `execute` after a successful write. The token file is still untrusted input at undo time, so `undo` must validate repository scope, snapshot path, snapshot checksum, and current state before restoring anything.
+`undo_token` is the recovery input produced by `execute` after a successful write. The token file is still untrusted input at undo time, so `undo` must validate repository scope, snapshot path, snapshot checksum, local registry provenance, and current state before restoring anything.
 
 For `stage_changes`, the safest first undo model is index-snapshot based:
 
 - Before execute, locate the worktree-specific Git index with `git rev-parse --git-path index` and snapshot that file.
 - After execute, record the resulting index checksum.
+- After execute, write a local registry record next to the snapshot so later undo can prove the token came from this repository's execute path.
 - Undo restores the previous index only if the current index still matches the post-execute checksum.
 - If the user or another tool changed the index after execute, undo fails with a structured error instead of clobbering new work.
 
@@ -157,8 +158,9 @@ For `stage_changes`, the safest first undo model is index-snapshot based:
 3. `execute` does not trust plan commands, only validated action data and fresh state.
 4. `undo_preview` is not an undo credential.
 5. `undo_token` is scoped to one repository, one worktree, one action, and one observed before/after state.
-6. Action risk belongs to preview/execute, not inspect.
-7. Irreversible or weakly reversible actions require explicit human confirmation before execute.
+6. A local undo registry record is provenance evidence, not authority by itself; it is cross-checked against the token and checksums.
+7. Action risk belongs to preview/execute, not inspect.
+8. Irreversible or weakly reversible actions require explicit human confirmation before execute.
 
 ## First Write Action: `stage_changes`
 
@@ -218,6 +220,7 @@ Acceptance:
 - It rejects malformed plans, unknown actions, bad hashes, and stale fingerprints before writing.
 - It ignores `reference_commands` and uses the internal `stage_changes` allowlist.
 - It returns an `undo_token` after successful staging.
+- It writes a local undo registry record and rolls back the index if that record cannot be written.
 
 ### C4-C: `undo` for `stage_changes`
 
@@ -227,10 +230,19 @@ Acceptance:
 - It fails safely when the index changed after execute.
 - It never alters working-tree file contents for `stage_changes` undo.
 
+### C4-D: local undo registry provenance
+
+Acceptance:
+
+- `execute` writes a local undo registry record next to the index snapshot.
+- `execute` rolls back the index if registry provenance cannot be written after the Git write.
+- `undo` rejects tokens that have no matching local registry record or whose registry record was tampered with.
+- The registry record is treated as untrusted input: missing, malformed, symlinked, unknown-field, token-mismatch, and token-hash-mismatch records fail safely.
+
 ## Non-goals
 
 - No force push, reset, rebase, merge, cherry-pick, or worktree mutation in the first C4 implementation.
-- No hidden plan store for the first execute path.
+- No hidden plan store for the first execute path; the local undo registry stores only undo provenance.
 - No raw shell command execution from JSON.
 - No attempt to make inspect fingerprints strong enough for execution locks.
 
@@ -241,6 +253,8 @@ Acceptance:
 - [ ] Execute ignores tampered `reference_commands`.
 - [ ] Plan hash changes when action data or preconditions change.
 - [ ] Undo token is absent on failed execute.
+- [ ] Execute registry write failure does not leave the index staged as a reported success.
+- [ ] Undo rejects missing, symlinked, or tampered registry records.
 - [ ] Undo refuses to clobber an index changed after execute.
 - [ ] JSON envelope contract holds for success and failure.
 - [ ] `--human` output stays secondary and compact.

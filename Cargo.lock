@@ -477,6 +477,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "sha2",
  "super-git-core",
  "tempfile",
 ]
