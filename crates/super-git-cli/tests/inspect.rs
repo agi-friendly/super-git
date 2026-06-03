@@ -298,7 +298,10 @@ fn inspect_reports_working_tree_changes() {
     assert_eq!(wt["unstaged"], 1);
     assert_eq!(wt["untracked"], 1);
     assert_eq!(wt["conflict_count"], 0);
-    assert!(action_kinds(&json).iter().any(|k| k == "commit"));
+    // staged가 있으니 commit, unstaged/untracked가 있으니 stage-changes 둘 다 제안된다.
+    let ks = action_kinds(&json);
+    assert!(ks.iter().any(|k| k == "commit"));
+    assert!(ks.iter().any(|k| k == "stage-changes"));
 }
 
 #[test]
