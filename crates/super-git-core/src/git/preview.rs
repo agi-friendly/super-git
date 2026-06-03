@@ -29,6 +29,11 @@ pub fn preview_stage_changes(path: &Path) -> Result<PreviewPlan> {
         "repository must not be inside an in-progress Git operation",
     )?;
     ensure_precondition(
+        state.working_tree.staged == 0,
+        "index_clean",
+        "stage_changes requires an index without pre-existing staged changes",
+    )?;
+    ensure_precondition(
         state.working_tree.unstaged > 0 || state.working_tree.untracked > 0,
         "has_unstaged_or_untracked_changes",
         "stage_changes requires unstaged or untracked changes",
@@ -56,6 +61,7 @@ pub fn preview_stage_changes(path: &Path) -> Result<PreviewPlan> {
     let preconditions = vec![
         passed("operation_none"),
         passed("no_conflicts"),
+        passed("index_clean"),
         passed("has_unstaged_or_untracked_changes"),
     ];
     let risk = ActionRisk {

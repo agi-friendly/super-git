@@ -172,6 +172,7 @@ Initial scope:
 - C4-A does not accept user pathspecs yet
 - operation must be `none`
 - conflict count must be `0`
+- the index must not already contain staged changes
 - there must be unstaged or untracked changes
 - the plan fingerprint must match at execute time
 - execute internally runs the allowlisted equivalent of `git add --all`
@@ -185,7 +186,7 @@ The first fingerprint implementation for `stage_changes` must lock the content b
 
 `scope = "all"` is an instruction to resolve the current unstaged/untracked pathset during preview. It is not an open-ended execute-time wildcard. If a file is added, removed, renamed, or modified after preview, execute must detect the changed fingerprint or pathset and fail before writing.
 
-Pre-existing staged changes are allowed only if the undo token preserves the pre-execute index. If index snapshot support is not ready, preview must reject staged-plus-unstaged states instead of returning a misleading reversible plan.
+Pre-existing staged changes are allowed only if the undo token preserves the pre-execute index. Until index snapshot support is implemented, preview rejects staged-plus-unstaged states instead of returning a misleading reversible plan.
 
 ## Implementation Slices After C4-0
 

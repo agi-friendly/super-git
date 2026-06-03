@@ -119,6 +119,7 @@ fn preview_stage_changes_emits_plan_without_staging() {
         serde_json::json!([
             { "code": "operation_none", "status": "passed" },
             { "code": "no_conflicts", "status": "passed" },
+            { "code": "index_clean", "status": "passed" },
             { "code": "has_unstaged_or_untracked_changes", "status": "passed" }
         ])
     );
@@ -202,6 +203,26 @@ fn preview_stage_changes_fails_when_conflicts_exist() {
         .expect("causes")
         .iter()
         .any(|cause| cause.as_str().unwrap_or_default().contains("no_conflicts")));
+}
+
+#[test]
+fn preview_stage_changes_fails_when_index_already_has_staged_changes() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    std::fs::write(dir.join("already-staged.txt"), "staged\n").expect("write staged file");
+    git(dir, &["add", "already-staged.txt"]);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked file");
+
+    let json = preview_error_json(dir);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause.as_str().unwrap_or_default().contains("index_clean")));
 }
 
 #[test]
