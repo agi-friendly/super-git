@@ -25,6 +25,13 @@ pub enum SuperGitError {
         stderr: String,
     },
 
+    #[error("preview precondition failed for {action}: {code} ({message})")]
+    PreviewPreconditionFailed {
+        action: String,
+        code: String,
+        message: String,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

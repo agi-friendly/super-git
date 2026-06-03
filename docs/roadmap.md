@@ -20,7 +20,7 @@
 
 ## Stage 2: Preview/Execute/Undo Foundation
 
-- `preview` plan contract 추가
+- `super-git preview stage-changes` — read-only stage_changes plan 생성
 - `execute --plan <file|->` trust boundary 추가
 - plan hash, state fingerprint, precondition mismatch 처리
 - `undo_preview`와 execute 이후 `undo_token` 분리

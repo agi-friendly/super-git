@@ -26,6 +26,8 @@ impl StatusOutput {
 }
 
 pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
+pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
+pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -260,4 +262,63 @@ pub struct RepoState {
     pub warnings: Vec<InspectWarning>,
     pub summary: InspectSummary,
     pub risk_hint: InspectRiskHint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreviewPlan {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub action: PreviewAction,
+    pub repository: PathBuf,
+    pub state_fingerprint: StateFingerprint,
+    pub preconditions: Vec<PreviewPrecondition>,
+    pub risk: ActionRisk,
+    pub effects: Vec<String>,
+    pub reference_commands: Vec<Vec<String>>,
+    pub undo_strategy: UndoStrategy,
+    pub undo_preview: UndoPreview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreviewAction {
+    pub kind: String,
+    pub scope: String,
+    pub resolved_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StateFingerprint {
+    pub schema_version: String,
+    pub repository: PathBuf,
+    pub head_commit: Option<String>,
+    pub operation: Operation,
+    pub status_porcelain_v1_z_sha256: String,
+    pub staged_diff_sha256: String,
+    pub unstaged_diff_sha256: String,
+    pub untracked_content_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreviewPrecondition {
+    pub code: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActionRisk {
+    pub severity: String,
+    pub reversibility: String,
+    pub requires_human_confirmation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UndoStrategy {
+    pub kind: String,
+    pub requires_index_snapshot: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UndoPreview {
+    pub kind: String,
+    pub available_after_execute: bool,
 }

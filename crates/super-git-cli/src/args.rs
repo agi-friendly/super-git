@@ -32,6 +32,12 @@ pub enum Commands {
     /// Inspect full repository state: HEAD and any in-progress operation.
     Inspect { path: Option<PathBuf> },
 
+    /// Build a read-only plan for a future write action.
+    Preview {
+        #[command(subcommand)]
+        command: PreviewCommands,
+    },
+
     /// Inspect Git worktrees.
     Wt {
         #[command(subcommand)]
@@ -46,6 +52,12 @@ pub enum RepoCommands {
 
     /// List registered repositories.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PreviewCommands {
+    /// Preview staging all current unstaged and untracked changes.
+    StageChanges,
 }
 
 #[derive(Debug, Subcommand)]

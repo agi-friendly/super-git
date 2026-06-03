@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
 use super_git_core::model::{
-    Operation, RepoState, Repository, RiskLevel, StatusOutput, WorktreeInfo, WorktreeKind,
-    INSPECT_SCHEMA_VERSION,
+    Operation, PreviewPlan, RepoState, Repository, RiskLevel, StatusOutput, WorktreeInfo,
+    WorktreeKind, INSPECT_SCHEMA_VERSION,
 };
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
@@ -254,6 +254,25 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                     println!("  - {} ({})", next.kind, next.reason);
                 }
             }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_preview_plan(mode: OutputMode, plan: &PreviewPlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.display());
+            println!("Scope: {}", plan.action.scope);
+            println!("Paths: {}", plan.action.resolved_paths.len());
+            for path in &plan.action.resolved_paths {
+                println!("  - {path}");
+            }
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!("Writes now: no");
             Ok(())
         }
     }

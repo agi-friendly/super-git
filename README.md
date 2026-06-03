@@ -27,9 +27,9 @@ The first version focuses on repository registration, repository status,
 worktree listing, worktree creation, worktree removal, and opening worktrees
 in external tools such as VS Code, IntelliJ IDEA, or terminal.
 
-## Stage 1 CLI MVP
+## Current CLI
 
-The current implementation starts with a small, AI-first CLI skeleton.
+The current implementation starts with a small, AI-first CLI surface.
 
 ```bash
 super-git doctor
@@ -37,6 +37,7 @@ super-git repo add <path>
 super-git repo list
 super-git status [path]
 super-git inspect [path]
+super-git preview stage-changes
 super-git wt list [path]
 ```
 
@@ -53,9 +54,11 @@ The CLI binary is named `super-git`. It wraps the installed system `git` command
 keeps repository registration in a simple cross-platform config file.
 
 The next write-side stage is not raw execution. It is the
-`inspect -> preview -> execute -> undo` lifecycle: preview emits a validated plan,
-execute re-checks the current state and regenerates Git commands from an internal
-allowlist, and undo uses an execute-issued token rather than preview hints.
+`inspect -> preview -> execute -> undo` lifecycle. `preview stage-changes` now
+emits a validated, read-only plan for staging current unstaged/untracked changes.
+`execute` and `undo` are not implemented yet; when they land, execute will
+re-check current state and regenerate Git commands from an internal allowlist,
+and undo will use an execute-issued token rather than preview hints.
 
 ## Development Setup
 

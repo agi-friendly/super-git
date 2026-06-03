@@ -9,9 +9,9 @@ use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::ConfigStore;
 use super_git_core::git::command::Git;
-use super_git_core::git::{state, status, worktree};
+use super_git_core::git::{preview, state, status, worktree};
 
-use crate::args::{Cli, Commands, RepoCommands, WorktreeCommands};
+use crate::args::{Cli, Commands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
 
 fn main() -> ExitCode {
@@ -74,6 +74,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Repo { command } => run_repo(mode, command),
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
+        Commands::Preview { command } => run_preview(mode, command),
         Commands::Wt { command } => run_worktree(mode, command),
     }
 }
@@ -118,6 +119,18 @@ fn run_inspect(mode: OutputMode, path: Option<PathBuf>) -> Result<()> {
         .with_context(|| format!("could not inspect {}", path.display()))?;
 
     output::print_inspect(mode, &state)
+}
+
+fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
+    match command {
+        PreviewCommands::StageChanges => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let plan =
+                preview::preview_stage_changes(&path).context("could not preview stage_changes")?;
+
+            output::print_preview_plan(mode, &plan)
+        }
+    }
 }
 
 fn run_worktree(mode: OutputMode, command: WorktreeCommands) -> Result<()> {

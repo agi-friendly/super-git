@@ -15,6 +15,12 @@ pub struct GitOutput {
     pub stderr: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitBytesOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+}
+
 impl Default for Git {
     fn default() -> Self {
         Self {
@@ -35,7 +41,7 @@ impl Git {
         S: AsRef<OsStr>,
     {
         let args = collect_args(args);
-        let output = Command::new(&self.program).args(&args).output()?;
+        let output = self.read_command().args(&args).output()?;
         self.output_or_error(display_args(&args), output)
     }
 
@@ -45,7 +51,8 @@ impl Git {
         S: AsRef<OsStr>,
     {
         let args = collect_args(args);
-        let output = Command::new(&self.program)
+        let output = self
+            .read_command()
             .arg("-C")
             .arg(path)
             .args(&args)
@@ -57,13 +64,33 @@ impl Git {
         self.output_or_error(shown_args, output)
     }
 
+    pub fn run_bytes_in<I, S>(&self, path: &Path, args: I) -> Result<GitBytesOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        let output = self
+            .read_command()
+            .arg("-C")
+            .arg(path)
+            .args(&args)
+            .output()?;
+
+        let mut shown_args = vec!["-C".to_string(), path.display().to_string()];
+        shown_args.extend(display_args(&args));
+
+        self.bytes_output_or_error(shown_args, output)
+    }
+
     pub fn try_run_in<I, S>(&self, path: &Path, args: I) -> Result<GitCommandResult>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         let args = collect_args(args);
-        let output = Command::new(&self.program)
+        let output = self
+            .read_command()
             .arg("-C")
             .arg(path)
             .args(&args)
@@ -85,6 +112,29 @@ impl Git {
                 args,
                 status: result.status,
                 stderr: result.stderr,
+            })
+        }
+    }
+
+    fn read_command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        // Read-side commands must not opportunistically refresh or lock the index.
+        // Future write actions can add a write-specific runner when they need one.
+        command.env("GIT_OPTIONAL_LOCKS", "0");
+        command
+    }
+
+    fn bytes_output_or_error(&self, args: Vec<String>, output: Output) -> Result<GitBytesOutput> {
+        if output.status.success() {
+            Ok(GitBytesOutput {
+                stdout: output.stdout,
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+        } else {
+            Err(SuperGitError::GitCommandFailed {
+                args,
+                status: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             })
         }
     }
