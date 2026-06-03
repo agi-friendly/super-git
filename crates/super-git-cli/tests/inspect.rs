@@ -73,14 +73,23 @@ fn inspect_json(dir: &Path) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("parse inspect json")
 }
 
-/// inspect 출력의 allowed_next에서 kind 목록을 뽑는다.
-fn action_kinds(json: &serde_json::Value) -> Vec<String> {
-    json["data"]["allowed_next"]
+/// inspect 출력의 next bucket에서 kind 목록을 뽑는다.
+fn next_kinds(json: &serde_json::Value, bucket: &str) -> Vec<String> {
+    json["data"]["next"][bucket]
         .as_array()
-        .expect("allowed_next array")
+        .unwrap_or_else(|| panic!("next.{bucket} array"))
         .iter()
         .map(|a| a["kind"].as_str().expect("kind").to_string())
         .collect()
+}
+
+fn next_action<'a>(json: &'a serde_json::Value, bucket: &str, kind: &str) -> &'a serde_json::Value {
+    json["data"]["next"][bucket]
+        .as_array()
+        .unwrap_or_else(|| panic!("next.{bucket} array"))
+        .iter()
+        .find(|action| action["kind"] == kind)
+        .unwrap_or_else(|| panic!("next.{bucket} missing action kind {kind}"))
 }
 
 #[test]
@@ -92,7 +101,6 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
 
     assert_eq!(json["ok"], true);
     assert_eq!(json["data"]["operation"], "none");
-    assert_eq!(json["data"]["schema_version"], "super-git.inspect.v0.1");
     assert_eq!(json["data"]["head"]["branch"], "main");
     assert_eq!(json["data"]["head"]["detached"], false);
     assert!(json["data"]["head"]["commit"].is_string());
@@ -112,8 +120,15 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
         .as_array()
         .expect("risk factors")
         .is_empty());
+    assert_eq!(json["data"]["schema_version"], "super-git.inspect.v0.2");
+    assert!(!json["data"]
+        .as_object()
+        .expect("inspect data object")
+        .contains_key("allowed_next"));
     // clean + upstream 없음 → 제안할 행동이 없다.
-    assert!(action_kinds(&json).is_empty());
+    assert!(next_kinds(&json, "allowed").is_empty());
+    assert!(next_kinds(&json, "blocked").is_empty());
+    assert!(next_kinds(&json, "needs_human_review").is_empty());
 }
 
 #[test]
@@ -162,9 +177,11 @@ fn inspect_reports_merging_during_conflict() {
         .iter()
         .any(|factor| factor["code"] == "conflicts_present"));
 
-    let ks = action_kinds(&json);
-    assert!(ks.iter().any(|k| k == "resolve-conflicts"));
-    assert!(ks.iter().any(|k| k == "merge-abort"));
+    let allowed = next_kinds(&json, "allowed");
+    assert!(allowed.iter().any(|k| k == "resolve_conflicts"));
+    assert!(allowed.iter().any(|k| k == "merge_abort"));
+    let blocked = next_kinds(&json, "blocked");
+    assert!(blocked.iter().any(|k| k == "continue_operation"));
 }
 
 #[test]
@@ -194,6 +211,10 @@ fn inspect_reports_cherry_picking_from_sequencer_after_manual_commit() {
 
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "cherry-picking");
+    assert_eq!(
+        next_action(&json, "allowed", "cherry_pick_abort")["command"],
+        serde_json::json!(["git", "cherry-pick", "--abort"])
+    );
 }
 
 #[test]
@@ -305,7 +326,7 @@ fn inspect_reports_upstream_ahead() {
     assert!(warnings
         .iter()
         .any(|w| w["code"] == "upstream_freshness_unknown"));
-    assert!(action_kinds(&json).iter().any(|k| k == "push"));
+    assert!(next_kinds(&json, "allowed").iter().any(|k| k == "push"));
 }
 
 #[test]
@@ -373,10 +394,10 @@ fn inspect_reports_working_tree_changes() {
         .expect("risk factors")
         .iter()
         .any(|factor| factor["code"] == "working_tree_dirty"));
-    // staged가 있으니 commit, unstaged/untracked가 있으니 stage-changes 둘 다 제안된다.
-    let ks = action_kinds(&json);
+    // staged가 있으니 commit, unstaged/untracked가 있으니 stage_changes 둘 다 제안된다.
+    let ks = next_kinds(&json, "allowed");
     assert!(ks.iter().any(|k| k == "commit"));
-    assert!(ks.iter().any(|k| k == "stage-changes"));
+    assert!(ks.iter().any(|k| k == "stage_changes"));
 }
 
 #[test]
@@ -407,6 +428,37 @@ fn inspect_reports_upstream_behind() {
     let upstream = &json["data"]["upstream"];
     assert_eq!(upstream["ahead"], 0);
     assert_eq!(upstream["behind"], 1);
+}
+
+#[test]
+fn inspect_blocks_pull_when_dirty_and_behind() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let work = clone_repo_with_upstream(tmp.path());
+    let origin = tmp.path().join("origin.git");
+
+    let work2 = tmp.path().join("work2");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            work2.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(work2.join("file.txt"), "remote\n").expect("write");
+    git(&work2, &["commit", "-q", "-am", "remote change"]);
+    git(&work2, &["push", "-q"]);
+    git(&work, &["fetch", "-q"]);
+
+    std::fs::write(work.join("local.txt"), "local dirty\n").expect("write dirty file");
+
+    let json = inspect_json(&work);
+    let allowed = next_kinds(&json, "allowed");
+    assert!(allowed.iter().any(|k| k == "stage_changes"));
+    assert!(!allowed.iter().any(|k| k == "pull"));
+    let blocked = next_kinds(&json, "blocked");
+    assert!(blocked.iter().any(|k| k == "pull"));
 }
 
 #[test]
@@ -466,9 +518,9 @@ fn inspect_reports_merge_continue_when_conflicts_resolved() {
     assert_eq!(json["data"]["operation"], "merging");
     assert_eq!(json["data"]["working_tree"]["conflict_count"], 0);
 
-    let ks = action_kinds(&json);
-    assert!(ks.iter().any(|k| k == "merge-continue"));
-    assert!(!ks.iter().any(|k| k == "resolve-conflicts"));
+    let ks = next_kinds(&json, "allowed");
+    assert!(ks.iter().any(|k| k == "merge_continue"));
+    assert!(!ks.iter().any(|k| k == "resolve_conflicts"));
 }
 
 #[test]
@@ -492,11 +544,11 @@ fn inspect_reports_rebase_conflict_without_continue() {
     let json = inspect_json(dir);
     assert_eq!(json["data"]["operation"], "rebasing");
 
-    let ks = action_kinds(&json);
-    assert!(ks.iter().any(|k| k == "resolve-conflicts"));
-    assert!(ks.iter().any(|k| k == "rebase-abort"));
+    let ks = next_kinds(&json, "allowed");
+    assert!(ks.iter().any(|k| k == "resolve_conflicts"));
+    assert!(ks.iter().any(|k| k == "rebase_abort"));
     // 충돌 해결 전에는 continue를 제안하지 않는다.
-    assert!(!ks.iter().any(|k| k == "rebase-continue"));
+    assert!(!ks.iter().any(|k| k == "rebase_continue"));
 }
 
 #[test]

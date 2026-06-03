@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use crate::git::command::Git;
 use crate::git::worktree;
 use crate::model::{
-    HeadInfo, InspectRiskHint, InspectSummary, InspectWarning, NextAction, Operation, RepoState,
-    RiskFactor, RiskLevel, UpstreamComparisonBasis, UpstreamComparisonStatus, UpstreamInfo,
-    WarningSeverity, WorkingTree, WorktreeContext, WorktreeKind,
+    HeadInfo, InspectRiskHint, InspectSummary, InspectWarning, NextAction, NextGuardrails,
+    Operation, RepoState, RiskFactor, RiskLevel, UpstreamComparisonBasis, UpstreamComparisonStatus,
+    UpstreamInfo, WarningSeverity, WorkingTree, WorktreeContext, WorktreeKind,
 };
 use crate::Result;
 
@@ -18,7 +18,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let upstream = read_upstream(&git, path)?;
     let working_tree = read_working_tree(&git, path)?;
     let operation = detect_operation(&git, path)?;
-    let allowed_next = compute_allowed_next(operation, &working_tree, &upstream);
+    let next = compute_next_guardrails(operation, &working_tree, &upstream);
     let warnings = compute_warnings(&upstream);
     let summary = compute_summary(operation, &working_tree, &upstream, &worktree_context);
     let risk_hint = compute_risk_hint(operation, &working_tree);
@@ -29,7 +29,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
         upstream,
         working_tree,
         operation,
-        allowed_next,
+        next,
         warnings,
         summary,
         risk_hint,
@@ -314,9 +314,21 @@ fn is_change(code: char) -> bool {
     code != ' ' && code != '?'
 }
 
-/// 현재 상태로부터 "다음에 할 수 있는 행동" 힌트를 만든다.
+/// 현재 상태로부터 다음 행동 guardrail을 만든다.
 /// git을 호출하지 않는 순수 함수라 단위테스트로 촘촘히 검증할 수 있다.
-fn compute_allowed_next(
+fn compute_next_guardrails(
+    operation: Operation,
+    working_tree: &WorkingTree,
+    upstream: &Option<UpstreamInfo>,
+) -> NextGuardrails {
+    NextGuardrails {
+        allowed: compute_allowed_actions(operation, working_tree, upstream),
+        blocked: compute_blocked_actions(operation, working_tree, upstream),
+        needs_human_review: Vec::new(),
+    }
+}
+
+fn compute_allowed_actions(
     operation: Operation,
     working_tree: &WorkingTree,
     upstream: &Option<UpstreamInfo>,
@@ -332,14 +344,14 @@ fn compute_allowed_next(
             } else {
                 // 충돌이 없으면 해결 완료 또는 --no-commit 상태다. 커밋해서 merge를 마친다.
                 actions.push(action(
-                    "merge-continue",
+                    "merge_continue",
                     "conflicts resolved; complete the merge",
                     Some(&["git", "merge", "--continue"]),
                     None,
                 ));
             }
             actions.push(action(
-                "merge-abort",
+                "merge_abort",
                 "a merge is in progress",
                 Some(&["git", "merge", "--abort"]),
                 Some("reversible"),
@@ -347,23 +359,23 @@ fn compute_allowed_next(
         }
         Operation::Rebasing => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "rebase", working_tree);
+            push_sequence_actions(&mut actions, "rebase", "rebase", working_tree);
         }
         Operation::Applying => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "am", working_tree);
+            push_sequence_actions(&mut actions, "am", "am", working_tree);
         }
         Operation::CherryPicking => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "cherry-pick", working_tree);
+            push_sequence_actions(&mut actions, "cherry_pick", "cherry-pick", working_tree);
         }
         Operation::Reverting => {
             push_resolve_if_conflicts(&mut actions, working_tree);
-            push_sequence_actions(&mut actions, "revert", working_tree);
+            push_sequence_actions(&mut actions, "revert", "revert", working_tree);
         }
         Operation::Bisecting => {
             actions.push(action(
-                "bisect-reset",
+                "bisect_reset",
                 "a bisect session is in progress",
                 Some(&["git", "bisect", "reset"]),
                 Some("reversible"),
@@ -385,7 +397,7 @@ fn compute_allowed_next(
         // unstaged/untracked는 아직 commit 대상이 아니므로 먼저 stage하도록 유도한다.
         if working_tree.unstaged > 0 || working_tree.untracked > 0 {
             actions.push(action(
-                "stage-changes",
+                "stage_changes",
                 "there are unstaged or untracked changes",
                 None,
                 None,
@@ -410,7 +422,7 @@ fn compute_allowed_next(
                     None,
                 )),
                 (a, b) if a > 0 && b > 0 && clean => actions.push(action(
-                    "integrate-diverged",
+                    "integrate_diverged",
                     "local and upstream have diverged",
                     Some(&["git", "pull", "--rebase"]),
                     None,
@@ -423,10 +435,57 @@ fn compute_allowed_next(
     actions
 }
 
+fn compute_blocked_actions(
+    operation: Operation,
+    working_tree: &WorkingTree,
+    upstream: &Option<UpstreamInfo>,
+) -> Vec<NextAction> {
+    let mut blocked = Vec::new();
+
+    if working_tree.conflict_count > 0 {
+        blocked.push(action(
+            "continue_operation",
+            "conflicts remain; resolve all unmerged paths before continuing",
+            None,
+            None,
+        ));
+    }
+
+    if operation == Operation::None
+        && working_tree.staged == 0
+        && (working_tree.unstaged > 0 || working_tree.untracked > 0)
+    {
+        blocked.push(action("commit", "changes are not staged yet", None, None));
+    }
+
+    if operation == Operation::None && !working_tree.clean {
+        if let Some(upstream) = upstream {
+            if upstream.behind > 0 {
+                blocked.push(action(
+                    "pull",
+                    "working tree has local changes; clean or stage/commit before integrating upstream",
+                    Some(&["git", "pull"]),
+                    None,
+                ));
+            }
+            if upstream.ahead > 0 && upstream.behind > 0 {
+                blocked.push(action(
+                    "integrate_diverged",
+                    "working tree has local changes; clean or stage/commit before rebasing/merging upstream",
+                    Some(&["git", "pull", "--rebase"]),
+                    None,
+                ));
+            }
+        }
+    }
+
+    blocked
+}
+
 fn push_resolve_if_conflicts(actions: &mut Vec<NextAction>, working_tree: &WorkingTree) {
     if working_tree.conflict_count > 0 {
         actions.push(action(
-            "resolve-conflicts",
+            "resolve_conflicts",
             "working tree has unmerged paths",
             None,
             None,
@@ -435,26 +494,31 @@ fn push_resolve_if_conflicts(actions: &mut Vec<NextAction>, working_tree: &Worki
 }
 
 /// continue/skip/abort 3종을 가진 sequencer류(rebase/am/cherry-pick/revert) 행동을 추가한다.
-fn push_sequence_actions(actions: &mut Vec<NextAction>, op: &str, working_tree: &WorkingTree) {
+fn push_sequence_actions(
+    actions: &mut Vec<NextAction>,
+    kind_prefix: &str,
+    command_op: &str,
+    working_tree: &WorkingTree,
+) {
     // continue는 충돌이 없을 때만 안전하다. `git <op> --continue`는 충돌 해결 전엔 실패한다.
     if working_tree.conflict_count == 0 {
         actions.push(action(
-            &format!("{op}-continue"),
+            &format!("{kind_prefix}_continue"),
             "resume after resolving",
-            Some(&["git", op, "--continue"]),
+            Some(&["git", command_op, "--continue"]),
             None,
         ));
     }
     actions.push(action(
-        &format!("{op}-skip"),
+        &format!("{kind_prefix}_skip"),
         "skip the current commit",
-        Some(&["git", op, "--skip"]),
+        Some(&["git", command_op, "--skip"]),
         None,
     ));
     actions.push(action(
-        &format!("{op}-abort"),
+        &format!("{kind_prefix}_abort"),
         "abort and restore the original state",
-        Some(&["git", op, "--abort"]),
+        Some(&["git", command_op, "--abort"]),
         Some("reversible"),
     ));
 }
@@ -786,13 +850,15 @@ mod tests {
     }
 
     #[test]
-    fn allowed_next_clean_without_upstream_is_empty() {
-        let actions = compute_allowed_next(Operation::None, &clean_wt(), &None);
-        assert!(actions.is_empty());
+    fn next_clean_without_upstream_is_empty() {
+        let next = compute_next_guardrails(Operation::None, &clean_wt(), &None);
+        assert!(next.allowed.is_empty());
+        assert!(next.blocked.is_empty());
+        assert!(next.needs_human_review.is_empty());
     }
 
     #[test]
-    fn allowed_next_suggests_commit_when_changes() {
+    fn next_allows_commit_when_staged() {
         let wt = WorkingTree {
             clean: false,
             staged: 1,
@@ -801,11 +867,13 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        assert!(kinds(&compute_allowed_next(Operation::None, &wt, &None)).contains(&"commit"));
+        let next = compute_next_guardrails(Operation::None, &wt, &None);
+        assert!(kinds(&next.allowed).contains(&"commit"));
+        assert!(!kinds(&next.blocked).contains(&"commit"));
     }
 
     #[test]
-    fn allowed_next_push_pull_diverged() {
+    fn next_allows_push_pull_diverged_when_clean() {
         let ahead = Some(UpstreamInfo {
             name: "origin/main".to_string(),
             ahead: 2,
@@ -814,7 +882,8 @@ mod tests {
             comparison_status: UpstreamComparisonStatus::Ok,
         });
         assert!(
-            kinds(&compute_allowed_next(Operation::None, &clean_wt(), &ahead)).contains(&"push")
+            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &ahead).allowed)
+                .contains(&"push")
         );
 
         let behind = Some(UpstreamInfo {
@@ -825,7 +894,8 @@ mod tests {
             comparison_status: UpstreamComparisonStatus::Ok,
         });
         assert!(
-            kinds(&compute_allowed_next(Operation::None, &clean_wt(), &behind)).contains(&"pull")
+            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &behind).allowed)
+                .contains(&"pull")
         );
 
         let diverged = Some(UpstreamInfo {
@@ -835,28 +905,26 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        assert!(kinds(&compute_allowed_next(
-            Operation::None,
-            &clean_wt(),
-            &diverged
-        ))
-        .contains(&"integrate-diverged"));
+        assert!(
+            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &diverged).allowed)
+                .contains(&"integrate_diverged")
+        );
     }
 
     #[test]
-    fn allowed_next_rebasing_has_continue_skip_abort_only() {
-        let actions = compute_allowed_next(Operation::Rebasing, &clean_wt(), &None);
-        let ks = kinds(&actions);
-        assert!(ks.contains(&"rebase-continue"));
-        assert!(ks.contains(&"rebase-skip"));
-        assert!(ks.contains(&"rebase-abort"));
+    fn next_rebasing_has_continue_skip_abort_only() {
+        let next = compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None);
+        let ks = kinds(&next.allowed);
+        assert!(ks.contains(&"rebase_continue"));
+        assert!(ks.contains(&"rebase_skip"));
+        assert!(ks.contains(&"rebase_abort"));
         // 진행 중 작업이 있으면 일반 흐름(commit/push)은 제안하지 않는다.
         assert!(!ks.contains(&"commit"));
         assert!(!ks.contains(&"push"));
     }
 
     #[test]
-    fn allowed_next_merging_with_conflicts_marks_abort_reversible() {
+    fn next_merging_with_conflicts_marks_abort_reversible() {
         let wt = WorkingTree {
             clean: false,
             staged: 0,
@@ -865,12 +933,17 @@ mod tests {
             conflict_count: 1,
             conflicts: vec!["f.txt".to_string()],
         };
-        let actions = compute_allowed_next(Operation::Merging, &wt, &None);
-        let ks = kinds(&actions);
-        assert!(ks.contains(&"resolve-conflicts"));
-        assert!(ks.contains(&"merge-abort"));
+        let next = compute_next_guardrails(Operation::Merging, &wt, &None);
+        let ks = kinds(&next.allowed);
+        assert!(ks.contains(&"resolve_conflicts"));
+        assert!(ks.contains(&"merge_abort"));
+        assert!(kinds(&next.blocked).contains(&"continue_operation"));
 
-        let abort = actions.iter().find(|a| a.kind == "merge-abort").unwrap();
+        let abort = next
+            .allowed
+            .iter()
+            .find(|a| a.kind == "merge_abort")
+            .unwrap();
         assert_eq!(abort.risk.as_deref(), Some("reversible"));
         assert_eq!(
             abort.command.as_deref(),
@@ -879,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn allowed_next_merge_resolved_suggests_continue() {
+    fn next_merge_resolved_suggests_continue() {
         // 충돌 해결(add)했지만 아직 commit 전: merging + conflict 0 + staged.
         let wt = WorkingTree {
             clean: false,
@@ -889,15 +962,16 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        let actions = compute_allowed_next(Operation::Merging, &wt, &None);
-        let ks = kinds(&actions);
-        assert!(ks.contains(&"merge-continue"));
-        assert!(ks.contains(&"merge-abort"));
-        assert!(!ks.contains(&"resolve-conflicts"));
+        let next = compute_next_guardrails(Operation::Merging, &wt, &None);
+        let ks = kinds(&next.allowed);
+        assert!(ks.contains(&"merge_continue"));
+        assert!(ks.contains(&"merge_abort"));
+        assert!(!ks.contains(&"resolve_conflicts"));
+        assert!(!kinds(&next.blocked).contains(&"continue_operation"));
     }
 
     #[test]
-    fn allowed_next_untracked_only_suggests_stage() {
+    fn next_untracked_only_suggests_stage_and_blocks_commit() {
         let wt = WorkingTree {
             clean: false,
             staged: 0,
@@ -906,15 +980,16 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        let actions = compute_allowed_next(Operation::None, &wt, &None);
-        let ks = kinds(&actions);
-        // untracked는 아직 commit 대상이 아니므로 stage-changes를 제안한다.
-        assert!(ks.contains(&"stage-changes"));
+        let next = compute_next_guardrails(Operation::None, &wt, &None);
+        let ks = kinds(&next.allowed);
+        // untracked는 아직 commit 대상이 아니므로 stage_changes를 제안한다.
+        assert!(ks.contains(&"stage_changes"));
         assert!(!ks.contains(&"commit"));
+        assert!(kinds(&next.blocked).contains(&"commit"));
     }
 
     #[test]
-    fn allowed_next_dirty_suppresses_pull() {
+    fn next_dirty_suppresses_pull_and_blocks_it() {
         // dirty + behind: pull은 워킹 트리를 건드리니 억제하고 stage/commit을 먼저 유도한다.
         let wt = WorkingTree {
             clean: false,
@@ -931,14 +1006,15 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        let actions = compute_allowed_next(Operation::None, &wt, &behind);
-        let ks = kinds(&actions);
-        assert!(ks.contains(&"stage-changes"));
+        let next = compute_next_guardrails(Operation::None, &wt, &behind);
+        let ks = kinds(&next.allowed);
+        assert!(ks.contains(&"stage_changes"));
         assert!(!ks.contains(&"pull"));
+        assert!(kinds(&next.blocked).contains(&"pull"));
     }
 
     #[test]
-    fn allowed_next_rebase_conflict_hides_continue() {
+    fn next_rebase_conflict_hides_continue_and_blocks_it() {
         let wt = WorkingTree {
             clean: false,
             staged: 0,
@@ -947,13 +1023,14 @@ mod tests {
             conflict_count: 1,
             conflicts: vec!["f.txt".to_string()],
         };
-        let actions = compute_allowed_next(Operation::Rebasing, &wt, &None);
-        let ks = kinds(&actions);
-        assert!(ks.contains(&"resolve-conflicts"));
-        assert!(ks.contains(&"rebase-skip"));
-        assert!(ks.contains(&"rebase-abort"));
+        let next = compute_next_guardrails(Operation::Rebasing, &wt, &None);
+        let ks = kinds(&next.allowed);
+        assert!(ks.contains(&"resolve_conflicts"));
+        assert!(ks.contains(&"rebase_skip"));
+        assert!(ks.contains(&"rebase_abort"));
         // 충돌 중에는 continue를 제안하지 않는다.
-        assert!(!ks.contains(&"rebase-continue"));
+        assert!(!ks.contains(&"rebase_continue"));
+        assert!(kinds(&next.blocked).contains(&"continue_operation"));
     }
 
     #[test]

@@ -234,9 +234,15 @@ OS: macos aarch64
 Config: /Users/<name>/Library/Application Support/com.super-git.super-git/config.json
 ```
 
-`super-git inspect [path]`는 저장소의 상태(HEAD와 진행 중인 작업)를 조회하는
-AI-first 핵심 명령이다. 출력의 `repository`는 입력이 하위 디렉토리여도 항상 절대
-worktree root로 정규화된다.
+`super-git inspect [path]`는 저장소의 현재 상태를 versioned safety snapshot으로
+조회하는 AI-first 핵심 명령이다. 출력의 `repository`는 입력이 하위 디렉토리여도
+항상 절대 worktree root로 정규화된다.
+
+inspect JSON은 `summary`, `risk_hint`, `warnings`, `next`를 함께 제공한다.
+`next.allowed`는 바로 실행하라는 뜻이 아니라 preview 후보이고, `next.blocked`는
+현재 상태에서 precondition이 맞지 않는 행동을 알려주는 guardrail이다.
+`next.needs_human_review`는 이후 preview/execute 단계에서 채울 예약 bucket이며,
+현재 inspect-only 레이어에서는 빈 배열이다.
 
 ## Runtime Config Location
 

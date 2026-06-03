@@ -25,7 +25,7 @@ impl StatusOutput {
     }
 }
 
-pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.1";
+pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorktreeInfo {
@@ -162,17 +162,27 @@ pub struct WorkingTree {
 /// 실행 엔진 계약이 아니라 AI가 판단할 수 있는 구조화된 hint다(나중 execute 라이프사이클의 씨앗).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NextAction {
-    /// 행동 종류 식별자 (예: "commit", "push", "rebase-abort").
+    /// 행동 종류 식별자 (예: "commit", "push", "rebase_abort").
     pub kind: String,
     /// 이 행동이 가능한 이유(현재 상태 근거).
     pub reason: String,
     /// 참고용 git 명령(canonical reference). 환경(EDITOR 등)에 따라 그대로 실행되지 않을 수도
-    /// 있다 — execute 단계에서 환경에 맞게 보정한다. 없을 수도 있다(예: resolve-conflicts).
+    /// 있다 — execute 단계에서 환경에 맞게 보정한다. 없을 수도 있다(예: resolve_conflicts).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     /// 되돌림 가능성 힌트("reversible" 등). 확실한 경우에만 채운다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextGuardrails {
+    /// 안전한 preview 후보. raw Git 명령을 바로 실행해도 된다는 뜻은 아니다.
+    pub allowed: Vec<NextAction>,
+    /// 현재 상태에서 precondition이 맞지 않아 막아야 하는 행동.
+    pub blocked: Vec<NextAction>,
+    /// C4 preview/execute를 위해 예약된 bucket. 현재 inspect는 항상 빈 배열을 낸다.
+    pub needs_human_review: Vec<NextAction>,
 }
 
 /// 현재 worktree가 worktree family에서 어떤 위치인지 나타낸다.
@@ -211,8 +221,8 @@ pub struct RepoState {
     pub upstream: Option<UpstreamInfo>,
     pub working_tree: WorkingTree,
     pub operation: Operation,
-    /// 현재 상태에서 할 수 있는 다음 행동 힌트.
-    pub allowed_next: Vec<NextAction>,
+    /// 현재 상태에서 가능한 preview 후보와 막아야 하는 행동 힌트.
+    pub next: NextGuardrails,
     pub warnings: Vec<InspectWarning>,
     pub summary: InspectSummary,
     pub risk_hint: InspectRiskHint,

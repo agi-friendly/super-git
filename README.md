@@ -41,9 +41,12 @@ super-git wt list [path]
 ```
 
 `super-git inspect` is the flagship command: it surfaces the repository's
-hidden state machine — current HEAD and any in-progress operation (merge,
-rebase, am, cherry-pick, revert, bisect) — as a structured JSON envelope, so
-an agent can tell where the repo is before acting.
+hidden state machine as a versioned safety snapshot. The JSON includes HEAD,
+worktree-family context, upstream comparison, working-tree summary, in-progress
+operation, warnings, a current-state risk hint, and `next` guardrail buckets.
+`next.allowed` is a safe preview candidate list, not permission to execute raw
+Git commands. `next.needs_human_review` is reserved for the later
+preview/execute lifecycle and is empty in the current inspect-only layer.
 
 The CLI binary is named `super-git`. It wraps the installed system `git` command and
 keeps repository registration in a simple cross-platform config file.

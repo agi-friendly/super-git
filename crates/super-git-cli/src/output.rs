@@ -170,7 +170,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             "upstream": state.upstream,
             "working_tree": state.working_tree,
             "operation": state.operation,
-            "allowed_next": state.allowed_next,
+            "next": state.next,
             "warnings": state.warnings,
             "summary": state.summary,
             "risk_hint": state.risk_hint,
@@ -234,9 +234,23 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
 
             println!("Operation: {}", operation_label(state.operation));
 
-            if !state.allowed_next.is_empty() {
-                println!("Next:");
-                for next in &state.allowed_next {
+            if !state.next.allowed.is_empty() {
+                println!("Preview candidates:");
+                for next in &state.next.allowed {
+                    println!("  - {} ({})", next.kind, next.reason);
+                }
+            }
+
+            if !state.next.blocked.is_empty() {
+                println!("Blocked next actions:");
+                for next in &state.next.blocked {
+                    println!("  - {} ({})", next.kind, next.reason);
+                }
+            }
+
+            if !state.next.needs_human_review.is_empty() {
+                println!("Needs human review before execute:");
+                for next in &state.next.needs_human_review {
                     println!("  - {} ({})", next.kind, next.reason);
                 }
             }

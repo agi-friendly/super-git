@@ -11,10 +11,11 @@
 - `super-git repo add <path>`
 - `super-git repo list`
 - `super-git status [path]`
-- `super-git inspect [path]` — HEAD + 진행 중인 작업 상태머신 조회
+- `super-git inspect [path]` — versioned safety snapshot(summary/risk_hint/next guardrails 포함)
 - `super-git wt list [path]`
 - 설정 파일에 저장소 목록 저장
 - worktree/status/state 파싱 + inspect 통합 테스트
+- inspect는 읽기 전용으로 유지하고, `next.allowed`는 이후 preview 단계의 후보로만 해석
 
 ## Stage 2: Safe Worktree Create Dry-run
 
