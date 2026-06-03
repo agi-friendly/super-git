@@ -1,85 +1,116 @@
 # super-git Architecture
 
-super-git은 CLI-first 구조로 시작한다. 첫 목표는 데스크톱 앱을 빨리 띄우는 것이 아니라, Git 작업을 안전하게 감싸는 작고 믿을 수 있는 기반을 만드는 것이다.
+`super-git` starts as a CLI-first, AI-first Git safety layer. The first goal is
+not to ship a desktop app quickly. The first goal is to build a small, reliable
+core that exposes Git state and guards write actions.
 
 ## Layers
 
-### Core library
+### Core Library
 
-`super-git-core`는 Git 명령 실행, 저장소 검증, 설정 파일 읽기/쓰기, status/worktree 출력 파싱 같은 순수 기능을 담당한다.
+`super-git-core` owns Git command execution, repository validation, config
+storage, status/worktree parsing, repository inspection, preview plan creation,
+execute validation, and undo validation.
 
-Core는 UI를 알지 않는다. 나중에 CLI, 데스크톱 앱, 파일 탐색기 연동이 모두 같은 Core 기능을 호출할 수 있게 유지한다.
+The core library does not know about terminal rendering or desktop UI. CLI,
+future GUI surfaces, and possible file-manager integrations should all wrap the
+same core contracts.
 
 ### CLI
 
-`super-git-cli`는 `super-git` 바이너리를 제공한다. 모든 핵심 기능은 CLI에서 먼저 동작해야 한다.
+`super-git-cli` provides the `super-git` binary. Every core workflow should work
+from the CLI before another UI wraps it.
 
-현재 CLI는 다음 기능을 제공한다. 출력은 AI-first로, 기본이 JSON envelope(성공 `{ ok, data }` / 실패 `{ ok, error }`)이며 `--human`으로 사람용 텍스트로 바꾼다.
+Output is JSON-first. Success uses `{ ok, data }`; failure uses `{ ok, error }`.
+`--human` switches to terminal-friendly rendering.
+
+Current commands:
 
 - `super-git doctor`
 - `super-git repo add <path>`
 - `super-git repo list`
 - `super-git status [path]`
-- `super-git inspect [path]` — HEAD, worktree context, upstream, working tree, 진행 중 작업, summary/risk/next guardrail을 드러내는 versioned safety snapshot
-- `super-git preview stage-changes` — 현재 unstaged/untracked 변경을 stage하는 read-only plan 생성
+- `super-git inspect [path]`
+- `super-git preview stage-changes`
+- `super-git execute --plan <file|->`
+- `super-git undo --token <file|->`
 - `super-git wt list [path]`
 
 ### Desktop UI
 
-데스크톱 UI는 나중 단계에서 얇은 레이어로 추가한다. 초기 후보는 Tauri + Svelte지만, Stage 1에서는 구현하지 않는다.
+Desktop UI is a later thin layer over the core/CLI contracts. Tauri + Svelte is
+one possible future direction, but not a current implementation target.
 
-UI는 Git을 직접 실행하기보다 Core/CLI가 가진 검증된 동작을 감싸는 방향으로 둔다.
+The UI should not become a second Git implementation. It should wrap the same
+validated inspect/preview/execute/undo flow.
 
 ## Git Strategy
 
-초기 버전은 Git 자체를 재구현하지 않는다. 설치된 시스템 `git` 명령을 `std::process::Command`로 안전하게 호출한다.
+The project does not reimplement Git. It calls the installed system `git`
+through `std::process::Command`.
 
-명령 인자는 문자열 하나로 합치지 않고 배열로 전달한다. Stage 1에서는 읽기 명령 위주로만 실행한다.
+Command arguments are passed as arrays instead of shell command strings. This
+keeps paths with spaces safer and avoids shell interpretation.
 
-`inspect`는 읽기 전용 계약이다. `summary.execution_permission`은
-`not_granted_by_inspect`이고, `next.execution_contract`는 `preview_required`다.
-`next.allowed`는 실행 허가가 아니라 preview 후보이며, `next.raw_git_allowed`는 항상
-`false`다. action의 `reference_command`는 문서화용 참고값이고, 쓰기 작업의 실제
-위험도와 실행 잠금은 이후 preview/execute 단계에서 별도로 계산한다.
+## Inspect Contract
 
-## Preview Execute Undo Contract
+`inspect` is read-only.
 
-쓰기 작업은 `inspect -> preview -> execute -> undo` 라이프사이클로만 확장한다.
+It returns a versioned safety snapshot with repository root, worktree context,
+HEAD, upstream comparison, working-tree summary, in-progress operation, warnings,
+risk hint, summary, and guarded next-action candidates.
 
-`preview`는 현재 상태를 다시 읽고 action-specific precondition과 state fingerprint를
-담은 plan을 만든다. 이 plan은 스크립트가 아니라 계약이다. plan 안의
-`reference_commands`는 설명용이며, `execute`가 그대로 실행할 수 없다.
-현재 구현된 preview action은 `stage_changes` 하나이며, pathspec 없이 현재
-unstaged/untracked pathset 전체를 plan에 고정한다. preview는 `GIT_OPTIONAL_LOCKS=0`으로
-read-side Git 명령을 실행해 index refresh 같은 부수효과를 피한다.
+`inspect` does not grant execution permission:
 
-`execute --plan <file|->`는 plan의 schema, hash, action kind, options를 검증한 뒤 실행
-직전에 상태 fingerprint와 resolved pathset을 다시 계산한다. 상태가 바뀌었으면
-`precondition_mismatch`로 실패하며, 쓰기 전에 멈춘다. 실제 Git 명령은 plan에서 읽지 않고
-core의 allowlist에서 다시 만든다. 현재 execute action은 `stage_changes` 하나다.
+- `summary.execution_permission` is `not_granted_by_inspect`.
+- `next.execution_contract` is `preview_required`.
+- `next.raw_git_allowed` is `false`.
+- action `reference_command` values are documentation references.
 
-`undo_preview`는 preview가 설명하는 가능성이고, `undo_token`은 execute가 성공한 뒤에만
-발급하는 복구 입력이다. token 파일 자체는 신뢰하지 않으므로 `undo --token <file|->`는
-repository, snapshot path, snapshot checksum, 현재 index checksum을 다시 검증하고,
-execute가 로컬 registry에 남긴 token provenance record와 대조한다.
-`stage_changes` 같은 첫 쓰기 작업은 index snapshot을 기반으로 되돌림을 설계한다. 현재 index가
-token의 post-execute checksum과 맞을 때만 pre-execute index snapshot을 복원한다. checksum이
-다르면 새 작업을 덮어쓰지 않고 실패하며, working-tree 파일 내용은 바꾸지 않는다.
-execute는 registry record를 저장하지 못하면 성공으로 보고하지 않고, 이미 바뀐 index를
-pre-execute snapshot으로 되돌린 뒤 실패한다.
+## Preview/Execute/Undo Contract
+
+Write actions grow only through:
+
+```text
+inspect -> preview -> execute -> undo
+```
+
+`preview` reads current state and creates a plan with action-specific
+preconditions, state fingerprint, resolved paths, risk metadata, and undo
+strategy. The plan is a contract, not a script. `reference_commands` are
+explanatory and cannot be executed by `execute`.
+
+`execute --plan <file|->` validates schema, plan hash, action kind, options,
+repository root, fingerprint, and resolved pathset immediately before writing.
+State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
+from the core allowlist.
+
+`undo --token <file|->` validates token schema, repository identity, snapshot
+checksum, current index checksum, and local undo registry provenance before
+restoring the previous index snapshot. It never edits working-tree file
+contents.
 
 ## Config
 
-등록한 저장소 목록은 cross-platform config directory 아래의 JSON 파일에 저장한다.
+Registered repositories are stored in a JSON file under the OS-specific config
+directory. `super-git-core::config::store::ConfigStore` owns this storage.
 
-현재 설정 파일은 `super-git-core`의 `ConfigStore`가 관리한다.
+## Worktrees
 
-## Worktree Focus
+Worktree management remains an important differentiator. Current functionality
+is intentionally read-oriented:
 
-worktree 관리는 super-git의 중요한 차별점이다. Stage 1에서는 목록 조회만 지원하고, 생성/삭제는 dry-run과 안전장치를 먼저 설계한 뒤 추가한다.
+- `inspect.worktree_context` shows where the current repository sits in its
+  worktree family.
+- `wt list` returns the full worktree list.
 
-## Plugins
+Create/remove workflows should start with preview plans and safety checks before
+they become executable.
 
-plugin system은 장기 목표다. 하지만 Stage 1에서는 구현하지 않는다.
+## Plugins And Guides
 
-초기에는 핵심 Git 흐름을 먼저 안정화하고, 어떤 기능이 정말 plugin으로 분리되어야 하는지 확인한 뒤 설계한다.
+Plugin or guide systems are future work. They should not appear before the core
+safety lifecycle is stable enough to teach.
+
+First, the project should prove which Git workflows deserve first-class support
+and which can be delivered as documentation, guides, or optional extensions.

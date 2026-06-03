@@ -1,76 +1,132 @@
 # super-git
 
-super-git은 여러 Git 도구를 사용하며 느꼈던 장점을 모아,
-가볍고 기본에 충실한 Git 작업 도구를 만드는 실험 프로젝트다.
+AI-first Git safety tooling for humans and coding agents.
 
-## Product Principles
+`super-git` is a CLI-first experiment that makes Git's hidden state machine
+explicit before any write action happens. The core product contract is:
 
-- Git의 기본 동작을 신뢰성 있게 지원한다.
-- 모든 핵심 기능은 CLI에서 사용할 수 있어야 한다.
-- Desktop UI는 CLI/Core 기능을 감싸는 얇은 레이어로 둔다.
-- Windows, macOS, Linux를 지원한다.
-- 기본 앱은 가볍게 유지하고, 무거운 기능은 Plugin 형태로 분리한다.
-- 여러 저장소를 하나의 프로그램에서 관리할 수 있어야 한다.
-- Git worktree 작업을 가장 편하고 안전하게 수행할 수 있어야 한다.
-- OS 파일 탐색기에서 바로 실행할 수 있어야 한다.
-
-## Inspiration
-
-- TortoiseGit: Windows Explorer integration, rebase UX, lightweight usage
-- Fork: multi-repository management
-- IntelliJ IDEA Git: conflict handling, patch, interactive rebase support
-- VS Code Git Worktree Manager: worktree creation and workspace opening flow
-
-## Initial Scope
-
-The first version focuses on repository registration, repository status,
-worktree listing, worktree creation, worktree removal, and opening worktrees
-in external tools such as VS Code, IntelliJ IDEA, or terminal.
-
-## Current CLI
-
-The current implementation starts with a small, AI-first CLI surface.
-
-```bash
-super-git doctor
-super-git repo add <path>
-super-git repo list
-super-git status [path]
-super-git inspect [path]
-super-git preview stage-changes
-super-git wt list [path]
+```text
+inspect -> preview -> execute -> undo
 ```
 
-`super-git inspect` is the flagship command: it surfaces the repository's
-hidden state machine as a versioned safety snapshot. The JSON includes HEAD,
-worktree-family context, upstream comparison, working-tree summary, in-progress
-operation, warnings, a current-state risk hint, and `next` guardrail buckets.
-The JSON is self-describing: `summary.execution_permission` is
-`not_granted_by_inspect`, `next.execution_contract` is `preview_required`, and
-`next.raw_git_allowed` is `false`. Action `reference_command` values are
-documentation references, not commands to execute directly.
+The tool is designed for AI agents first, but the same properties make it useful
+for humans: clear state, structured output, dry-run planning, guarded execution,
+and undo provenance.
 
-The CLI binary is named `super-git`. It wraps the installed system `git` command and
-keeps repository registration in a simple cross-platform config file.
+## Why This Exists
 
-The next write-side stage is not raw execution. It is the
-`inspect -> preview -> execute -> undo` lifecycle. `preview stage-changes` now
-emits a validated, read-only plan for staging current unstaged/untracked changes.
-`execute --plan <file|->` re-checks that plan, rejects stale or tampered state,
-and stages only through the internal `stage_changes` allowlist. `undo --token
-<file|->` treats token input as untrusted, validates repository/snapshot/checksum
-preconditions, cross-checks the token against the local undo registry created by
-`execute`, restores the pre-execute index only when the current index still
-matches the token, and never edits working-tree files.
+Git is powerful, but its critical state is spread across status output, internal
+files, reflog, index state, worktree metadata, and command-specific edge cases.
+Humans often rely on IDEs or GUI tools to keep that state visible. Coding agents
+usually operate from a terminal and must reconstruct the state from scratch.
 
-## Development Setup
+`super-git` aims to give both humans and agents a safer contract:
 
-See [docs/setup.md](docs/setup.md) for required tools and OS-specific setup
-notes.
+- See the repository state in one structured snapshot.
+- Preview write actions before changing the repository.
+- Execute only validated plans, not arbitrary command strings.
+- Undo supported writes through local provenance checks.
+- Keep JSON as the default output, with `--human` for terminal reading.
 
-## Non-goals for Early Versions
+## Current Status
+
+This project is still early, but the first safety loop exists.
+
+Implemented today:
+
+- `super-git inspect [path]`
+  - repository root
+  - worktree family context
+  - HEAD and detached/unborn state
+  - upstream ahead/behind
+  - working-tree summary and conflicts
+  - in-progress Git operation
+  - warnings, risk hint, summary, and guarded next-action candidates
+- `super-git preview stage-changes`
+  - builds a read-only plan for staging current unstaged/untracked changes
+- `super-git execute --plan <file|->`
+  - re-validates the plan and state before staging
+  - executes only the internal `stage_changes` allowlist
+  - writes a local undo registry record before reporting success
+- `super-git undo --token <file|->`
+  - treats token input as untrusted
+  - validates repository, snapshot checksums, current index checksum, and local
+    registry provenance
+  - restores the pre-execute index only when the current index still matches the
+    execute result
+  - never edits working-tree file contents
+- Supporting commands: `doctor`, `repo add`, `repo list`, `status`, `wt list`
+
+## Quick Start
+
+```bash
+cargo run -p super-git-cli -- doctor
+cargo run -p super-git-cli -- inspect
+```
+
+In a disposable repository or throwaway worktree with unstaged/untracked
+changes:
+
+```bash
+cargo run -p super-git-cli -- preview stage-changes > /tmp/super-git-plan.json
+cargo run -p super-git-cli -- execute --plan /tmp/super-git-plan.json > /tmp/super-git-result.json
+cargo run -p super-git-cli -- undo --token /tmp/super-git-result.json
+```
+
+By default, every command returns a JSON envelope:
+
+```json
+{ "ok": true, "data": {} }
+```
+
+Failures use the same contract:
+
+```json
+{ "ok": false, "error": { "message": "...", "causes": [] } }
+```
+
+Use `--human` when reading directly in a terminal:
+
+```bash
+cargo run -p super-git-cli -- --human inspect
+```
+
+## Documentation
+
+- [Documentation map](docs/README.md)
+- [Getting started](docs/getting-started.md)
+- [Command reference](docs/command-reference.md)
+- [Safety model](docs/safety-model.md)
+- [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)
+- [ADR 0001: CLI First](docs/adr/0001-cli-first.md)
+- [Archived original notes](docs/archive/original-notes/README.md)
+
+## Development
+
+Required tools:
+
+- Git
+- Rust toolchain
+- Cargo
+- rustfmt
+- Clippy
+
+Verification:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+## Non-goals For Early Versions
 
 - Reimplementing Git
-- Replacing all features of existing Git GUI tools
-- Building complex merge/rebase UI from the beginning
-- Building a full plugin system before the core workflow is stable
+- Replacing mature Git GUI tools
+- Running raw Git commands from `inspect` suggestions
+- Building a desktop UI before the CLI/core contract is stable
+- Building a plugin system before the safety lifecycle proves itself
+
+Desktop and GUI ideas are still part of the long-term dream. For now, the
+project is building the safe core that those interfaces can later wrap.

@@ -1,0 +1,42 @@
+# Documentation
+
+This directory contains the current product documentation for `super-git`.
+
+## Recommended Reading Order
+
+1. [Getting started](getting-started.md)
+2. [Command reference](command-reference.md)
+3. [Safety model](safety-model.md)
+4. [Architecture](architecture.md)
+5. [Roadmap](roadmap.md)
+6. [ADR 0001: CLI First](adr/0001-cli-first.md)
+
+## Current Source Of Truth
+
+- `README.md` introduces the project for humans discovering it on GitHub.
+- `AGENTS.md` tells new coding-agent sessions how to work safely in this repo.
+- `docs/safety-model.md` defines the active safety contract.
+- `docs/command-reference.md` describes the current CLI behavior.
+- `docs/roadmap.md` tracks planned direction.
+
+## Internal Planning
+
+Implementation plans and design checkpoints live under:
+
+- [internal/plans](internal/plans/)
+
+These files are useful for project history and implementation context, but the
+public-facing contract should be reflected in the main docs listed above.
+
+## Archive
+
+Original research and dual-brain notes moved to:
+
+- [archive/original-notes](archive/original-notes/README.md)
+
+They are preserved intentionally, but they may describe earlier goals such as a
+worktree-first desktop tool. The current direction is AI-first Git safety:
+
+```text
+inspect -> preview -> execute -> undo
+```
