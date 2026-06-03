@@ -101,6 +101,17 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
         .as_array()
         .expect("warnings array")
         .is_empty());
+    assert_eq!(json["data"]["summary"]["state"], "ready");
+    assert!(json["data"]["summary"]["codes"]
+        .as_array()
+        .expect("summary codes")
+        .iter()
+        .any(|code| code == "working_tree_clean"));
+    assert_eq!(json["data"]["risk_hint"]["level"], "low");
+    assert!(json["data"]["risk_hint"]["factors"]
+        .as_array()
+        .expect("risk factors")
+        .is_empty());
     // clean + upstream 없음 → 제안할 행동이 없다.
     assert!(action_kinds(&json).is_empty());
 }
@@ -143,6 +154,13 @@ fn inspect_reports_merging_during_conflict() {
     assert_eq!(wt["conflict_count"], 1);
     assert_eq!(wt["conflicts"][0], "file.txt");
     assert_eq!(wt["clean"], false);
+    assert_eq!(json["data"]["summary"]["state"], "blocked");
+    assert_eq!(json["data"]["risk_hint"]["level"], "high");
+    assert!(json["data"]["risk_hint"]["factors"]
+        .as_array()
+        .expect("risk factors")
+        .iter()
+        .any(|factor| factor["code"] == "conflicts_present"));
 
     let ks = action_kinds(&json);
     assert!(ks.iter().any(|k| k == "resolve-conflicts"));
@@ -316,6 +334,13 @@ fn inspect_marks_failed_upstream_comparison() {
     assert_eq!(upstream["behind"], 0);
     assert_eq!(upstream["comparison_basis"], "local_tracking_ref");
     assert_eq!(upstream["comparison_status"], "failed");
+    let summary_codes = json["data"]["summary"]["codes"]
+        .as_array()
+        .expect("summary codes");
+    assert!(summary_codes
+        .iter()
+        .any(|code| code == "upstream_comparison_failed"));
+    assert!(!summary_codes.iter().any(|code| code == "upstream_synced"));
     let warnings = json["data"]["warnings"].as_array().expect("warnings array");
     assert!(warnings
         .iter()
@@ -341,6 +366,13 @@ fn inspect_reports_working_tree_changes() {
     assert_eq!(wt["unstaged"], 1);
     assert_eq!(wt["untracked"], 1);
     assert_eq!(wt["conflict_count"], 0);
+    assert_eq!(json["data"]["summary"]["state"], "dirty");
+    assert_eq!(json["data"]["risk_hint"]["level"], "medium");
+    assert!(json["data"]["risk_hint"]["factors"]
+        .as_array()
+        .expect("risk factors")
+        .iter()
+        .any(|factor| factor["code"] == "working_tree_dirty"));
     // staged가 있으니 commit, unstaged/untracked가 있으니 stage-changes 둘 다 제안된다.
     let ks = action_kinds(&json);
     assert!(ks.iter().any(|k| k == "commit"));

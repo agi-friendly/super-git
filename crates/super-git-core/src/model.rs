@@ -117,6 +117,34 @@ pub struct InspectWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InspectSummary {
+    pub state: String,
+    pub codes: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RiskFactor {
+    pub code: String,
+    pub level: RiskLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InspectRiskHint {
+    pub level: RiskLevel,
+    pub factors: Vec<RiskFactor>,
+}
+
 /// 워킹 트리 변경 요약. 상세 파일 목록은 `status` 명령이 담당하고,
 /// 여기서는 AI가 다음 행동을 판단할 만큼의 카운트와 충돌 목록만 둔다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -186,4 +214,6 @@ pub struct RepoState {
     /// 현재 상태에서 할 수 있는 다음 행동 힌트.
     pub allowed_next: Vec<NextAction>,
     pub warnings: Vec<InspectWarning>,
+    pub summary: InspectSummary,
+    pub risk_hint: InspectRiskHint,
 }

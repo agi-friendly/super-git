@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
 use super_git_core::model::{
-    Operation, RepoState, Repository, StatusOutput, WorktreeInfo, WorktreeKind,
+    Operation, RepoState, Repository, RiskLevel, StatusOutput, WorktreeInfo, WorktreeKind,
     INSPECT_SCHEMA_VERSION,
 };
 
@@ -172,9 +172,16 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             "operation": state.operation,
             "allowed_next": state.allowed_next,
             "warnings": state.warnings,
+            "summary": state.summary,
+            "risk_hint": state.risk_hint,
         })),
         OutputMode::Human => {
             println!("Repository: {}", state.root.display());
+            println!(
+                "Summary: {} ({})",
+                state.summary.state, state.summary.message
+            );
+            println!("Risk hint: {}", risk_level_label(state.risk_hint.level));
 
             let wc = &state.worktree_context;
             println!(
@@ -256,6 +263,14 @@ fn operation_label(operation: Operation) -> &'static str {
         Operation::CherryPicking => "cherry-picking",
         Operation::Reverting => "reverting",
         Operation::Bisecting => "bisecting",
+    }
+}
+
+fn risk_level_label(level: RiskLevel) -> &'static str {
+    match level {
+        RiskLevel::Low => "low",
+        RiskLevel::Medium => "medium",
+        RiskLevel::High => "high",
     }
 }
 

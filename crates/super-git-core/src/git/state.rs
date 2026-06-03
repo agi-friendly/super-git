@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use crate::git::command::Git;
 use crate::git::worktree;
 use crate::model::{
-    HeadInfo, InspectWarning, NextAction, Operation, RepoState, UpstreamComparisonBasis,
-    UpstreamComparisonStatus, UpstreamInfo, WarningSeverity, WorkingTree, WorktreeContext,
-    WorktreeKind,
+    HeadInfo, InspectRiskHint, InspectSummary, InspectWarning, NextAction, Operation, RepoState,
+    RiskFactor, RiskLevel, UpstreamComparisonBasis, UpstreamComparisonStatus, UpstreamInfo,
+    WarningSeverity, WorkingTree, WorktreeContext, WorktreeKind,
 };
 use crate::Result;
 
@@ -20,6 +20,8 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let operation = detect_operation(&git, path)?;
     let allowed_next = compute_allowed_next(operation, &working_tree, &upstream);
     let warnings = compute_warnings(&upstream);
+    let summary = compute_summary(operation, &working_tree, &upstream, &worktree_context);
+    let risk_hint = compute_risk_hint(operation, &working_tree);
     Ok(RepoState {
         root,
         worktree_context,
@@ -29,6 +31,8 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
         operation,
         allowed_next,
         warnings,
+        summary,
+        risk_hint,
     })
 }
 
@@ -130,6 +134,123 @@ fn compute_warnings(upstream: &Option<UpstreamInfo>) -> Vec<InspectWarning> {
         }
     }
     warnings
+}
+
+fn compute_summary(
+    operation: Operation,
+    working_tree: &WorkingTree,
+    upstream: &Option<UpstreamInfo>,
+    worktree_context: &WorktreeContext,
+) -> InspectSummary {
+    let state = if working_tree.conflict_count > 0 {
+        "blocked"
+    } else if operation != Operation::None {
+        "in_progress"
+    } else if !working_tree.clean {
+        "dirty"
+    } else {
+        "ready"
+    };
+
+    let mut codes = Vec::new();
+    codes.push(operation_code(operation).to_string());
+    codes.push(if working_tree.clean {
+        "working_tree_clean".to_string()
+    } else {
+        "working_tree_dirty".to_string()
+    });
+    if working_tree.conflict_count > 0 {
+        codes.push("conflicts_present".to_string());
+    }
+    codes.push(upstream_code(upstream).to_string());
+    codes.push(worktree_code(worktree_context.kind).to_string());
+
+    let message = match state {
+        "blocked" => "Resolve conflicts before continuing Git operations.",
+        "in_progress" => "A Git operation is in progress.",
+        "dirty" => "Working tree has local changes.",
+        _ => "Repository is ready for a safe next action.",
+    }
+    .to_string();
+
+    InspectSummary {
+        state: state.to_string(),
+        codes,
+        message,
+    }
+}
+
+fn compute_risk_hint(operation: Operation, working_tree: &WorkingTree) -> InspectRiskHint {
+    let mut factors = Vec::new();
+    if working_tree.conflict_count > 0 {
+        factors.push(RiskFactor {
+            code: "conflicts_present".to_string(),
+            level: RiskLevel::High,
+            message: "Unmerged paths must be resolved before continuing.".to_string(),
+        });
+    } else if !working_tree.clean {
+        factors.push(RiskFactor {
+            code: "working_tree_dirty".to_string(),
+            level: RiskLevel::Medium,
+            message:
+                "Local changes are present; commands that touch the working tree need extra care."
+                    .to_string(),
+        });
+    }
+    if operation != Operation::None {
+        factors.push(RiskFactor {
+            code: "operation_in_progress".to_string(),
+            level: RiskLevel::Medium,
+            message: "Repository is inside an in-progress Git operation.".to_string(),
+        });
+    }
+
+    let level = if factors.iter().any(|factor| factor.level == RiskLevel::High) {
+        RiskLevel::High
+    } else if factors
+        .iter()
+        .any(|factor| factor.level == RiskLevel::Medium)
+    {
+        RiskLevel::Medium
+    } else {
+        RiskLevel::Low
+    };
+
+    InspectRiskHint { level, factors }
+}
+
+fn operation_code(operation: Operation) -> &'static str {
+    match operation {
+        Operation::None => "operation_none",
+        Operation::Merging => "operation_merging",
+        Operation::Rebasing => "operation_rebasing",
+        Operation::Applying => "operation_applying",
+        Operation::CherryPicking => "operation_cherry_picking",
+        Operation::Reverting => "operation_reverting",
+        Operation::Bisecting => "operation_bisecting",
+    }
+}
+
+fn upstream_code(upstream: &Option<UpstreamInfo>) -> &'static str {
+    match upstream {
+        None => "upstream_none",
+        Some(upstream) if upstream.comparison_status == UpstreamComparisonStatus::Failed => {
+            "upstream_comparison_failed"
+        }
+        Some(upstream) if upstream.ahead == 0 && upstream.behind == 0 => "upstream_synced",
+        Some(upstream) if upstream.ahead > 0 && upstream.behind == 0 => "upstream_ahead",
+        Some(upstream) if upstream.ahead == 0 && upstream.behind > 0 => "upstream_behind",
+        Some(_) => "upstream_diverged",
+    }
+}
+
+fn worktree_code(kind: WorktreeKind) -> &'static str {
+    match kind {
+        WorktreeKind::Main => "main_worktree",
+        WorktreeKind::Linked => "linked_worktree",
+        WorktreeKind::Bare => "bare_worktree",
+        WorktreeKind::Unknown => "unknown_worktree",
+    }
 }
 
 /// 워킹 트리 변경을 요약한다. 상세 목록은 status 명령에 맡기고 카운트+충돌 목록만 만든다.
