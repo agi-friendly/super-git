@@ -92,10 +92,15 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
 
     assert_eq!(json["ok"], true);
     assert_eq!(json["data"]["operation"], "none");
+    assert_eq!(json["data"]["schema_version"], "super-git.inspect.v0.1");
     assert_eq!(json["data"]["head"]["branch"], "main");
     assert_eq!(json["data"]["head"]["detached"], false);
     assert!(json["data"]["head"]["commit"].is_string());
     assert_eq!(json["data"]["working_tree"]["clean"], true);
+    assert!(json["data"]["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .is_empty());
     // clean + upstream 없음 → 제안할 행동이 없다.
     assert!(action_kinds(&json).is_empty());
 }
@@ -276,7 +281,45 @@ fn inspect_reports_upstream_ahead() {
     );
     assert_eq!(upstream["ahead"], 1);
     assert_eq!(upstream["behind"], 0);
+    assert_eq!(upstream["comparison_basis"], "local_tracking_ref");
+    assert_eq!(upstream["comparison_status"], "ok");
+    let warnings = json["data"]["warnings"].as_array().expect("warnings array");
+    assert!(warnings
+        .iter()
+        .any(|w| w["code"] == "upstream_freshness_unknown"));
     assert!(action_kinds(&json).iter().any(|k| k == "push"));
+}
+
+#[test]
+fn inspect_marks_failed_upstream_comparison() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // upstream 이름은 해석되지만 rev-list 비교는 실패하는 ref를 만든다.
+    let origin = tmp.path().join("origin.git");
+    git(dir, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(dir, &["config", "branch.main.remote", "origin"]);
+    git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+    let remote_ref = dir.join(".git/refs/remotes/origin");
+    std::fs::create_dir_all(&remote_ref).expect("mkdir remote ref dir");
+    std::fs::write(
+        remote_ref.join("main"),
+        "0000000000000000000000000000000000000001\n",
+    )
+    .expect("write invalid remote ref");
+
+    let json = inspect_json(dir);
+    let upstream = &json["data"]["upstream"];
+    assert_eq!(upstream["name"], "origin/main");
+    assert_eq!(upstream["ahead"], 0);
+    assert_eq!(upstream["behind"], 0);
+    assert_eq!(upstream["comparison_basis"], "local_tracking_ref");
+    assert_eq!(upstream["comparison_status"], "failed");
+    let warnings = json["data"]["warnings"].as_array().expect("warnings array");
+    assert!(warnings
+        .iter()
+        .any(|w| w["code"] == "upstream_comparison_failed"));
 }
 
 #[test]

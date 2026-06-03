@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::json;
 use super_git_core::model::{
     Operation, RepoState, Repository, StatusOutput, WorktreeInfo, WorktreeKind,
+    INSPECT_SCHEMA_VERSION,
 };
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
@@ -162,6 +163,7 @@ pub fn print_status(mode: OutputMode, path: &Path, status: &StatusOutput) -> Res
 pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({
+            "schema_version": INSPECT_SCHEMA_VERSION,
             "repository": state.root,
             "worktree_context": state.worktree_context,
             "head": state.head,
@@ -169,6 +171,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             "working_tree": state.working_tree,
             "operation": state.operation,
             "allowed_next": state.allowed_next,
+            "warnings": state.warnings,
         })),
         OutputMode::Human => {
             println!("Repository: {}", state.root.display());
@@ -200,6 +203,13 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                     upstream.name, upstream.ahead, upstream.behind
                 ),
                 None => println!("Upstream: (none)"),
+            }
+
+            if !state.warnings.is_empty() {
+                println!("Warnings:");
+                for warning in &state.warnings {
+                    println!("  - {}: {}", warning.code, warning.message);
+                }
             }
 
             let wt = &state.working_tree;

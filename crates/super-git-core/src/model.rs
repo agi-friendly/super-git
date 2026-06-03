@@ -25,6 +25,8 @@ impl StatusOutput {
     }
 }
 
+pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.1";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorktreeInfo {
     pub path: PathBuf,
@@ -73,6 +75,19 @@ pub struct HeadInfo {
 }
 
 /// upstream(추적 브랜치) 대비 위치.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamComparisonBasis {
+    LocalTrackingRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamComparisonStatus {
+    Ok,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UpstreamInfo {
     /// upstream 브랜치 이름 (예: "origin/main").
@@ -81,6 +96,25 @@ pub struct UpstreamInfo {
     pub ahead: u32,
     /// HEAD가 upstream보다 뒤처진 커밋 수.
     pub behind: u32,
+    /// ahead/behind가 어떤 기준으로 계산됐는지. 지금은 fetch하지 않은 로컬 추적 ref 기준이다.
+    pub comparison_basis: UpstreamComparisonBasis,
+    /// 비교 명령이 성공했는지. 실패 시 ahead/behind 값은 신뢰하면 안 된다.
+    pub comparison_status: UpstreamComparisonStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningSeverity {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InspectWarning {
+    pub code: String,
+    pub severity: WarningSeverity,
+    pub message: String,
 }
 
 /// 워킹 트리 변경 요약. 상세 파일 목록은 `status` 명령이 담당하고,
@@ -151,4 +185,5 @@ pub struct RepoState {
     pub operation: Operation,
     /// 현재 상태에서 할 수 있는 다음 행동 힌트.
     pub allowed_next: Vec<NextAction>,
+    pub warnings: Vec<InspectWarning>,
 }

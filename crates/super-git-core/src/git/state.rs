@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::git::command::Git;
 use crate::git::worktree;
 use crate::model::{
-    HeadInfo, NextAction, Operation, RepoState, UpstreamInfo, WorkingTree, WorktreeContext,
+    HeadInfo, InspectWarning, NextAction, Operation, RepoState, UpstreamComparisonBasis,
+    UpstreamComparisonStatus, UpstreamInfo, WarningSeverity, WorkingTree, WorktreeContext,
     WorktreeKind,
 };
 use crate::Result;
@@ -18,6 +19,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let working_tree = read_working_tree(&git, path)?;
     let operation = detect_operation(&git, path)?;
     let allowed_next = compute_allowed_next(operation, &working_tree, &upstream);
+    let warnings = compute_warnings(&upstream);
     Ok(RepoState {
         root,
         worktree_context,
@@ -26,6 +28,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
         working_tree,
         operation,
         allowed_next,
+        warnings,
     })
 }
 
@@ -81,21 +84,52 @@ fn read_upstream(git: &Git, path: &Path) -> Result<Option<UpstreamInfo>> {
         path,
         ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"],
     )?;
-    let (behind, ahead) = parse_ahead_behind(&counts.stdout);
+    let (behind, ahead, comparison_status) = if counts.success {
+        match parse_ahead_behind(&counts.stdout) {
+            Some((behind, ahead)) => (behind, ahead, UpstreamComparisonStatus::Ok),
+            None => (0, 0, UpstreamComparisonStatus::Failed),
+        }
+    } else {
+        (0, 0, UpstreamComparisonStatus::Failed)
+    };
 
     Ok(Some(UpstreamInfo {
         name,
         ahead,
         behind,
+        comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+        comparison_status,
     }))
 }
 
 /// `rev-list --count --left-right @{upstream}...HEAD` 출력("<behind>\t<ahead>")을 파싱한다.
-fn parse_ahead_behind(output: &str) -> (u32, u32) {
+fn parse_ahead_behind(output: &str) -> Option<(u32, u32)> {
     let mut parts = output.split_whitespace();
-    let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    (behind, ahead)
+    let behind = parts.next()?.parse().ok()?;
+    let ahead = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((behind, ahead))
+}
+
+fn compute_warnings(upstream: &Option<UpstreamInfo>) -> Vec<InspectWarning> {
+    let mut warnings = Vec::new();
+    if let Some(upstream) = upstream {
+        warnings.push(InspectWarning {
+            code: "upstream_freshness_unknown".to_string(),
+            severity: WarningSeverity::Low,
+            message: "Ahead/behind is based on the local tracking ref; fetch before treating remote state as current.".to_string(),
+        });
+        if upstream.comparison_status == UpstreamComparisonStatus::Failed {
+            warnings.push(InspectWarning {
+                code: "upstream_comparison_failed".to_string(),
+                severity: WarningSeverity::Medium,
+                message: "Upstream name was found, but ahead/behind comparison failed; counts should not be trusted.".to_string(),
+            });
+        }
+    }
+    warnings
 }
 
 /// 워킹 트리 변경을 요약한다. 상세 목록은 status 명령에 맡기고 카운트+충돌 목록만 만든다.
@@ -546,15 +580,35 @@ mod tests {
     #[test]
     fn parses_ahead_behind_counts() {
         // 출력 형식: "<behind>\t<ahead>"
-        assert_eq!(parse_ahead_behind("0\t2\n"), (0, 2));
-        assert_eq!(parse_ahead_behind("3\t0\n"), (3, 0));
-        assert_eq!(parse_ahead_behind("1\t4"), (1, 4));
+        assert_eq!(parse_ahead_behind("0\t2\n"), Some((0, 2)));
+        assert_eq!(parse_ahead_behind("3\t0\n"), Some((3, 0)));
+        assert_eq!(parse_ahead_behind("1\t4"), Some((1, 4)));
     }
 
     #[test]
-    fn parse_ahead_behind_tolerates_garbage() {
-        assert_eq!(parse_ahead_behind(""), (0, 0));
-        assert_eq!(parse_ahead_behind("oops"), (0, 0));
+    fn parse_ahead_behind_rejects_garbage() {
+        assert_eq!(parse_ahead_behind(""), None);
+        assert_eq!(parse_ahead_behind("oops"), None);
+        assert_eq!(parse_ahead_behind("1\t2 extra"), None);
+    }
+
+    #[test]
+    fn warnings_mark_failed_upstream_comparison() {
+        let upstream = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 0,
+            behind: 0,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Failed,
+        });
+
+        let warnings = compute_warnings(&upstream);
+        assert!(warnings
+            .iter()
+            .any(|w| w.code == "upstream_freshness_unknown"));
+        assert!(warnings
+            .iter()
+            .any(|w| w.code == "upstream_comparison_failed"));
     }
 
     #[test]
@@ -635,6 +689,8 @@ mod tests {
             name: "origin/main".to_string(),
             ahead: 2,
             behind: 0,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
         });
         assert!(
             kinds(&compute_allowed_next(Operation::None, &clean_wt(), &ahead)).contains(&"push")
@@ -644,6 +700,8 @@ mod tests {
             name: "origin/main".to_string(),
             ahead: 0,
             behind: 3,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
         });
         assert!(
             kinds(&compute_allowed_next(Operation::None, &clean_wt(), &behind)).contains(&"pull")
@@ -653,6 +711,8 @@ mod tests {
             name: "origin/main".to_string(),
             ahead: 1,
             behind: 1,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
         });
         assert!(kinds(&compute_allowed_next(
             Operation::None,
@@ -747,6 +807,8 @@ mod tests {
             name: "origin/main".to_string(),
             ahead: 0,
             behind: 2,
+            comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
+            comparison_status: UpstreamComparisonStatus::Ok,
         });
         let actions = compute_allowed_next(Operation::None, &wt, &behind);
         let ks = kinds(&actions);
