@@ -96,6 +96,22 @@ pub struct WorkingTree {
     pub conflicts: Vec<String>,
 }
 
+/// inspect가 제안하는 "다음에 할 수 있는 행동" 힌트.
+/// 실행 엔진 계약이 아니라 AI가 판단할 수 있는 구조화된 hint다(나중 execute 라이프사이클의 씨앗).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextAction {
+    /// 행동 종류 식별자 (예: "commit", "push", "rebase-abort").
+    pub kind: String,
+    /// 이 행동이 가능한 이유(현재 상태 근거).
+    pub reason: String,
+    /// 참고용 git 명령. 없을 수도 있다(예: resolve-conflicts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// 되돌림 가능성 힌트("reversible" 등). 확실한 경우에만 채운다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<String>,
+}
+
 /// 저장소의 현재 상태 스냅샷. `inspect`의 핵심 모델.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepoState {
@@ -106,4 +122,6 @@ pub struct RepoState {
     pub upstream: Option<UpstreamInfo>,
     pub working_tree: WorkingTree,
     pub operation: Operation,
+    /// 현재 상태에서 할 수 있는 다음 행동 힌트.
+    pub allowed_next: Vec<NextAction>,
 }

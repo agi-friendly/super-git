@@ -73,6 +73,16 @@ fn inspect_json(dir: &Path) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("parse inspect json")
 }
 
+/// inspect 출력의 allowed_next에서 kind 목록을 뽑는다.
+fn action_kinds(json: &serde_json::Value) -> Vec<String> {
+    json["data"]["allowed_next"]
+        .as_array()
+        .expect("allowed_next array")
+        .iter()
+        .map(|a| a["kind"].as_str().expect("kind").to_string())
+        .collect()
+}
+
 #[test]
 fn inspect_clean_repo_reports_branch_and_no_operation() {
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -86,6 +96,8 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
     assert_eq!(json["data"]["head"]["detached"], false);
     assert!(json["data"]["head"]["commit"].is_string());
     assert_eq!(json["data"]["working_tree"]["clean"], true);
+    // clean + upstream 없음 → 제안할 행동이 없다.
+    assert!(action_kinds(&json).is_empty());
 }
 
 #[test]
@@ -126,6 +138,10 @@ fn inspect_reports_merging_during_conflict() {
     assert_eq!(wt["conflict_count"], 1);
     assert_eq!(wt["conflicts"][0], "file.txt");
     assert_eq!(wt["clean"], false);
+
+    let ks = action_kinds(&json);
+    assert!(ks.iter().any(|k| k == "resolve-conflicts"));
+    assert!(ks.iter().any(|k| k == "merge-abort"));
 }
 
 #[test]
@@ -260,6 +276,7 @@ fn inspect_reports_upstream_ahead() {
     );
     assert_eq!(upstream["ahead"], 1);
     assert_eq!(upstream["behind"], 0);
+    assert!(action_kinds(&json).iter().any(|k| k == "push"));
 }
 
 #[test]
@@ -281,6 +298,7 @@ fn inspect_reports_working_tree_changes() {
     assert_eq!(wt["unstaged"], 1);
     assert_eq!(wt["untracked"], 1);
     assert_eq!(wt["conflict_count"], 0);
+    assert!(action_kinds(&json).iter().any(|k| k == "commit"));
 }
 
 #[test]

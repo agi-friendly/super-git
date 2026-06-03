@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::git::command::Git;
-use crate::model::{HeadInfo, Operation, RepoState, UpstreamInfo, WorkingTree};
+use crate::model::{HeadInfo, NextAction, Operation, RepoState, UpstreamInfo, WorkingTree};
 use crate::Result;
 
 /// 저장소의 HEAD 위치와 진행 중인 작업을 한 번에 읽는다.
@@ -12,12 +12,14 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let upstream = read_upstream(&git, path)?;
     let working_tree = read_working_tree(&git, path)?;
     let operation = detect_operation(&git, path)?;
+    let allowed_next = compute_allowed_next(operation, &working_tree, &upstream);
     Ok(RepoState {
         root,
         head,
         upstream,
         working_tree,
         operation,
+        allowed_next,
     })
 }
 
@@ -149,6 +151,134 @@ fn is_conflict(x: char, y: char) -> bool {
 /// 변경을 나타내는 상태 문자인지 판별한다(공백=무변경, ?=미추적 제외).
 fn is_change(code: char) -> bool {
     code != ' ' && code != '?'
+}
+
+/// 현재 상태로부터 "다음에 할 수 있는 행동" 힌트를 만든다.
+/// git을 호출하지 않는 순수 함수라 단위테스트로 촘촘히 검증할 수 있다.
+fn compute_allowed_next(
+    operation: Operation,
+    working_tree: &WorkingTree,
+    upstream: &Option<UpstreamInfo>,
+) -> Vec<NextAction> {
+    let mut actions = Vec::new();
+
+    // 진행 중인 작업이 있으면 그 작업의 해결/탈출 행동이 우선이다.
+    match operation {
+        Operation::None => {}
+        Operation::Merging => {
+            push_resolve_if_conflicts(&mut actions, working_tree);
+            actions.push(action(
+                "merge-abort",
+                "a merge is in progress",
+                Some(&["git", "merge", "--abort"]),
+                Some("reversible"),
+            ));
+        }
+        Operation::Rebasing => {
+            push_resolve_if_conflicts(&mut actions, working_tree);
+            push_sequence_actions(&mut actions, "rebase");
+        }
+        Operation::Applying => {
+            push_resolve_if_conflicts(&mut actions, working_tree);
+            push_sequence_actions(&mut actions, "am");
+        }
+        Operation::CherryPicking => {
+            push_resolve_if_conflicts(&mut actions, working_tree);
+            push_sequence_actions(&mut actions, "cherry-pick");
+        }
+        Operation::Reverting => {
+            push_resolve_if_conflicts(&mut actions, working_tree);
+            push_sequence_actions(&mut actions, "revert");
+        }
+        Operation::Bisecting => {
+            actions.push(action(
+                "bisect-reset",
+                "a bisect session is in progress",
+                Some(&["git", "bisect", "reset"]),
+                Some("reversible"),
+            ));
+        }
+    }
+
+    // 진행 중인 작업이 없을 때만 일반 흐름(commit/push/pull)을 제안한다.
+    if operation == Operation::None {
+        if working_tree.staged > 0 || working_tree.unstaged > 0 {
+            actions.push(action(
+                "commit",
+                "there are uncommitted changes",
+                None,
+                None,
+            ));
+        }
+
+        if let Some(u) = upstream {
+            match (u.ahead, u.behind) {
+                (a, 0) if a > 0 => actions.push(action(
+                    "push",
+                    "local is ahead of upstream",
+                    Some(&["git", "push"]),
+                    None,
+                )),
+                (0, b) if b > 0 => actions.push(action(
+                    "pull",
+                    "upstream is ahead of local",
+                    Some(&["git", "pull"]),
+                    None,
+                )),
+                (a, b) if a > 0 && b > 0 => actions.push(action(
+                    "integrate-diverged",
+                    "local and upstream have diverged",
+                    Some(&["git", "pull", "--rebase"]),
+                    None,
+                )),
+                _ => {}
+            }
+        }
+    }
+
+    actions
+}
+
+fn push_resolve_if_conflicts(actions: &mut Vec<NextAction>, working_tree: &WorkingTree) {
+    if working_tree.conflict_count > 0 {
+        actions.push(action(
+            "resolve-conflicts",
+            "working tree has unmerged paths",
+            None,
+            None,
+        ));
+    }
+}
+
+/// continue/skip/abort 3종을 가진 sequencer류(rebase/am/cherry-pick/revert) 행동을 추가한다.
+fn push_sequence_actions(actions: &mut Vec<NextAction>, op: &str) {
+    actions.push(action(
+        &format!("{op}-continue"),
+        "resume after resolving",
+        Some(&["git", op, "--continue"]),
+        None,
+    ));
+    actions.push(action(
+        &format!("{op}-skip"),
+        "skip the current commit",
+        Some(&["git", op, "--skip"]),
+        None,
+    ));
+    actions.push(action(
+        &format!("{op}-abort"),
+        "abort and restore the original state",
+        Some(&["git", op, "--abort"]),
+        Some("reversible"),
+    ));
+}
+
+fn action(kind: &str, reason: &str, command: Option<&[&str]>, risk: Option<&str>) -> NextAction {
+    NextAction {
+        kind: kind.to_string(),
+        reason: reason.to_string(),
+        command: command.map(|parts| parts.iter().map(|s| s.to_string()).collect()),
+        risk: risk.map(|r| r.to_string()),
+    }
 }
 
 fn detect_operation(git: &Git, path: &Path) -> Result<Operation> {
@@ -383,5 +513,107 @@ mod tests {
         assert_eq!(wt.staged, 0);
         assert_eq!(wt.unstaged, 0);
         assert!(!wt.clean);
+    }
+
+    fn clean_wt() -> WorkingTree {
+        WorkingTree {
+            clean: true,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 0,
+            conflicts: vec![],
+        }
+    }
+
+    fn kinds(actions: &[NextAction]) -> Vec<&str> {
+        actions.iter().map(|a| a.kind.as_str()).collect()
+    }
+
+    #[test]
+    fn allowed_next_clean_without_upstream_is_empty() {
+        let actions = compute_allowed_next(Operation::None, &clean_wt(), &None);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn allowed_next_suggests_commit_when_changes() {
+        let wt = WorkingTree {
+            clean: false,
+            staged: 1,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        assert!(kinds(&compute_allowed_next(Operation::None, &wt, &None)).contains(&"commit"));
+    }
+
+    #[test]
+    fn allowed_next_push_pull_diverged() {
+        let ahead = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 2,
+            behind: 0,
+        });
+        assert!(
+            kinds(&compute_allowed_next(Operation::None, &clean_wt(), &ahead)).contains(&"push")
+        );
+
+        let behind = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 0,
+            behind: 3,
+        });
+        assert!(
+            kinds(&compute_allowed_next(Operation::None, &clean_wt(), &behind)).contains(&"pull")
+        );
+
+        let diverged = Some(UpstreamInfo {
+            name: "origin/main".to_string(),
+            ahead: 1,
+            behind: 1,
+        });
+        assert!(kinds(&compute_allowed_next(
+            Operation::None,
+            &clean_wt(),
+            &diverged
+        ))
+        .contains(&"integrate-diverged"));
+    }
+
+    #[test]
+    fn allowed_next_rebasing_has_continue_skip_abort_only() {
+        let actions = compute_allowed_next(Operation::Rebasing, &clean_wt(), &None);
+        let ks = kinds(&actions);
+        assert!(ks.contains(&"rebase-continue"));
+        assert!(ks.contains(&"rebase-skip"));
+        assert!(ks.contains(&"rebase-abort"));
+        // 진행 중 작업이 있으면 일반 흐름(commit/push)은 제안하지 않는다.
+        assert!(!ks.contains(&"commit"));
+        assert!(!ks.contains(&"push"));
+    }
+
+    #[test]
+    fn allowed_next_merging_with_conflicts_marks_abort_reversible() {
+        let wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflict_count: 1,
+            conflicts: vec!["f.txt".to_string()],
+        };
+        let actions = compute_allowed_next(Operation::Merging, &wt, &None);
+        let ks = kinds(&actions);
+        assert!(ks.contains(&"resolve-conflicts"));
+        assert!(ks.contains(&"merge-abort"));
+
+        let abort = actions.iter().find(|a| a.kind == "merge-abort").unwrap();
+        assert_eq!(abort.risk.as_deref(), Some("reversible"));
+        assert_eq!(
+            abort.command.as_deref(),
+            Some(["git", "merge", "--abort"].map(String::from).as_slice())
+        );
     }
 }

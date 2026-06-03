@@ -165,6 +165,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             "upstream": state.upstream,
             "working_tree": state.working_tree,
             "operation": state.operation,
+            "allowed_next": state.allowed_next,
         })),
         OutputMode::Human => {
             println!("Repository: {}", state.root.display());
@@ -199,6 +200,13 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
             }
 
             println!("Operation: {}", operation_label(state.operation));
+
+            if !state.allowed_next.is_empty() {
+                println!("Next:");
+                for next in &state.allowed_next {
+                    println!("  - {} ({})", next.kind, next.reason);
+                }
+            }
             Ok(())
         }
     }
