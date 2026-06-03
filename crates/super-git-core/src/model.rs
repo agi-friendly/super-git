@@ -129,7 +129,8 @@ pub enum WorktreeKind {
 pub struct WorktreeContext {
     pub kind: WorktreeKind,
     /// main worktree 경로(linked에서도 main을 가리킨다).
-    pub main: PathBuf,
+    /// bare-primary family에는 main worktree가 없으므로 None.
+    pub main: Option<PathBuf>,
     /// family의 전체 worktree 수(main/bare 포함).
     pub family_count: u32,
     /// linked worktree 수(main/bare 제외).

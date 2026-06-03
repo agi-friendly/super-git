@@ -180,8 +180,10 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                 wc.family_count,
                 wc.linked_count
             );
-            if wc.kind == WorktreeKind::Linked {
-                println!("  main: {}", wc.main.display());
+            if let Some(main) = &wc.main {
+                if wc.kind == WorktreeKind::Linked {
+                    println!("  main: {}", main.display());
+                }
             }
 
             match &state.head.branch {

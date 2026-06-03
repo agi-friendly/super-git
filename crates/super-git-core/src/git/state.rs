@@ -12,7 +12,7 @@ use crate::Result;
 pub fn read_state(path: &Path) -> Result<RepoState> {
     let git = Git::default();
     let root = repo_root(&git, path)?;
-    let worktree_context = read_worktree_context(&git, path, &root)?;
+    let worktree_context = read_worktree_context(&git, path)?;
     let head = read_head(&git, path)?;
     let upstream = read_upstream(&git, path)?;
     let working_tree = read_working_tree(&git, path)?;
@@ -388,7 +388,7 @@ fn absolute_git_dir(git: &Git, path: &Path) -> Result<PathBuf> {
 }
 
 /// 현재 worktree가 family에서 어떤 위치인지 요약한다.
-fn read_worktree_context(git: &Git, path: &Path, root: &Path) -> Result<WorktreeContext> {
+fn read_worktree_context(git: &Git, path: &Path) -> Result<WorktreeContext> {
     let worktrees = worktree::list_worktrees(path)?;
 
     // main 판정은 경로 비교 대신 git에게 맡긴다.
@@ -406,13 +406,12 @@ fn read_worktree_context(git: &Git, path: &Path, root: &Path) -> Result<Worktree
 
     let kind = classify_worktree_kind(is_bare, git_dir.stdout.trim(), common_dir.stdout.trim());
 
-    // main worktree 경로는 worktree list의 (bare가 아닌) 첫 항목이다.
+    // main worktree는 worktree list의 첫 항목이다. 단 첫 항목이 bare이면
+    // (bare-primary family) main worktree 자체가 없으므로 None이다.
     let main = worktrees
-        .iter()
-        .find(|wt| !wt.bare)
-        .or_else(|| worktrees.first())
-        .map(|wt| wt.path.clone())
-        .unwrap_or_else(|| root.to_path_buf());
+        .first()
+        .filter(|wt| !wt.bare)
+        .map(|wt| wt.path.clone());
 
     let family_count = worktrees.len() as u32;
     let linked_count = family_count.saturating_sub(1);

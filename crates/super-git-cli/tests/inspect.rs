@@ -458,3 +458,37 @@ fn inspect_linked_worktree_context() {
     let dir_canon = std::fs::canonicalize(dir).expect("canon dir");
     assert_eq!(main_canon, dir_canon);
 }
+
+#[test]
+fn inspect_bare_primary_worktree_has_null_main() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+
+    // 일반 repo에서 커밋을 만들고 bare로 clone한 뒤, bare에 linked worktree를 단다.
+    let src = dir.join("src");
+    std::fs::create_dir(&src).expect("mkdir src");
+    init_repo_with_commit(&src);
+    let bare = dir.join("bare.git");
+    git(
+        dir,
+        &[
+            "clone",
+            "--bare",
+            "-q",
+            src.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let wt = dir.join("wt");
+    git(
+        &bare,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "main"],
+    );
+
+    // bare-primary family의 linked worktree에서 inspect.
+    let json = inspect_json(&wt);
+    let wc = &json["data"]["worktree_context"];
+    assert_eq!(wc["kind"], "linked");
+    // bare-primary family에는 main worktree가 없으므로 null이어야 한다.
+    assert_eq!(wc["main"], serde_json::Value::Null);
+}
