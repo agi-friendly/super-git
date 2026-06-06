@@ -42,7 +42,21 @@ wrappers.
 - local undo registry provenance
 - index-only undo for staged changes
 
-## Stage 3: Safe Worktree Create Preview
+## Stage 3: Global Config And Saved Repositories
+
+- app home resolver with `SUPER_GIT_HOME` override
+- OS-specific config path from `directories::ProjectDirs`
+- `config.json` schema versioning
+- v0 config migration
+- saved repository registry by worktree family
+- `repo save`
+- registry-backed `repo list`
+- `repo forget`
+- worktree parent/name templates
+- `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
+- no shell hooks, copy patterns, or profile system
+
+## Stage 4: Safe Worktree Create Preview
 
 - preview plan for worktree creation
 - branch name validation
@@ -50,8 +64,9 @@ wrappers.
 - base branch validation
 - existing path and branch-use warnings
 - clear risk and reversibility metadata
+- target path resolved from config and frozen in the plan
 
-## Stage 4: Worktree Create/Remove Execute
+## Stage 5: Worktree Create/Remove Execute
 
 - execute validated worktree creation plans
 - execute validated worktree removal plans
@@ -59,7 +74,7 @@ wrappers.
 - require clear confirmation rules for destructive removal
 - provide undo guidance where true undo is not possible
 
-## Stage 5: Repository Profile And Dashboard
+## Stage 6: Repository Profile And Dashboard
 
 - lightweight repository profile for scale/history hints
 - repository size, commit count, initial commit, last commit, and remotes where
@@ -69,14 +84,14 @@ wrappers.
 - registered repository summaries
 - stable JSON for future UI surfaces
 
-## Stage 6: Guides For Agents
+## Stage 7: Guides For Agents
 
 - `super-git guide list`
 - conflict/rebase/worktree/super-git usage guides
 - documentation-oriented output for weaker or older coding models
 - no fake execution magic: guides teach how to use the existing safety contract
 
-## Stage 7: Desktop Prototype
+## Stage 8: Desktop Prototype
 
 - thin desktop UI over the core/CLI contracts
 - repository list
@@ -84,7 +99,7 @@ wrappers.
 - status/worktree views
 - preview/execute/undo flow visualization
 
-## Stage 8+: Integrations And Advanced Git
+## Stage 9+: Integrations And Advanced Git
 
 - Windows Explorer integration
 - macOS Finder integration

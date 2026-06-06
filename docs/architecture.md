@@ -95,6 +95,20 @@ contents.
 Registered repositories are stored in a JSON file under the OS-specific config
 directory. `super-git-core::config::store::ConfigStore` owns this storage.
 
+The next config milestone is a small global app home and saved repository
+registry, not a full user profile system. The planned direction is:
+
+- Resolve app home from `SUPER_GIT_HOME` first, then `ProjectDirs`.
+- Keep `config.json` as the v1 physical file.
+- Separate settings and saved repositories in the code model.
+- Store worktree family entries, not individual linked worktrees.
+- Use worktree templates such as `{main_path}.worktrees` and
+  `{repo_name}__{ref_slug}`.
+- Treat config as preview input, not execute authority.
+
+Shell hooks, copy patterns, and multiple profiles are out of scope until the
+core safety lifecycle has explicit preview and confirmation rules for them.
+
 ## Worktrees
 
 Worktree management remains an important differentiator. Current functionality
