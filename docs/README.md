@@ -10,6 +10,7 @@ This directory contains the current product documentation for `super-git`.
 4. [Architecture](architecture.md)
 5. [Roadmap](roadmap.md)
 6. [ADR 0001: CLI First](adr/0001-cli-first.md)
+7. [Commit messages](contributing/commit-messages.md)
 
 ## Current Source Of Truth
 
@@ -18,6 +19,7 @@ This directory contains the current product documentation for `super-git`.
 - `docs/safety-model.md` defines the active safety contract.
 - `docs/command-reference.md` describes the current CLI behavior.
 - `docs/roadmap.md` tracks planned direction.
+- `docs/contributing/commit-messages.md` defines the commit history standard.
 
 ## Internal Planning
 
