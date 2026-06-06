@@ -55,8 +55,9 @@ Implemented today:
   - restores the pre-execute index only when the current index still matches the
     execute result
   - never edits working-tree file contents
-- Supporting commands: `doctor`, `config path`, `config show`, `repo save`,
-  `repo add`, `repo list`, `status`, `wt list`
+- Supporting commands: `doctor`, `config path`, `config show`,
+  `config validate`, `config set-worktree-template`, `repo save`, `repo add`,
+  `repo list`, `status`, `wt list`
 
 ## Quick Start
 

@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::config::template::{
+    validate_config as validate_app_config, ConfigValidationReport, WorktreeTemplateUpdate,
+};
 use crate::git::command::Git;
 use crate::git::repository::validate_repository_path;
 use crate::git::worktree;
@@ -153,6 +156,13 @@ pub struct SaveRepositoryResult {
     pub added: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfigUpdateResult {
+    pub config: AppConfig,
+    pub changed: bool,
+    pub validation: ConfigValidationReport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoadedConfig {
     config: AppConfig,
@@ -222,6 +232,51 @@ impl ConfigStore {
             repository,
             requested_path,
             added,
+        })
+    }
+
+    pub fn validate(&self) -> Result<ConfigValidationReport> {
+        let config = self.load()?;
+        Ok(validate_app_config(&config))
+    }
+
+    pub fn set_worktree_template(
+        &self,
+        update: WorktreeTemplateUpdate,
+    ) -> Result<ConfigUpdateResult> {
+        let file_exists = self.path.exists();
+        let mut loaded = self.load_with_metadata()?;
+        let before = loaded.config.settings.worktree.clone();
+
+        if let Some(parent_template) = update.parent_template {
+            loaded.config.settings.worktree.parent_template = parent_template;
+        }
+        if let Some(name_template) = update.name_template {
+            loaded.config.settings.worktree.name_template = name_template;
+        }
+        if let Some(ref_slug_algorithm) = update.ref_slug_algorithm {
+            loaded.config.settings.worktree.ref_slug_algorithm = ref_slug_algorithm;
+        }
+
+        let validation = validate_app_config(&loaded.config);
+        if let Some(issue) = validation.issues.first() {
+            return Err(SuperGitError::ConfigValidationFailed {
+                field: issue.field.clone(),
+                code: issue.code.clone(),
+                message: issue.message.clone(),
+            });
+        }
+
+        let changed =
+            !file_exists || loaded.needs_save || loaded.config.settings.worktree != before;
+        if changed {
+            self.save(&loaded.config)?;
+        }
+
+        Ok(ConfigUpdateResult {
+            config: loaded.config,
+            changed,
+            validation,
         })
     }
 }

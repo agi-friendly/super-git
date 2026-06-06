@@ -23,6 +23,13 @@ pub enum SuperGitError {
     )]
     UnsupportedConfigSchemaVersion { version: u64, current: u32 },
 
+    #[error("config validation failed: {code} ({field}: {message})")]
+    ConfigValidationFailed {
+        field: String,
+        code: String,
+        message: String,
+    },
+
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 

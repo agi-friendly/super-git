@@ -29,6 +29,8 @@ Current commands:
 - `super-git doctor`
 - `super-git config path`
 - `super-git config show`
+- `super-git config validate`
+- `super-git config set-worktree-template [options]`
 - `super-git repo save [path]`
 - `super-git repo add <path>`
 - `super-git repo list`
@@ -102,7 +104,8 @@ storage.
 The app home now resolves from `SUPER_GIT_HOME` first, then from the
 OS-specific `ProjectDirs` config location. `super-git config path` reports the
 resolved home, source, and config file. `super-git config show` reports the same
-location plus the currently loaded config.
+location plus the currently loaded config. `super-git config validate` reports
+validation issues without writing the file.
 
 `config.json` uses schema version 1:
 
@@ -142,12 +145,21 @@ so saving the main worktree and a linked worktree deduplicates to one entry.
 Bare-primary families are supported with `kind: "bare_worktree_family"` and
 `main_worktree: null`.
 
-The next config milestones are template editing and repository removal, not a
-full user profile system. The planned direction is:
+Worktree template settings can be edited with
+`config set-worktree-template`. Template variables use braces, not shell syntax.
+C5 supports `{main_path}`, `{repo_name}`, and `{ref_slug}` plus the
+`path_safe_v1` slug algorithm name. The command validates field-specific rules
+before saving:
 
-- Use worktree templates such as `{main_path}.worktrees` and
-  `{repo_name}__{ref_slug}`.
-- Treat config as preview input, not execute authority.
+- `parent_template` must contain `{main_path}` exactly once and must not contain
+  `{ref_slug}` or a literal `..` path component.
+- `name_template` must contain `{ref_slug}` exactly once and must not contain
+  `{main_path}` or path separators.
+- `ref_slug_algorithm` currently supports only `path_safe_v1`.
+
+Config is preview input, not execute authority. Future worktree preview commands
+must resolve and freeze paths into plans; execute should not re-expand template
+strings as trusted instructions.
 
 Shell hooks, copy patterns, and multiple profiles are out of scope until the
 core safety lifecycle has explicit preview and confirmation rules for them.

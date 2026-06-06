@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::error::ErrorKind;
 use clap::Parser;
 use super_git_core::config::store::{default_app_home, ConfigStore};
+use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
 use super_git_core::git::{execute, preview, state, status, undo, worktree};
 
@@ -100,6 +101,25 @@ fn run_config(mode: OutputMode, command: ConfigCommands) -> Result<()> {
         ConfigCommands::Show => {
             let config = store.load().context("could not read config file")?;
             output::print_config_show(mode, &app_home, &config)
+        }
+        ConfigCommands::Validate => {
+            let report = store.validate().context("could not validate config")?;
+            output::print_config_validate(mode, &app_home, &report)
+        }
+        ConfigCommands::SetWorktreeTemplate {
+            parent_template,
+            name_template,
+            ref_slug_algorithm,
+        } => {
+            let update = WorktreeTemplateUpdate {
+                parent_template,
+                name_template,
+                ref_slug_algorithm,
+            };
+            let result = store
+                .set_worktree_template(update)
+                .context("could not update worktree template config")?;
+            output::print_config_update(mode, &app_home, &result)
         }
     }
 }

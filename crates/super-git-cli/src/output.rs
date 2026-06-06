@@ -3,7 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::config::store::{AppConfig, AppHome, SavedRepository};
+use super_git_core::config::store::{AppConfig, AppHome, ConfigUpdateResult, SavedRepository};
+use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
     WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
@@ -130,6 +131,66 @@ pub fn print_config_show(mode: OutputMode, app_home: &AppHome, config: &AppConfi
                     repo.git_common_dir.display()
                 );
             }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_config_validate(
+    mode: OutputMode,
+    app_home: &AppHome,
+    report: &ConfigValidationReport,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "location": app_home,
+            "valid": report.valid,
+            "issues": report.issues,
+        })),
+        OutputMode::Human => {
+            println!("super-git config validate");
+            println!("Config: {}", app_home.config_file.display());
+            if report.valid {
+                println!("Status: valid");
+            } else {
+                println!("Status: invalid");
+                for issue in &report.issues {
+                    println!("  {}: {} ({})", issue.field, issue.message, issue.code);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_config_update(
+    mode: OutputMode,
+    app_home: &AppHome,
+    result: &ConfigUpdateResult,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "location": app_home,
+            "config": result.config,
+            "changed": result.changed,
+            "validation": result.validation,
+        })),
+        OutputMode::Human => {
+            println!("super-git config set-worktree-template");
+            println!("Config: {}", app_home.config_file.display());
+            println!("Changed: {}", result.changed);
+            println!(
+                "Parent template: {}",
+                result.config.settings.worktree.parent_template
+            );
+            println!(
+                "Name template: {}",
+                result.config.settings.worktree.name_template
+            );
+            println!(
+                "Ref slug algorithm: {}",
+                result.config.settings.worktree.ref_slug_algorithm
+            );
             Ok(())
         }
     }

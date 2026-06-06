@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "super-git")]
@@ -84,6 +84,30 @@ pub enum ConfigCommands {
 
     /// Show the resolved config location and loaded config.
     Show,
+
+    /// Validate the loaded config without writing it.
+    Validate,
+
+    /// Set worktree path/name template settings.
+    #[command(group(
+        ArgGroup::new("worktree_template")
+            .required(true)
+            .multiple(true)
+            .args(["parent_template", "name_template", "ref_slug_algorithm"])
+    ))]
+    SetWorktreeTemplate {
+        /// Template for the parent directory that contains linked worktrees.
+        #[arg(long)]
+        parent_template: Option<String>,
+
+        /// Template for the linked worktree directory name.
+        #[arg(long)]
+        name_template: Option<String>,
+
+        /// Slug algorithm used for ref names.
+        #[arg(long)]
+        ref_slug_algorithm: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

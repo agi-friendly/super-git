@@ -53,13 +53,17 @@ Implemented:
 - v0 config migration to v1 in memory
 - saved repository registry by worktree family
 - registry-backed `repo list`
+- worktree parent/name templates
+- `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
+- `config validate`
+- `config set-worktree-template`
 
 Next:
 
 - `repo forget`
-- worktree parent/name templates
-- `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
 - no shell hooks, copy patterns, or profile system
+- actual `{ref_slug}` rendering and target path collision checks in worktree
+  create preview
 
 ## Stage 4: Safe Worktree Create Preview
 

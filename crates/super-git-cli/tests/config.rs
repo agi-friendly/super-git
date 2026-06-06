@@ -64,6 +64,13 @@ fn canonical_string(path: &Path) -> String {
     path_string(path.canonicalize().expect("canonical path"))
 }
 
+fn read_config_file(app_home: &Path) -> serde_json::Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file")
+}
+
 #[test]
 fn config_path_uses_super_git_home_without_creating_config_file() {
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -204,6 +211,323 @@ fn config_show_uses_super_git_home_and_returns_current_config() {
     assert!(
         !app_home.join("config.json").exists(),
         "config show must not create config.json when it is missing"
+    );
+}
+
+#[test]
+fn config_validate_reports_default_config_valid() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let json = json_output(
+        super_git(tmp.path())
+            .args(["config", "validate"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config validate"),
+    );
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["valid"], true);
+    assert_eq!(json["data"]["issues"], serde_json::json!([]));
+    assert!(
+        !app_home.join("config.json").exists(),
+        "config validate must not create config.json"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_updates_v1_config() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let set = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+                "--name-template",
+                "{repo_name}--{ref_slug}",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(set["ok"], true);
+    assert_eq!(set["data"]["changed"], true);
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["parent_template"],
+        "{main_path}.trees"
+    );
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["name_template"],
+        "{repo_name}--{ref_slug}"
+    );
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["ref_slug_algorithm"],
+        "path_safe_v1"
+    );
+
+    let raw_config = read_config_file(&app_home);
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["settings"]["worktree"]["parent_template"],
+        "{main_path}.trees"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_partial_update_preserves_omitted_fields() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let set = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(set["ok"], true);
+    assert_eq!(set["data"]["changed"], true);
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["parent_template"],
+        "{main_path}.trees"
+    );
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["name_template"],
+        "{repo_name}__{ref_slug}"
+    );
+    assert_eq!(
+        set["data"]["config"]["settings"]["worktree"]["ref_slug_algorithm"],
+        "path_safe_v1"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_default_value_creates_missing_config_file() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let set = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.worktrees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(set["ok"], true);
+    assert_eq!(set["data"]["changed"], true);
+    assert!(
+        app_home.join("config.json").exists(),
+        "set-worktree-template should persist explicit default settings"
+    );
+
+    let raw_config = read_config_file(&app_home);
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["settings"]["worktree"]["parent_template"],
+        "{main_path}.worktrees"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_idempotent_update_reports_unchanged() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let first = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run first config set-worktree-template"),
+    );
+    let second = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run second config set-worktree-template"),
+    );
+
+    assert_eq!(first["data"]["changed"], true);
+    assert_eq!(second["ok"], true);
+    assert_eq!(second["data"]["changed"], false);
+}
+
+#[test]
+fn config_set_worktree_template_requires_at_least_one_option() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args(["config", "set-worktree-template"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("required arguments were not provided")));
+    assert!(
+        !app_home.join("config.json").exists(),
+        "parse failures must not write config.json"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_rejects_unknown_variable() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--name-template",
+                "{repo_name}__{branch}",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unknown_template_variable")));
+    assert!(
+        !app_home.join("config.json").exists(),
+        "invalid template updates must not write config.json"
+    );
+}
+
+#[test]
+fn config_set_worktree_template_rejects_invalid_update_without_rewriting_existing_config() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run initial config set-worktree-template"),
+    );
+    let before = std::fs::read_to_string(app_home.join("config.json")).expect("read config file");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--name-template",
+                "{repo_name}/{ref_slug}",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run invalid config set-worktree-template"),
+    );
+    let after = std::fs::read_to_string(app_home.join("config.json")).expect("read config file");
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("path_separator_in_name_template")));
+    assert_eq!(
+        after, before,
+        "invalid template updates must leave existing config untouched"
+    );
+}
+
+#[test]
+fn config_validate_reports_invalid_manual_template() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    std::fs::write(
+        app_home.join("config.json"),
+        r#"{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{branch}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": []
+}"#,
+    )
+    .expect("write config");
+
+    let json = json_output(
+        super_git(tmp.path())
+            .args(["config", "validate"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config validate"),
+    );
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["valid"], false);
+    assert_eq!(
+        json["data"]["issues"][0]["field"],
+        "settings.worktree.name_template"
+    );
+    assert_eq!(
+        json["data"]["issues"][0]["code"],
+        "unknown_template_variable"
     );
 }
 
@@ -544,6 +868,55 @@ fn repo_add_migrates_legacy_v0_config_to_v1_on_save() {
 }
 
 #[test]
+fn config_set_worktree_template_migrates_legacy_v0_config_to_v1_on_save() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": repo }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(app_home.join("config.json"), legacy).expect("write legacy config");
+
+    let set = json_output(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--name-template",
+                "{repo_name}--{ref_slug}",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(set["ok"], true);
+    assert_eq!(set["data"]["changed"], true);
+    assert_eq!(
+        set["data"]["config"]["repositories"][0]["kind"],
+        "worktree_family"
+    );
+
+    let raw_config = read_config_file(&app_home);
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["settings"]["worktree"]["name_template"],
+        "{repo_name}--{ref_slug}"
+    );
+    assert_eq!(raw_config["repositories"][0]["kind"], "worktree_family");
+    assert!(
+        raw_config["repositories"][0].get("path").is_none(),
+        "template updates should rewrite migrated legacy entries to v1 shape"
+    );
+}
+
+#[test]
 fn config_show_migrates_legacy_v0_config_in_memory() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");
@@ -805,6 +1178,48 @@ fn config_show_rejects_unknown_future_schema_version() {
             .as_str()
             .unwrap_or_default()
             .contains("unsupported config schema version: 999")));
+}
+
+#[test]
+fn config_set_worktree_template_rejects_unknown_future_schema_without_rewriting() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let config_file = app_home.join("config.json");
+    let future = r#"{
+  "schema_version": 999,
+  "settings": {},
+  "repositories": []
+}"#;
+    std::fs::write(&config_file, future).expect("write future config");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args([
+                "config",
+                "set-worktree-template",
+                "--parent-template",
+                "{main_path}.trees",
+            ])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config set-worktree-template"),
+    );
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported config schema version: 999")));
+    assert_eq!(
+        std::fs::read_to_string(config_file).expect("read future config"),
+        future,
+        "future schema files must not be rewritten"
+    );
 }
 
 #[test]

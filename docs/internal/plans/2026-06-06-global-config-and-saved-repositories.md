@@ -1,6 +1,6 @@
 # Global Config And Saved Repositories Design
 
-Status: planned
+Status: implemented through C5-D; C5-E remains planned
 
 This design inserts a small global configuration layer before worktree creation
 preview. The goal is not to build a full profile system. The goal is to give
@@ -134,6 +134,18 @@ Supported variables for C5:
 actual worktree preview implementation should enforce it before creating a
 plan.
 
+C5-D validates template structure before saving:
+
+- Variables must use brace syntax such as `{ref_slug}`.
+- Shell-style `$REF` and `${REF}` syntax is rejected.
+- `parent_template` must include `{main_path}` exactly once and must not include
+  `{ref_slug}` or a literal `..` path component.
+- `name_template` must include `{ref_slug}` exactly once and must not include
+  `{main_path}` or path separators.
+- `ref_slug_algorithm` currently accepts only `path_safe_v1`.
+- Invalid `config set-worktree-template` updates fail without rewriting the
+  existing config file.
+
 `path_safe_v1` should account for:
 
 - slash and backslash separators
@@ -188,7 +200,7 @@ required in v1. They are useful for dashboards, but they can add avoidable
 formatting and write-on-read questions. They can be added later when repository
 profile or dashboard work needs them.
 
-## Planned CLI Surface
+## CLI Surface
 
 Planned commands:
 
@@ -208,11 +220,12 @@ super-git config set-worktree-template \
 
 Notes:
 
+- `config path`, `config show`, `config validate`, `repo save`, `repo list`, and
+  `config set-worktree-template` are implemented.
 - Existing `repo add` should remain as a compatibility alias or wrapper.
 - `repo forget` should remove an entry from the registry only. It must not
   delete repository or worktree files.
-- `config validate` can land with template validation instead of the first path
-  resolver slice.
+- `repo forget` is still planned.
 
 ## Safety Rules
 
@@ -271,7 +284,8 @@ C5-D feat(config): set and validate worktree templates
 C5-E feat(repo): forget saved repositories
 ```
 
-C5-E may move later if the first implementation needs a smaller scope.
+C5-0 through C5-D are implemented. C5-E may move later if the first
+implementation needs a smaller scope.
 
 ## Out Of Scope
 

@@ -34,13 +34,14 @@ super-git doctor
 
 Reports the system Git version, OS, architecture, and config path.
 
-## `config path` / `config show`
+## `config path` / `config show` / `config validate`
 
 Reports the resolved `super-git` app home and config file.
 
 ```bash
 super-git config path
 super-git config show
+super-git config validate
 ```
 
 `config path` returns the app home, resolution source, and `config.json` path.
@@ -70,8 +71,77 @@ with a JSON error envelope instead of being partially interpreted.
 Legacy repository paths that no longer resolve to Git repositories are skipped
 during migration because they cannot be assigned a worktree-family identity.
 
+`config validate` validates the loaded config without writing it. If the config
+file is missing, it validates the default in-memory v1 config and does not create
+`config.json`.
+
+Invalid user-editable settings are reported as data, not as a command failure:
+
+```json
+{
+  "valid": false,
+  "issues": [
+    {
+      "field": "settings.worktree.name_template",
+      "code": "unknown_template_variable",
+      "message": "unknown template variable {branch}"
+    }
+  ]
+}
+```
+
 Set `SUPER_GIT_HOME` to isolate tests, CI, dogfooding, or subagent work from the
 real user config. Without it, `super-git` uses the OS-specific config location.
+
+## `config set-worktree-template`
+
+Updates worktree path template settings in the global config.
+
+```bash
+super-git config set-worktree-template \
+  --parent-template '{main_path}.worktrees' \
+  --name-template '{repo_name}__{ref_slug}' \
+  --ref-slug-algorithm path_safe_v1
+```
+
+At least one option is required. Omitted fields are preserved.
+
+Successful updates write the v1 config shape and return the updated config:
+
+```json
+{
+  "changed": true,
+  "config": {
+    "schema_version": 1,
+    "settings": {
+      "worktree": {
+        "parent_template": "{main_path}.worktrees",
+        "name_template": "{repo_name}__{ref_slug}",
+        "ref_slug_algorithm": "path_safe_v1"
+      }
+    },
+    "repositories": []
+  },
+  "validation": {
+    "valid": true,
+    "issues": []
+  }
+}
+```
+
+Validation rules:
+
+- Template variables use braces, such as `{ref_slug}`. Shell-style `$REF` or
+  `${REF}` syntax is rejected.
+- Supported variables are `{main_path}`, `{repo_name}`, and `{ref_slug}`.
+- `parent_template` must contain `{main_path}` exactly once and must not contain
+  `{ref_slug}` or a literal `..` path component.
+- `name_template` must contain `{ref_slug}` exactly once and must not contain
+  `{main_path}`, `/`, or `\`.
+- `ref_slug_algorithm` currently supports only `path_safe_v1`.
+
+Invalid updates fail with `{ "ok": false, "error": ... }` and do not rewrite the
+existing config file.
 
 ## `inspect [path]`
 
