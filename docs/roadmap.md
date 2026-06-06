@@ -44,10 +44,15 @@ wrappers.
 
 ## Stage 3: Global Config And Saved Repositories
 
+Implemented:
+
 - app home resolver with `SUPER_GIT_HOME` override
 - OS-specific config path from `directories::ProjectDirs`
-- `config.json` schema versioning
-- v0 config migration
+- `config.json` schema version 1
+- v0 config migration to v1 in memory
+
+Next:
+
 - saved repository registry by worktree family
 - `repo save`
 - registry-backed `repo list`

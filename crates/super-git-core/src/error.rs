@@ -15,6 +15,14 @@ pub enum SuperGitError {
     #[error("SUPER_GIT_HOME must be an absolute path: {0}")]
     RelativeSuperGitHome(PathBuf),
 
+    #[error("invalid config schema version: {0}")]
+    InvalidConfigSchemaVersion(String),
+
+    #[error(
+        "unsupported_config_schema: unsupported config schema version: {version} (current: {current})"
+    )]
+    UnsupportedConfigSchemaVersion { version: u64, current: u32 },
+
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 

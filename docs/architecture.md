@@ -103,11 +103,29 @@ OS-specific `ProjectDirs` config location. `super-git config path` reports the
 resolved home, source, and config file. `super-git config show` reports the same
 location plus the currently loaded config.
 
-The next config milestones are a versioned config schema and saved repository
-registry, not a full user profile system. The planned direction is:
+`config.json` uses schema version 1:
 
-- Keep `config.json` as the v1 physical file.
-- Separate settings and saved repositories in the code model.
+```json
+{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{ref_slug}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": []
+}
+```
+
+Legacy v0 files without `schema_version` are migrated in memory. Saving always
+writes the current v1 shape using the existing atomic write pattern. Unknown
+future schema versions fail instead of being partially interpreted.
+
+The next config milestones are a saved repository registry and template editing,
+not a full user profile system. The planned direction is:
+
 - Store worktree family entries, not individual linked worktrees.
 - Use worktree templates such as `{main_path}.worktrees` and
   `{repo_name}__{ref_slug}`.

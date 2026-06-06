@@ -46,8 +46,27 @@ super-git config show
 `config path` returns the app home, resolution source, and `config.json` path.
 It does not create the config file.
 
-`config show` returns the same location plus the currently loaded config. If no
-config file exists yet, the command returns the empty default config.
+`config show` returns the same location plus the currently loaded v1 config. If
+no config file exists yet, the command returns the empty default config without
+creating a file.
+
+```json
+{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{ref_slug}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": []
+}
+```
+
+Existing v0 files shaped like `{ "repositories": [...] }` are migrated in memory.
+The next write saves the current v1 shape. Unknown future schema versions fail
+with a JSON error envelope instead of being partially interpreted.
 
 Set `SUPER_GIT_HOME` to isolate tests, CI, dogfooding, or subagent work from the
 real user config. Without it, `super-git` uses the OS-specific config location.
@@ -147,4 +166,4 @@ super-git repo list
 
 The registry is stored under the resolved app home. `SUPER_GIT_HOME` overrides
 the OS-specific config location for tests, CI, dogfooding, and isolated agent
-work.
+work. Writes always persist the v1 config shape.

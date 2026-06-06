@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::config::store::{AppConfig, AppHome, AppHomeSource};
+use super_git_core::config::store::{AppConfig, AppHome};
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, Repository, RiskLevel, StatusOutput,
     UndoResult, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
@@ -103,7 +103,7 @@ pub fn print_config_path(mode: OutputMode, app_home: &AppHome) -> Result<()> {
         OutputMode::Human => {
             println!("super-git config path");
             println!("Home: {}", app_home.home.display());
-            println!("Source: {}", app_home_source_label(app_home.source));
+            println!("Source: {}", app_home.source.as_str());
             println!("Config: {}", app_home.config_file.display());
             Ok(())
         }
@@ -119,7 +119,7 @@ pub fn print_config_show(mode: OutputMode, app_home: &AppHome, config: &AppConfi
         OutputMode::Human => {
             println!("super-git config");
             println!("Home: {}", app_home.home.display());
-            println!("Source: {}", app_home_source_label(app_home.source));
+            println!("Source: {}", app_home.source.as_str());
             println!("Config: {}", app_home.config_file.display());
             println!("Repositories: {}", config.repositories.len());
             for (index, repo) in config.repositories.iter().enumerate() {
@@ -144,13 +144,6 @@ pub fn print_repo_add(mode: OutputMode, path: &Path, added: bool) -> Result<()> 
             }
             Ok(())
         }
-    }
-}
-
-fn app_home_source_label(source: AppHomeSource) -> &'static str {
-    match source {
-        AppHomeSource::EnvSuperGitHome => "env:SUPER_GIT_HOME",
-        AppHomeSource::ProjectDirs => "project_dirs",
     }
 }
 

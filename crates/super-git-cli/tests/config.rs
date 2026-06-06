@@ -177,6 +177,19 @@ fn config_show_uses_super_git_home_and_returns_current_config() {
         json["data"]["config"]["repositories"],
         serde_json::json!([])
     );
+    assert_eq!(json["data"]["config"]["schema_version"], 1);
+    assert_eq!(
+        json["data"]["config"]["settings"]["worktree"]["parent_template"],
+        "{main_path}.worktrees"
+    );
+    assert_eq!(
+        json["data"]["config"]["settings"]["worktree"]["name_template"],
+        "{repo_name}__{ref_slug}"
+    );
+    assert_eq!(
+        json["data"]["config"]["settings"]["worktree"]["ref_slug_algorithm"],
+        "path_safe_v1"
+    );
     assert!(
         !app_home.join("config.json").exists(),
         "config show must not create config.json when it is missing"
@@ -242,4 +255,176 @@ fn repo_add_and_list_use_super_git_home() {
         list["data"]["repositories"][0]["path"],
         path_string(normalized_repo)
     );
+
+    let show = json_output(
+        super_git(tmp.path())
+            .args(["config", "show"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config show"),
+    );
+
+    assert_eq!(show["ok"], true);
+    assert_eq!(show["data"]["config"]["schema_version"], 1);
+    assert_eq!(
+        show["data"]["config"]["repositories"][0]["path"],
+        path_string(repo.canonicalize().expect("canonical repo path"))
+    );
+
+    let raw_config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file");
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["settings"]["worktree"]["parent_template"],
+        "{main_path}.worktrees"
+    );
+}
+
+#[test]
+fn repo_add_migrates_legacy_v0_config_to_v1_on_save() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    std::fs::write(
+        app_home.join("config.json"),
+        r#"{
+  "repositories": []
+}"#,
+    )
+    .expect("write legacy config");
+
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    let normalized_repo = repo.canonicalize().expect("canonical repo path");
+
+    let add = json_output(
+        super_git(tmp.path())
+            .args(["repo", "add"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo add"),
+    );
+
+    assert_eq!(add["ok"], true);
+
+    let raw_config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file");
+
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["settings"]["worktree"]["name_template"],
+        "{repo_name}__{ref_slug}"
+    );
+    assert_eq!(
+        raw_config["repositories"][0]["path"],
+        path_string(normalized_repo)
+    );
+}
+
+#[test]
+fn config_show_migrates_legacy_v0_config_in_memory() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let config_file = app_home.join("config.json");
+    let legacy = r#"{
+  "repositories": [
+    { "path": "/repo/one" }
+  ]
+}"#;
+    std::fs::write(&config_file, legacy).expect("write legacy config");
+
+    let json = json_output(
+        super_git(tmp.path())
+            .args(["config", "show"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config show"),
+    );
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["config"]["schema_version"], 1);
+    assert_eq!(
+        json["data"]["config"]["repositories"][0]["path"],
+        "/repo/one"
+    );
+    assert_eq!(
+        std::fs::read_to_string(config_file).expect("read legacy config"),
+        legacy,
+        "config show must not rewrite legacy files"
+    );
+}
+
+#[test]
+fn config_show_rejects_unknown_future_schema_version() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    std::fs::write(
+        app_home.join("config.json"),
+        r#"{
+  "schema_version": 999,
+  "settings": {},
+  "repositories": []
+}"#,
+    )
+    .expect("write future config");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args(["config", "show"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config show"),
+    );
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported config schema version: 999")));
+}
+
+#[test]
+fn repo_list_rejects_unknown_future_schema_version() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    std::fs::write(
+        app_home.join("config.json"),
+        r#"{
+  "schema_version": 999,
+  "settings": {},
+  "repositories": []
+}"#,
+    )
+    .expect("write future config");
+
+    let json = error_json(
+        super_git(tmp.path())
+            .args(["repo", "list"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo list"),
+    );
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported_config_schema")));
 }
