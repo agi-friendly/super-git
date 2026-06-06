@@ -34,6 +34,7 @@ Current commands:
 - `super-git repo save [path]`
 - `super-git repo add <path>`
 - `super-git repo list`
+- `super-git repo forget <id-or-name-or-path>`
 - `super-git status [path]`
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
@@ -144,6 +145,11 @@ so saving the main worktree and a linked worktree deduplicates to one entry.
 `repo add <path>` remains as a compatibility alias for `repo save <path>`.
 Bare-primary families are supported with `kind: "bare_worktree_family"` and
 `main_worktree: null`.
+
+`repo forget <id-or-name-or-path>` removes only the saved registry entry. It
+never deletes repository directories, linked worktrees, bare Git directories, or
+working-tree files. Selectors match full repository id, path-like selectors, or
+unique repository name. Ambiguous names fail without rewriting the config file.
 
 Worktree template settings can be edited with
 `config set-worktree-template`. Template variables use braces, not shell syntax.

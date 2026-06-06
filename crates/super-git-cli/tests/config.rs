@@ -620,6 +620,337 @@ fn repo_save_and_list_use_super_git_home() {
 }
 
 #[test]
+fn repo_forget_by_id_removes_registry_entry_without_deleting_files() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+    let repository = save["data"]["repository"].clone();
+    let id = repository["id"].as_str().expect("repository id");
+
+    let forget = json_output(
+        super_git(tmp.path())
+            .args(["repo", "forget", id])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], true);
+    assert_eq!(forget["data"]["removed"], true);
+    assert_eq!(forget["data"]["matched_by"], "id");
+    assert_eq!(forget["data"]["remaining_repositories"], 0);
+    assert_eq!(forget["data"]["registry_only"], true);
+    assert_eq!(forget["data"]["filesystem_deleted"], false);
+    assert_eq!(forget["data"]["repository"], repository);
+    assert!(repo.exists(), "repo forget must not delete the repository");
+    assert!(
+        repo.join(".git").exists(),
+        "repo forget must not delete .git"
+    );
+
+    let list = json_output(
+        super_git(tmp.path())
+            .args(["repo", "list"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo list"),
+    );
+    assert_eq!(
+        list["data"]["repositories"],
+        serde_json::json!([]),
+        "forgotten repository should disappear from the registry"
+    );
+}
+
+#[test]
+fn repo_forget_by_unique_name_removes_registry_entry() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+
+    let forget = json_output(
+        super_git(tmp.path())
+            .args(["repo", "forget", "repo"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], true);
+    assert_eq!(forget["data"]["matched_by"], "name");
+    assert_eq!(forget["data"]["repository"], save["data"]["repository"]);
+    assert_eq!(
+        read_config_file(&app_home)["repositories"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn repo_forget_by_linked_worktree_path_removes_family_entry_only() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let main = tmp.path().join("repo");
+    std::fs::create_dir(&main).expect("create repo dir");
+    init_repo_with_commit(&main);
+    let linked = tmp.path().join("repo-feature");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&main)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+    let forget = json_output(
+        super_git(tmp.path())
+            .args(["repo", "forget"])
+            .arg(&linked)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], true);
+    assert_eq!(forget["data"]["repository"], save["data"]["repository"]);
+    assert_eq!(forget["data"]["matched_by"], "path");
+    assert_eq!(forget["data"]["registry_only"], true);
+    assert_eq!(forget["data"]["filesystem_deleted"], false);
+    assert!(main.exists(), "main worktree must remain on disk");
+    assert!(linked.exists(), "linked worktree must remain on disk");
+    assert_eq!(
+        read_config_file(&app_home)["repositories"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn repo_forget_by_repository_subdir_path_removes_family_entry() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let subdir = repo.join("nested");
+    std::fs::create_dir(&subdir).expect("create nested dir");
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+    let forget = json_output(
+        super_git(tmp.path())
+            .args(["repo", "forget"])
+            .arg(&subdir)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], true);
+    assert_eq!(forget["data"]["matched_by"], "path");
+    assert_eq!(forget["data"]["repository"], save["data"]["repository"]);
+    assert!(
+        subdir.exists(),
+        "repo forget must not delete subdirectories"
+    );
+    assert_eq!(
+        read_config_file(&app_home)["repositories"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn repo_forget_rejects_ambiguous_name_without_rewriting_config() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let first_parent = tmp.path().join("one");
+    let second_parent = tmp.path().join("two");
+    std::fs::create_dir(&first_parent).expect("create first parent");
+    std::fs::create_dir(&second_parent).expect("create second parent");
+    let first = first_parent.join("repo");
+    let second = second_parent.join("repo");
+    std::fs::create_dir(&first).expect("create first repo");
+    std::fs::create_dir(&second).expect("create second repo");
+    init_repo_with_commit(&first);
+    init_repo_with_commit(&second);
+
+    json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&first)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run first repo save"),
+    );
+    json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&second)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run second repo save"),
+    );
+    let before = std::fs::read_to_string(app_home.join("config.json")).expect("read config file");
+
+    let forget = error_json(
+        super_git(tmp.path())
+            .args(["repo", "forget", "repo"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+    let after = std::fs::read_to_string(app_home.join("config.json")).expect("read config file");
+
+    assert_eq!(forget["ok"], false);
+    assert!(forget["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("ambiguous_repository_target")));
+    assert_eq!(
+        after, before,
+        "ambiguous forget must not rewrite config.json"
+    );
+}
+
+#[test]
+fn repo_forget_missing_target_fails_without_creating_config_file() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let forget = error_json(
+        super_git(tmp.path())
+            .args(["repo", "forget", "missing"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], false);
+    assert!(forget["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("repository_not_found")));
+    assert!(
+        !app_home.join("config.json").exists(),
+        "missing forget must not create config.json"
+    );
+}
+
+#[test]
+fn repo_forget_migrates_legacy_v0_config_to_v1_on_success() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": repo }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(app_home.join("config.json"), legacy).expect("write legacy config");
+
+    let forget = json_output(
+        super_git(tmp.path())
+            .args(["repo", "forget"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], true);
+    let raw_config = read_config_file(&app_home);
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(raw_config["repositories"], serde_json::json!([]));
+}
+
+#[test]
+fn repo_forget_rejects_unknown_future_schema_without_rewriting() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let config_file = app_home.join("config.json");
+    let future = r#"{
+  "schema_version": 999,
+  "settings": {},
+  "repositories": []
+}"#;
+    std::fs::write(&config_file, future).expect("write future config");
+
+    let forget = error_json(
+        super_git(tmp.path())
+            .args(["repo", "forget", "anything"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+
+    assert_eq!(forget["ok"], false);
+    assert!(forget["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported config schema version: 999")));
+    assert_eq!(
+        std::fs::read_to_string(config_file).expect("read future config"),
+        future,
+        "future schema files must not be rewritten"
+    );
+}
+
+#[test]
 fn repo_add_is_compatibility_alias_for_save() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");

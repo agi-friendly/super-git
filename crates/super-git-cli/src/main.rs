@@ -146,6 +146,12 @@ fn run_repo(mode: OutputMode, command: RepoCommands) -> Result<()> {
                 .with_context(|| format!("could not save repository {}", path.display()))?;
             output::print_repo_save(mode, &result.repository, result.added)
         }
+        RepoCommands::Forget { target } => {
+            let result = store
+                .forget_repository(&target)
+                .with_context(|| format!("could not forget repository {target}"))?;
+            output::print_repo_forget(mode, &result)
+        }
         RepoCommands::List => {
             let config = store.load().context("could not read config file")?;
             output::print_repo_list(mode, &config.repositories)

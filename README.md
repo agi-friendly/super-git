@@ -57,7 +57,7 @@ Implemented today:
   - never edits working-tree file contents
 - Supporting commands: `doctor`, `config path`, `config show`,
   `config validate`, `config set-worktree-template`, `repo save`, `repo add`,
-  `repo list`, `status`, `wt list`
+  `repo list`, `repo forget`, `status`, `wt list`
 
 ## Quick Start
 

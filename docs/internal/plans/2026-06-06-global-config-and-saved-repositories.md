@@ -1,6 +1,6 @@
 # Global Config And Saved Repositories Design
 
-Status: implemented through C5-D; C5-E remains planned
+Status: implemented through C5-E
 
 This design inserts a small global configuration layer before worktree creation
 preview. The goal is not to build a full profile system. The goal is to give
@@ -220,12 +220,11 @@ super-git config set-worktree-template \
 
 Notes:
 
-- `config path`, `config show`, `config validate`, `repo save`, `repo list`, and
-  `config set-worktree-template` are implemented.
+- `config path`, `config show`, `config validate`, `repo save`, `repo list`,
+  `repo forget`, and `config set-worktree-template` are implemented.
 - Existing `repo add` should remain as a compatibility alias or wrapper.
 - `repo forget` should remove an entry from the registry only. It must not
   delete repository or worktree files.
-- `repo forget` is still planned.
 
 ## Safety Rules
 
@@ -284,8 +283,7 @@ C5-D feat(config): set and validate worktree templates
 C5-E feat(repo): forget saved repositories
 ```
 
-C5-0 through C5-D are implemented. C5-E may move later if the first
-implementation needs a smaller scope.
+C5-0 through C5-E are implemented.
 
 ## Out Of Scope
 

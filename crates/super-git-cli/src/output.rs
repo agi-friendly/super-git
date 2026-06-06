@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::config::store::{AppConfig, AppHome, ConfigUpdateResult, SavedRepository};
+use super_git_core::config::store::{
+    AppConfig, AppHome, ConfigUpdateResult, ForgetRepositoryResult, SavedRepository,
+};
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
@@ -232,6 +234,31 @@ pub fn print_repo_add(
             "added": added,
         })),
         OutputMode::Human => print_repo_save(mode, repository, added),
+    }
+}
+
+pub fn print_repo_forget(mode: OutputMode, result: &ForgetRepositoryResult) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "target": result.target,
+            "repository": result.repository,
+            "removed": result.removed,
+            "matched_by": result.matched_by,
+            "remaining_repositories": result.remaining_repositories,
+            "registry_only": result.registry_only,
+            "filesystem_deleted": result.filesystem_deleted,
+        })),
+        OutputMode::Human => {
+            println!(
+                "Forgot repository family: {} ({})",
+                result.repository.name, result.repository.id
+            );
+            println!("Matched by: {}", result.matched_by.as_str());
+            println!("Remaining repositories: {}", result.remaining_repositories);
+            println!("Registry only: yes");
+            println!("Filesystem deleted: no");
+            Ok(())
+        }
     }
 }
 

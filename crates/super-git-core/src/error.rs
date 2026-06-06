@@ -30,6 +30,15 @@ pub enum SuperGitError {
         message: String,
     },
 
+    #[error("repository_not_found: no saved repository matches {target}")]
+    RepositoryNotFound { target: String },
+
+    #[error("ambiguous_repository_target: {target} matches multiple repositories: {matches:?}")]
+    AmbiguousRepositoryTarget {
+        target: String,
+        matches: Vec<String>,
+    },
+
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 

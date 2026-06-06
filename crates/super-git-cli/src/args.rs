@@ -73,6 +73,9 @@ pub enum RepoCommands {
     /// Save a Git worktree family to the repository registry.
     Save { path: Option<PathBuf> },
 
+    /// Remove a saved repository family from the registry only.
+    Forget { target: String },
+
     /// List saved repository families.
     List,
 }

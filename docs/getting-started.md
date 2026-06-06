@@ -115,9 +115,10 @@ Important details:
 
 `super-git repo save [path]` stores registered repository families in an
 OS-specific config directory. `repo add <path>` is still accepted as a
-compatibility alias. Worktree path templates can be checked and edited with
-`config validate` and `config set-worktree-template`. Run `doctor` to see the
-exact config path:
+compatibility alias, and `repo forget <id-or-name-or-path>` removes only the
+saved registry entry. It never deletes repository or worktree files. Worktree
+path templates can be checked and edited with `config validate` and
+`config set-worktree-template`. Run `doctor` to see the exact config path:
 
 ```bash
 cargo run -p super-git-cli -- doctor

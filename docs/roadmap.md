@@ -57,10 +57,10 @@ Implemented:
 - `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
 - `config validate`
 - `config set-worktree-template`
+- `repo forget`
 
 Next:
 
-- `repo forget`
 - no shell hooks, copy patterns, or profile system
 - actual `{ref_slug}` rendering and target path collision checks in worktree
   create preview

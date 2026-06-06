@@ -156,6 +156,35 @@ pub struct SaveRepositoryResult {
     pub added: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgetRepositoryResult {
+    pub target: String,
+    pub repository: SavedRepository,
+    pub removed: bool,
+    pub matched_by: RepositoryTargetMatch,
+    pub remaining_repositories: usize,
+    pub registry_only: bool,
+    pub filesystem_deleted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositoryTargetMatch {
+    Id,
+    Path,
+    Name,
+}
+
+impl RepositoryTargetMatch {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Id => "id",
+            Self::Path => "path",
+            Self::Name => "name",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConfigUpdateResult {
     pub config: AppConfig,
@@ -232,6 +261,25 @@ impl ConfigStore {
             repository,
             requested_path,
             added,
+        })
+    }
+
+    pub fn forget_repository(&self, target: &str) -> Result<ForgetRepositoryResult> {
+        let mut loaded = self.load_with_metadata()?;
+        let resolved = resolve_repository_target(&loaded.config.repositories, target)?;
+        let repository = loaded.config.repositories.remove(resolved.index);
+        let remaining_repositories = loaded.config.repositories.len();
+
+        self.save(&loaded.config)?;
+
+        Ok(ForgetRepositoryResult {
+            target: target.to_string(),
+            repository,
+            removed: true,
+            matched_by: resolved.matched_by,
+            remaining_repositories,
+            registry_only: true,
+            filesystem_deleted: false,
         })
     }
 
@@ -315,6 +363,12 @@ struct RepositoryEntries {
     needs_save: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedRepositoryTarget {
+    index: usize,
+    matched_by: RepositoryTargetMatch,
+}
+
 fn parse_config(content: &str) -> Result<LoadedConfig> {
     let value: serde_json::Value = serde_json::from_str(content)?;
 
@@ -392,6 +446,110 @@ fn repository_entries_from_legacy(entries: Vec<LegacyRepository>) -> Result<Repo
         repositories: config.repositories,
         needs_save: true,
     })
+}
+
+fn resolve_repository_target(
+    repositories: &[SavedRepository],
+    target: &str,
+) -> Result<ResolvedRepositoryTarget> {
+    for (indexes, matched_by) in [
+        (
+            indexes_matching_id(repositories, target),
+            RepositoryTargetMatch::Id,
+        ),
+        (
+            indexes_matching_path(repositories, target),
+            RepositoryTargetMatch::Path,
+        ),
+        (
+            indexes_matching_name(repositories, target),
+            RepositoryTargetMatch::Name,
+        ),
+    ] {
+        match indexes.len() {
+            0 => {}
+            1 => {
+                return Ok(ResolvedRepositoryTarget {
+                    index: indexes[0],
+                    matched_by,
+                });
+            }
+            _ => {
+                return Err(SuperGitError::AmbiguousRepositoryTarget {
+                    target: target.to_string(),
+                    matches: indexes
+                        .iter()
+                        .map(|index| repository_match_label(&repositories[*index]))
+                        .collect(),
+                });
+            }
+        }
+    }
+
+    Err(SuperGitError::RepositoryNotFound {
+        target: target.to_string(),
+    })
+}
+
+fn indexes_matching_id(repositories: &[SavedRepository], target: &str) -> Vec<usize> {
+    repositories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, repository)| (repository.id == target).then_some(index))
+        .collect()
+}
+
+fn indexes_matching_path(repositories: &[SavedRepository], target: &str) -> Vec<usize> {
+    if !looks_like_path(target) {
+        return Vec::new();
+    }
+
+    let target_path = Path::new(target);
+    let canonical_target = std::fs::canonicalize(target_path).ok();
+    let target_family_id = SavedRepository::from_path(target_path)
+        .ok()
+        .map(|repository| repository.id);
+
+    repositories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, repository)| {
+            let direct_match = repository_matches_path(repository, target_path);
+            let canonical_match = canonical_target
+                .as_deref()
+                .is_some_and(|path| repository_matches_path(repository, path));
+            let family_match = target_family_id
+                .as_ref()
+                .is_some_and(|id| repository.id == *id);
+
+            (direct_match || canonical_match || family_match).then_some(index)
+        })
+        .collect()
+}
+
+fn looks_like_path(target: &str) -> bool {
+    target == "."
+        || target.contains('/')
+        || target.contains('\\')
+        || Path::new(target).is_absolute()
+}
+
+fn indexes_matching_name(repositories: &[SavedRepository], target: &str) -> Vec<usize> {
+    repositories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, repository)| (repository.name == target).then_some(index))
+        .collect()
+}
+
+fn repository_matches_path(repository: &SavedRepository, path: &Path) -> bool {
+    repository.main_worktree.as_deref() == Some(path)
+        || repository.git_common_dir == path
+        || repository.saved_from == path
+}
+
+fn repository_match_label(repository: &SavedRepository) -> String {
+    format!("{} ({})", repository.name, repository.id)
 }
 
 fn migrate_legacy_repository(entry: LegacyRepository) -> Result<Option<SavedRepository>> {

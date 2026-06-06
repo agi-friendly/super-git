@@ -227,7 +227,7 @@ super-git wt list /path/to/repo
 Use `inspect.worktree_context` for the current worktree's family summary, and
 `wt list` when the full list is needed.
 
-## `repo save [path]` / `repo add <path>` / `repo list`
+## `repo save [path]` / `repo add <path>` / `repo list` / `repo forget`
 
 Manages the local repository registry. The canonical command is `repo save`.
 `repo add <path>` remains as a compatibility alias for `repo save <path>`.
@@ -238,6 +238,7 @@ super-git repo save
 super-git repo save /path/to/repo
 super-git repo add /path/to/repo
 super-git repo list
+super-git repo forget <id-or-name-or-path>
 ```
 
 The registry is stored under the resolved app home. `SUPER_GIT_HOME` overrides
@@ -264,3 +265,40 @@ Git common directory identity.
 
 For bare-primary worktree families, `kind` is `bare_worktree_family` and
 `main_worktree` is `null`.
+
+`repo forget` removes a saved registry entry only. It never deletes repository
+directories, linked worktrees, bare Git directories, `.git`, or working-tree
+files.
+
+Selectors:
+
+- full repository `id`
+- path-like selector such as `/path/to/repo`, `./repo`, a linked worktree path,
+  a repository subdirectory, stored `saved_from`, stored `main_worktree`, or
+  stored `git_common_dir`
+- unique repository `name`
+
+Plain words without path separators are treated as names. Use `./repo` or an
+absolute path when you intend a filesystem path. If a name matches multiple
+saved repository families, the command fails and leaves the config unchanged.
+
+Successful output includes explicit safety fields:
+
+```json
+{
+  "target": "repo",
+  "repository": {
+    "id": "sha256:<git-common-dir-identity>",
+    "name": "repo",
+    "kind": "worktree_family",
+    "main_worktree": "/path/to/repo",
+    "git_common_dir": "/path/to/repo/.git",
+    "saved_from": "/path/to/repo"
+  },
+  "removed": true,
+  "matched_by": "name",
+  "remaining_repositories": 0,
+  "registry_only": true,
+  "filesystem_deleted": false
+}
+```
