@@ -27,6 +27,8 @@ Output is JSON-first. Success uses `{ ok, data }`; failure uses `{ ok, error }`.
 Current commands:
 
 - `super-git doctor`
+- `super-git config path`
+- `super-git config show`
 - `super-git repo add <path>`
 - `super-git repo list`
 - `super-git status [path]`
@@ -92,13 +94,18 @@ contents.
 
 ## Config
 
-Registered repositories are stored in a JSON file under the OS-specific config
-directory. `super-git-core::config::store::ConfigStore` owns this storage.
+Registered repositories are stored in a JSON file under the resolved
+`super-git` app home. `super-git-core::config::store::ConfigStore` owns this
+storage.
 
-The next config milestone is a small global app home and saved repository
+The app home now resolves from `SUPER_GIT_HOME` first, then from the
+OS-specific `ProjectDirs` config location. `super-git config path` reports the
+resolved home, source, and config file. `super-git config show` reports the same
+location plus the currently loaded config.
+
+The next config milestones are a versioned config schema and saved repository
 registry, not a full user profile system. The planned direction is:
 
-- Resolve app home from `SUPER_GIT_HOME` first, then `ProjectDirs`.
 - Keep `config.json` as the v1 physical file.
 - Separate settings and saved repositories in the code model.
 - Store worktree family entries, not individual linked worktrees.

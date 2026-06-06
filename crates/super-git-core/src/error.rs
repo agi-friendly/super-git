@@ -9,6 +9,12 @@ pub enum SuperGitError {
     #[error("config directory is not available on this platform")]
     ConfigDirectoryUnavailable,
 
+    #[error("SUPER_GIT_HOME is set but empty")]
+    EmptySuperGitHome,
+
+    #[error("SUPER_GIT_HOME must be an absolute path: {0}")]
+    RelativeSuperGitHome(PathBuf),
+
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 

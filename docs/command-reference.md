@@ -34,6 +34,24 @@ super-git doctor
 
 Reports the system Git version, OS, architecture, and config path.
 
+## `config path` / `config show`
+
+Reports the resolved `super-git` app home and config file.
+
+```bash
+super-git config path
+super-git config show
+```
+
+`config path` returns the app home, resolution source, and `config.json` path.
+It does not create the config file.
+
+`config show` returns the same location plus the currently loaded config. If no
+config file exists yet, the command returns the empty default config.
+
+Set `SUPER_GIT_HOME` to isolate tests, CI, dogfooding, or subagent work from the
+real user config. Without it, `super-git` uses the OS-specific config location.
+
 ## `inspect [path]`
 
 Returns the AI-first repository safety snapshot.
@@ -127,4 +145,6 @@ super-git repo add /path/to/repo
 super-git repo list
 ```
 
-The registry is stored in the OS-specific config path reported by `doctor`.
+The registry is stored under the resolved app home. `SUPER_GIT_HOME` overrides
+the OS-specific config location for tests, CI, dogfooding, and isolated agent
+work.

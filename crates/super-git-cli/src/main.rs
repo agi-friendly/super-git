@@ -7,11 +7,11 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::error::ErrorKind;
 use clap::Parser;
-use super_git_core::config::store::ConfigStore;
+use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::git::command::Git;
 use super_git_core::git::{execute, preview, state, status, undo, worktree};
 
-use crate::args::{Cli, Commands, PreviewCommands, RepoCommands, WorktreeCommands};
+use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
 
 fn main() -> ExitCode {
@@ -72,6 +72,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
     match command {
         Commands::Doctor => run_doctor(mode),
         Commands::Repo { command } => run_repo(mode, command),
+        Commands::Config { command } => run_config(mode, command),
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
@@ -88,6 +89,19 @@ fn run_doctor(mode: OutputMode) -> Result<()> {
     let store = ConfigStore::from_default_path().context("could not resolve config path")?;
 
     output::print_doctor(mode, &git_version, store.path())
+}
+
+fn run_config(mode: OutputMode, command: ConfigCommands) -> Result<()> {
+    let app_home = default_app_home().context("could not resolve config path")?;
+    let store = ConfigStore::new(app_home.config_file.clone());
+
+    match command {
+        ConfigCommands::Path => output::print_config_path(mode, &app_home),
+        ConfigCommands::Show => {
+            let config = store.load().context("could not read config file")?;
+            output::print_config_show(mode, &app_home, &config)
+        }
+    }
 }
 
 fn run_repo(mode: OutputMode, command: RepoCommands) -> Result<()> {

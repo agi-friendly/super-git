@@ -10,6 +10,9 @@ use crate::git::repository::validate_repository_path;
 use crate::model::Repository;
 use crate::{Result, SuperGitError};
 
+pub const SUPER_GIT_HOME_ENV: &str = "SUPER_GIT_HOME";
+const CONFIG_FILE_NAME: &str = "config.json";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub repositories: Vec<Repository>,
@@ -35,6 +38,21 @@ impl AppConfig {
 #[derive(Debug, Clone)]
 pub struct ConfigStore {
     path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppHome {
+    pub home: PathBuf,
+    pub source: AppHomeSource,
+    pub config_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AppHomeSource {
+    #[serde(rename = "env:SUPER_GIT_HOME")]
+    EnvSuperGitHome,
+    #[serde(rename = "project_dirs")]
+    ProjectDirs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,10 +118,42 @@ impl ConfigStore {
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
+    Ok(default_app_home()?.config_file)
+}
+
+pub fn default_app_home() -> Result<AppHome> {
+    if let Some(home) = std::env::var_os(SUPER_GIT_HOME_ENV) {
+        if home.is_empty() {
+            return Err(SuperGitError::EmptySuperGitHome);
+        }
+
+        let home = PathBuf::from(home);
+        if !home.is_absolute() {
+            return Err(SuperGitError::RelativeSuperGitHome(home));
+        }
+
+        return Ok(AppHome::from_home(home, AppHomeSource::EnvSuperGitHome));
+    }
+
     let dirs = ProjectDirs::from("com", "super-git", "super-git")
         .ok_or(SuperGitError::ConfigDirectoryUnavailable)?;
 
-    Ok(dirs.config_dir().join("config.json"))
+    Ok(AppHome::from_home(
+        dirs.config_dir().to_path_buf(),
+        AppHomeSource::ProjectDirs,
+    ))
+}
+
+impl AppHome {
+    pub fn from_home(home: PathBuf, source: AppHomeSource) -> Self {
+        let config_file = home.join(CONFIG_FILE_NAME);
+
+        Self {
+            home,
+            source,
+            config_file,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,5 +251,19 @@ mod tests {
         let loaded = store.load().expect("load config");
 
         assert_eq!(loaded, second_config);
+    }
+
+    #[test]
+    fn app_home_from_home_points_to_config_json() {
+        let home = PathBuf::from("super-git-home");
+
+        let app_home = AppHome::from_home(home.clone(), AppHomeSource::EnvSuperGitHome);
+
+        assert_eq!(app_home.home, home);
+        assert_eq!(app_home.source, AppHomeSource::EnvSuperGitHome);
+        assert_eq!(
+            app_home.config_file,
+            PathBuf::from("super-git-home").join("config.json")
+        );
     }
 }

@@ -26,6 +26,12 @@ pub enum Commands {
         command: RepoCommands,
     },
 
+    /// Inspect super-git global configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+
     /// Show Git status for a repository path or the current directory.
     Status { path: Option<PathBuf> },
 
@@ -66,6 +72,15 @@ pub enum RepoCommands {
 
     /// List registered repositories.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommands {
+    /// Show the resolved super-git app home and config file path.
+    Path,
+
+    /// Show the resolved config location and loaded config.
+    Show,
 }
 
 #[derive(Debug, Subcommand)]
