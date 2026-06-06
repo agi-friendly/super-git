@@ -142,6 +142,8 @@ instead of being partially interpreted.
 Saved repositories are stored as worktree families, not individual linked
 worktrees. `repo save [path]` uses Git's common directory as the family identity
 so saving the main worktree and a linked worktree deduplicates to one entry.
+The identity hash preserves path case so case-sensitive filesystems do not
+collapse different repository families that differ only by case.
 `repo add <path>` remains as a compatibility alias for `repo save <path>`.
 Bare-primary families are supported with `kind: "bare_worktree_family"` and
 `main_worktree: null`.
@@ -154,8 +156,11 @@ unique repository name. Ambiguous names fail without rewriting the config file.
 Worktree template settings can be edited with
 `config set-worktree-template`. Template variables use braces, not shell syntax.
 C5 supports `{main_path}`, `{repo_name}`, and `{ref_slug}` plus the
-`path_safe_v1` slug algorithm name. The command validates field-specific rules
-before saving:
+`path_safe_v1` slug algorithm name. `config validate` also checks saved
+repository registry shape: ids must match the saved `git_common_dir`, path fields
+must be absolute, ids must be unique, and bare-primary entries must not claim a
+`main_worktree`. The template command validates field-specific rules before
+saving:
 
 - `parent_template` must contain `{main_path}` exactly once and must not contain
   `{ref_slug}` or a literal `..` path component.

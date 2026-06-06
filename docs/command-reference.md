@@ -73,7 +73,11 @@ during migration because they cannot be assigned a worktree-family identity.
 
 `config validate` validates the loaded config without writing it. If the config
 file is missing, it validates the default in-memory v1 config and does not create
-`config.json`.
+`config.json`. Validation covers both worktree template settings and saved
+repository registry shape. Registry entries must have absolute path fields,
+valid case-preserving `sha256:<git-common-dir>` identities, unique ids, and a
+`kind`/`main_worktree` combination that matches whether the family has a primary
+worktree.
 
 Invalid user-editable settings are reported as data, not as a command failure:
 
@@ -247,7 +251,8 @@ work. Writes always persist the v1 config shape.
 
 Repository entries are worktree families, not individual linked worktrees.
 Saving from the main worktree and saving from a linked worktree deduplicate by
-Git common directory identity.
+Git common directory identity. The identity hash preserves path case so
+case-sensitive filesystems can keep `/Repo/.git` and `/repo/.git` distinct.
 
 ```json
 {

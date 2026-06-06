@@ -222,6 +222,9 @@ Notes:
 
 - `config path`, `config show`, `config validate`, `repo save`, `repo list`,
   `repo forget`, and `config set-worktree-template` are implemented.
+- `config validate` now checks both worktree template settings and saved
+  repository registry shape before Stage 4 uses registry entries as preview
+  input.
 - Existing `repo add` should remain as a compatibility alias or wrapper.
 - `repo forget` should remove an entry from the registry only. It must not
   delete repository or worktree files.

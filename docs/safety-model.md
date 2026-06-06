@@ -89,7 +89,9 @@ Future actions must earn their way into the allowlist with tests and docs.
 Global config and repository-registry writes are separate from Git repository
 writes. For example, `repo forget` edits only `super-git`'s config registry and
 must not delete repository directories, worktrees, bare Git directories, `.git`,
-or working-tree files.
+or working-tree files. Because saved repositories become preview input for later
+worktree actions, `config validate` treats malformed registry entries as invalid
+instead of silently accepting arbitrary ids or relative paths.
 
 ## Risk Vocabulary
 

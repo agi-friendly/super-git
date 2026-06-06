@@ -532,6 +532,65 @@ fn config_validate_reports_invalid_manual_template() {
 }
 
 #[test]
+fn config_validate_reports_invalid_repository_registry_entries() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    std::fs::write(
+        app_home.join("config.json"),
+        r#"{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{ref_slug}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": [
+    {
+      "id": "not-a-sha",
+      "name": "bad/name",
+      "kind": "bare_worktree_family",
+      "main_worktree": "relative-main",
+      "git_common_dir": "relative-git",
+      "saved_from": "relative-saved"
+    }
+  ]
+}"#,
+    )
+    .expect("write config");
+
+    let json = json_output(
+        super_git(tmp.path())
+            .args(["config", "validate"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config validate"),
+    );
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["valid"], false);
+    let issue_codes: Vec<&str> = json["data"]["issues"]
+        .as_array()
+        .expect("issues array")
+        .iter()
+        .filter_map(|issue| issue["code"].as_str())
+        .collect();
+    for expected_code in [
+        "invalid_repository_id",
+        "path_separator_in_repository_name",
+        "repository_path_not_absolute",
+        "bare_family_has_main_worktree",
+    ] {
+        assert!(
+            issue_codes.contains(&expected_code),
+            "missing issue code {expected_code}: {issue_codes:?}"
+        );
+    }
+}
+
+#[test]
 fn doctor_reports_config_path_from_super_git_home() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");

@@ -55,7 +55,7 @@ Implemented:
 - registry-backed `repo list`
 - worktree parent/name templates
 - `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
-- `config validate`
+- `config validate` for templates and saved repository registry shape
 - `config set-worktree-template`
 - `repo forget`
 

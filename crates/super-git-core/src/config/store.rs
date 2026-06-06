@@ -416,7 +416,7 @@ fn repository_entries_from_file(entries: Vec<RepositoryFileEntry>) -> Result<Rep
     for entry in entries {
         match entry {
             RepositoryFileEntry::Current(repository) => {
-                config.add_repository(repository);
+                config.repositories.push(repository);
             }
             RepositoryFileEntry::Legacy(repository) => {
                 needs_save = true;
@@ -663,7 +663,7 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
     Ok(std::fs::canonicalize(path)?)
 }
 
-fn repository_id(git_common_dir: &Path) -> String {
+pub(crate) fn repository_id(git_common_dir: &Path) -> String {
     let identity = normalized_identity(git_common_dir);
     let digest = Sha256::digest(identity.as_bytes());
     let hex = digest
@@ -679,10 +679,6 @@ fn normalized_identity(path: &Path) -> String {
 
     if cfg!(windows) {
         value = value.replace('\\', "/");
-    }
-
-    if cfg!(any(target_os = "macos", windows)) {
-        value = value.to_lowercase();
     }
 
     value
@@ -987,6 +983,14 @@ mod tests {
         assert_eq!(
             app_home.config_file,
             PathBuf::from("super-git-home").join("config.json")
+        );
+    }
+
+    #[test]
+    fn repository_id_preserves_path_case() {
+        assert_ne!(
+            repository_id(Path::new("/repo/Repo/.git")),
+            repository_id(Path::new("/repo/repo/.git"))
         );
     }
 }

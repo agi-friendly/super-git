@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use serde::Serialize;
 
-use crate::config::store::{AppConfig, WorktreeSettings};
+use crate::config::store::{
+    repository_id, AppConfig, SavedRepository, SavedRepositoryKind, WorktreeSettings,
+};
 
 const MAIN_PATH: &str = "main_path";
 const REPO_NAME: &str = "repo_name";
@@ -28,19 +33,39 @@ pub struct WorktreeTemplateUpdate {
 }
 
 pub fn validate_config(config: &AppConfig) -> ConfigValidationReport {
-    validate_worktree_settings(&config.settings.worktree)
+    let mut issues = Vec::new();
+
+    validate_worktree_settings_into(&config.settings.worktree, &mut issues);
+    validate_repository_registry(&config.repositories, &mut issues);
+
+    ConfigValidationReport {
+        valid: issues.is_empty(),
+        issues,
+    }
 }
 
 pub fn validate_worktree_settings(settings: &WorktreeSettings) -> ConfigValidationReport {
     let mut issues = Vec::new();
 
+    validate_worktree_settings_into(settings, &mut issues);
+
+    ConfigValidationReport {
+        valid: issues.is_empty(),
+        issues,
+    }
+}
+
+fn validate_worktree_settings_into(
+    settings: &WorktreeSettings,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
     validate_template(
         "settings.worktree.parent_template",
         &settings.parent_template,
         &[MAIN_PATH, REPO_NAME],
         &[MAIN_PATH],
         false,
-        &mut issues,
+        issues,
     );
     validate_template(
         "settings.worktree.name_template",
@@ -48,14 +73,9 @@ pub fn validate_worktree_settings(settings: &WorktreeSettings) -> ConfigValidati
         &[REPO_NAME, REF_SLUG],
         &[REF_SLUG],
         true,
-        &mut issues,
-    );
-    validate_ref_slug_algorithm(&settings.ref_slug_algorithm, &mut issues);
-
-    ConfigValidationReport {
-        valid: issues.is_empty(),
         issues,
-    }
+    );
+    validate_ref_slug_algorithm(&settings.ref_slug_algorithm, issues);
 }
 
 fn validate_template(
@@ -230,6 +250,163 @@ fn validate_ref_slug_algorithm(algorithm: &str, issues: &mut Vec<ConfigValidatio
     );
 }
 
+fn validate_repository_registry(
+    repositories: &[SavedRepository],
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    let mut seen_ids = HashSet::new();
+
+    for (index, repository) in repositories.iter().enumerate() {
+        let field = format!("repositories[{index}]");
+        validate_repository_entry(&field, repository, issues);
+
+        if !seen_ids.insert(repository.id.clone()) {
+            push_issue(
+                issues,
+                &format!("{field}.id"),
+                "duplicate_repository_id",
+                "repository id must be unique",
+            );
+        }
+    }
+}
+
+fn validate_repository_entry(
+    field: &str,
+    repository: &SavedRepository,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    validate_repository_id(field, repository, issues);
+    validate_repository_name(field, &repository.name, issues);
+    validate_repository_paths(field, repository, issues);
+    validate_repository_kind(field, repository, issues);
+}
+
+fn validate_repository_id(
+    field: &str,
+    repository: &SavedRepository,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    let id_field = format!("{field}.id");
+    if !is_valid_repository_id(&repository.id) {
+        push_issue(
+            issues,
+            &id_field,
+            "invalid_repository_id",
+            "repository id must be sha256:<64 lowercase hex chars>",
+        );
+        return;
+    }
+
+    let expected = repository_id(&repository.git_common_dir);
+    if repository.id != expected {
+        push_issue(
+            issues,
+            &id_field,
+            "repository_id_mismatch",
+            "repository id must match git_common_dir identity",
+        );
+    }
+}
+
+fn validate_repository_name(field: &str, name: &str, issues: &mut Vec<ConfigValidationIssue>) {
+    let name_field = format!("{field}.name");
+    if name.is_empty() {
+        push_issue(
+            issues,
+            &name_field,
+            "empty_repository_name",
+            "repository name must not be empty",
+        );
+    }
+
+    if name.contains('/') || name.contains('\\') {
+        push_issue(
+            issues,
+            &name_field,
+            "path_separator_in_repository_name",
+            "repository name must not contain path separators",
+        );
+    }
+
+    if name.chars().any(char::is_control) {
+        push_issue(
+            issues,
+            &name_field,
+            "control_character_in_repository_name",
+            "repository name must not contain control characters",
+        );
+    }
+}
+
+fn validate_repository_paths(
+    field: &str,
+    repository: &SavedRepository,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    if let Some(main_worktree) = &repository.main_worktree {
+        validate_absolute_path(&format!("{field}.main_worktree"), main_worktree, issues);
+    }
+    validate_absolute_path(
+        &format!("{field}.git_common_dir"),
+        &repository.git_common_dir,
+        issues,
+    );
+    validate_absolute_path(
+        &format!("{field}.saved_from"),
+        &repository.saved_from,
+        issues,
+    );
+}
+
+fn validate_absolute_path(field: &str, path: &Path, issues: &mut Vec<ConfigValidationIssue>) {
+    if !path.is_absolute() {
+        push_issue(
+            issues,
+            field,
+            "repository_path_not_absolute",
+            "repository path fields must be absolute",
+        );
+    }
+}
+
+fn validate_repository_kind(
+    field: &str,
+    repository: &SavedRepository,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    match repository.kind {
+        SavedRepositoryKind::WorktreeFamily if repository.main_worktree.is_none() => {
+            push_issue(
+                issues,
+                &format!("{field}.main_worktree"),
+                "worktree_family_missing_main_worktree",
+                "worktree family entries must include main_worktree",
+            );
+        }
+        SavedRepositoryKind::BareWorktreeFamily if repository.main_worktree.is_some() => {
+            push_issue(
+                issues,
+                &format!("{field}.main_worktree"),
+                "bare_family_has_main_worktree",
+                "bare-primary worktree family entries must not include main_worktree",
+            );
+        }
+        _ => {}
+    }
+}
+
+fn is_valid_repository_id(id: &str) -> bool {
+    let Some(hex) = id.strip_prefix("sha256:") else {
+        return false;
+    };
+
+    hex.len() == 64
+        && hex
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+}
+
 fn has_parent_traversal(value: &str) -> bool {
     value.split(['/', '\\']).any(|component| component == "..")
 }
@@ -248,7 +425,22 @@ fn push_issue(issues: &mut Vec<ConfigValidationIssue>, field: &str, code: &str, 
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use crate::config::store::{SavedRepository, SavedRepositoryKind};
+
     use super::*;
+
+    fn valid_repository(id: &str, name: &str) -> SavedRepository {
+        SavedRepository {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: SavedRepositoryKind::WorktreeFamily,
+            main_worktree: Some(PathBuf::from("/repo/main")),
+            git_common_dir: PathBuf::from("/repo/main/.git"),
+            saved_from: PathBuf::from("/repo/main"),
+        }
+    }
 
     #[test]
     fn validates_default_worktree_settings() {
@@ -458,5 +650,57 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "unsupported_ref_slug_algorithm"));
+    }
+
+    #[test]
+    fn rejects_invalid_repository_registry_entries() {
+        let mut config = AppConfig::default();
+        config.repositories.push(SavedRepository {
+            id: "not-a-sha".to_string(),
+            name: "bad/name".to_string(),
+            kind: SavedRepositoryKind::BareWorktreeFamily,
+            main_worktree: Some(PathBuf::from("relative-main")),
+            git_common_dir: PathBuf::from("relative-git"),
+            saved_from: PathBuf::from("relative-saved"),
+        });
+
+        let report = validate_config(&config);
+
+        assert!(!report.valid);
+        for expected_code in [
+            "invalid_repository_id",
+            "path_separator_in_repository_name",
+            "repository_path_not_absolute",
+            "bare_family_has_main_worktree",
+        ] {
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == expected_code),
+                "missing issue code {expected_code}: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_repository_ids() {
+        let duplicate_id = format!("sha256:{}", "a".repeat(64));
+        let mut config = AppConfig::default();
+        config
+            .repositories
+            .push(valid_repository(&duplicate_id, "one"));
+        config
+            .repositories
+            .push(valid_repository(&duplicate_id, "two"));
+
+        let report = validate_config(&config);
+
+        assert!(!report.valid);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "duplicate_repository_id"));
     }
 }
