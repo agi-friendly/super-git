@@ -53,6 +53,17 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+fn init_repo_with_commit(repo: &Path) {
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "hello").expect("write file");
+    git(repo, &["add", "README.md"]);
+    git(repo, &["commit", "-q", "-m", "initial"]);
+}
+
+fn canonical_string(path: &Path) -> String {
+    path_string(path.canonicalize().expect("canonical path"))
+}
+
 #[test]
 fn config_path_uses_super_git_home_without_creating_config_file() {
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -217,29 +228,36 @@ fn doctor_reports_config_path_from_super_git_home() {
 }
 
 #[test]
-fn repo_add_and_list_use_super_git_home() {
+fn repo_save_and_list_use_super_git_home() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");
     let repo = tmp.path().join("repo");
     std::fs::create_dir(&repo).expect("create repo dir");
-    git(&repo, &["init", "-q", "-b", "main"]);
-    let normalized_repo = repo.canonicalize().expect("canonical repo path");
+    init_repo_with_commit(&repo);
+    let normalized_repo = canonical_string(&repo);
+    let git_common_dir = canonical_string(&repo.join(".git"));
 
-    let add = json_output(
+    let save = json_output(
         super_git(tmp.path())
-            .args(["repo", "add"])
+            .args(["repo", "save"])
             .arg(&repo)
             .env("SUPER_GIT_HOME", &app_home)
             .output()
-            .expect("run repo add"),
+            .expect("run repo save"),
     );
 
-    assert_eq!(add["ok"], true);
-    assert_eq!(add["data"]["path"], path_string(normalized_repo.clone()));
-    assert_eq!(add["data"]["added"], true);
+    assert_eq!(save["ok"], true);
+    assert_eq!(save["data"]["added"], true);
+    let saved = &save["data"]["repository"];
+    assert!(saved["id"].as_str().expect("id").starts_with("sha256:"));
+    assert_eq!(saved["name"], "repo");
+    assert_eq!(saved["kind"], "worktree_family");
+    assert_eq!(saved["main_worktree"], normalized_repo);
+    assert_eq!(saved["git_common_dir"], git_common_dir);
+    assert_eq!(saved["saved_from"], normalized_repo);
     assert!(
         app_home.join("config.json").exists(),
-        "repo add should write inside SUPER_GIT_HOME"
+        "repo save should write inside SUPER_GIT_HOME"
     );
 
     let list = json_output(
@@ -251,10 +269,7 @@ fn repo_add_and_list_use_super_git_home() {
     );
 
     assert_eq!(list["ok"], true);
-    assert_eq!(
-        list["data"]["repositories"][0]["path"],
-        path_string(normalized_repo)
-    );
+    assert_eq!(list["data"]["repositories"][0], *saved);
 
     let show = json_output(
         super_git(tmp.path())
@@ -266,10 +281,7 @@ fn repo_add_and_list_use_super_git_home() {
 
     assert_eq!(show["ok"], true);
     assert_eq!(show["data"]["config"]["schema_version"], 1);
-    assert_eq!(
-        show["data"]["config"]["repositories"][0]["path"],
-        path_string(repo.canonicalize().expect("canonical repo path"))
-    );
+    assert_eq!(show["data"]["config"]["repositories"][0], *saved);
 
     let raw_config: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
@@ -279,6 +291,209 @@ fn repo_add_and_list_use_super_git_home() {
     assert_eq!(
         raw_config["settings"]["worktree"]["parent_template"],
         "{main_path}.worktrees"
+    );
+    assert_eq!(raw_config["repositories"][0], *saved);
+}
+
+#[test]
+fn repo_add_is_compatibility_alias_for_save() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+
+    let add = json_output(
+        super_git(tmp.path())
+            .args(["repo", "add"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo add"),
+    );
+
+    assert_eq!(add["ok"], true);
+    assert_eq!(add["data"]["added"], true);
+    assert_eq!(add["data"]["path"], canonical_string(&repo));
+    assert_eq!(add["data"]["repository"]["kind"], "worktree_family");
+    assert_eq!(
+        add["data"]["repository"]["main_worktree"],
+        canonical_string(&repo)
+    );
+}
+
+#[test]
+fn repo_save_rewrites_duplicate_legacy_v0_config_to_v1() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": repo }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(app_home.join("config.json"), legacy).expect("write legacy config");
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+
+    assert_eq!(save["ok"], true);
+    assert_eq!(save["data"]["added"], false);
+
+    let raw_config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file");
+
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(raw_config["repositories"][0]["kind"], "worktree_family");
+    assert!(
+        raw_config["repositories"][0].get("path").is_none(),
+        "repo save should rewrite legacy path entries to the v1 registry shape"
+    );
+}
+
+#[test]
+fn repo_save_dedupes_legacy_v0_main_and_linked_worktree_paths() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let main = tmp.path().join("repo");
+    std::fs::create_dir(&main).expect("create repo dir");
+    init_repo_with_commit(&main);
+    let linked = tmp.path().join("repo-feature");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": main },
+            { "path": linked }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(app_home.join("config.json"), legacy).expect("write legacy config");
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&main)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+
+    assert_eq!(save["ok"], true);
+
+    let raw_config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file");
+
+    let repositories = raw_config["repositories"].as_array().expect("repositories");
+    assert_eq!(repositories.len(), 1);
+    assert_eq!(repositories[0]["kind"], "worktree_family");
+    assert_eq!(repositories[0]["main_worktree"], canonical_string(&main));
+}
+
+#[test]
+fn repo_save_skips_stale_legacy_v0_paths_when_saving_valid_repo() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let stale = tmp.path().join("missing-repo");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": stale }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(app_home.join("config.json"), legacy).expect("write legacy config");
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+
+    assert_eq!(save["ok"], true);
+    assert_eq!(save["data"]["added"], true);
+
+    let raw_config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_home.join("config.json")).expect("read config file"),
+    )
+    .expect("parse config file");
+
+    assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(
+        raw_config["repositories"]
+            .as_array()
+            .expect("repositories")
+            .len(),
+        1
+    );
+    assert_eq!(
+        raw_config["repositories"][0]["main_worktree"],
+        canonical_string(&repo)
+    );
+}
+
+#[test]
+fn config_show_skips_stale_legacy_v0_paths_in_memory() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    std::fs::create_dir_all(&app_home).expect("create app home");
+    let config_file = app_home.join("config.json");
+    let stale = tmp.path().join("missing-repo");
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": stale }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(&config_file, &legacy).expect("write legacy config");
+
+    let json = json_output(
+        super_git(tmp.path())
+            .args(["config", "show"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config show"),
+    );
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        json["data"]["config"]["repositories"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        std::fs::read_to_string(config_file).expect("read legacy config"),
+        legacy,
+        "config show must not rewrite legacy files"
     );
 }
 
@@ -297,8 +512,8 @@ fn repo_add_migrates_legacy_v0_config_to_v1_on_save() {
 
     let repo = tmp.path().join("repo");
     std::fs::create_dir(&repo).expect("create repo dir");
-    git(&repo, &["init", "-q", "-b", "main"]);
-    let normalized_repo = repo.canonicalize().expect("canonical repo path");
+    init_repo_with_commit(&repo);
+    let normalized_repo = canonical_string(&repo);
 
     let add = json_output(
         super_git(tmp.path())
@@ -317,13 +532,14 @@ fn repo_add_migrates_legacy_v0_config_to_v1_on_save() {
     .expect("parse config file");
 
     assert_eq!(raw_config["schema_version"], 1);
+    assert_eq!(raw_config["repositories"][0]["kind"], "worktree_family");
     assert_eq!(
         raw_config["settings"]["worktree"]["name_template"],
         "{repo_name}__{ref_slug}"
     );
     assert_eq!(
-        raw_config["repositories"][0]["path"],
-        path_string(normalized_repo)
+        raw_config["repositories"][0]["main_worktree"],
+        normalized_repo
     );
 }
 
@@ -333,12 +549,16 @@ fn config_show_migrates_legacy_v0_config_in_memory() {
     let app_home = tmp.path().join("sg-home");
     std::fs::create_dir_all(&app_home).expect("create app home");
     let config_file = app_home.join("config.json");
-    let legacy = r#"{
-  "repositories": [
-    { "path": "/repo/one" }
-  ]
-}"#;
-    std::fs::write(&config_file, legacy).expect("write legacy config");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let legacy = serde_json::to_string_pretty(&serde_json::json!({
+        "repositories": [
+            { "path": repo }
+        ]
+    }))
+    .expect("serialize legacy config");
+    std::fs::write(&config_file, &legacy).expect("write legacy config");
 
     let json = json_output(
         super_git(tmp.path())
@@ -351,14 +571,206 @@ fn config_show_migrates_legacy_v0_config_in_memory() {
     assert_eq!(json["ok"], true);
     assert_eq!(json["data"]["config"]["schema_version"], 1);
     assert_eq!(
-        json["data"]["config"]["repositories"][0]["path"],
-        "/repo/one"
+        json["data"]["config"]["repositories"][0]["kind"],
+        "worktree_family"
+    );
+    assert_eq!(
+        json["data"]["config"]["repositories"][0]["main_worktree"],
+        canonical_string(&repo)
     );
     assert_eq!(
         std::fs::read_to_string(config_file).expect("read legacy config"),
         legacy,
         "config show must not rewrite legacy files"
     );
+}
+
+#[test]
+fn repo_save_from_linked_worktree_uses_family_identity() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let main = tmp.path().join("repo");
+    std::fs::create_dir(&main).expect("create repo dir");
+    init_repo_with_commit(&main);
+    let linked = tmp.path().join("repo-feature");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+
+    let save_main = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&main)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save main"),
+    );
+    let save_linked = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&linked)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save linked"),
+    );
+
+    assert_eq!(save_main["data"]["added"], true);
+    assert_eq!(save_linked["data"]["added"], false);
+    assert_eq!(
+        save_main["data"]["repository"]["id"],
+        save_linked["data"]["repository"]["id"]
+    );
+    assert_eq!(
+        save_linked["data"]["repository"]["main_worktree"],
+        canonical_string(&main)
+    );
+    assert_eq!(
+        save_linked["data"]["repository"],
+        save_main["data"]["repository"]
+    );
+
+    let list = json_output(
+        super_git(tmp.path())
+            .args(["repo", "list"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo list"),
+    );
+    assert_eq!(
+        list["data"]["repositories"]
+            .as_array()
+            .expect("repositories")
+            .len(),
+        1
+    );
+    assert_eq!(
+        list["data"]["repositories"][0],
+        save_main["data"]["repository"]
+    );
+}
+
+#[test]
+fn repo_add_linked_duplicate_keeps_requested_path_in_legacy_field() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let main = tmp.path().join("repo");
+    std::fs::create_dir(&main).expect("create repo dir");
+    init_repo_with_commit(&main);
+    let linked = tmp.path().join("repo-feature");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+
+    let add_main = json_output(
+        super_git(tmp.path())
+            .args(["repo", "add"])
+            .arg(&main)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo add main"),
+    );
+    let add_linked = json_output(
+        super_git(tmp.path())
+            .args(["repo", "add"])
+            .arg(&linked)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo add linked"),
+    );
+
+    assert_eq!(add_main["data"]["added"], true);
+    assert_eq!(add_linked["data"]["added"], false);
+    assert_eq!(add_linked["data"]["path"], canonical_string(&linked));
+    assert_eq!(
+        add_linked["data"]["repository"],
+        add_main["data"]["repository"]
+    );
+}
+
+#[test]
+fn repo_add_subdir_keeps_requested_path_in_legacy_field() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    let subdir = repo.join("nested");
+    std::fs::create_dir(&subdir).expect("create nested dir");
+
+    let add = json_output(
+        super_git(tmp.path())
+            .args(["repo", "add"])
+            .arg(&subdir)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo add subdir"),
+    );
+
+    assert_eq!(add["ok"], true);
+    assert_eq!(add["data"]["path"], canonical_string(&subdir));
+    assert_eq!(
+        add["data"]["repository"]["main_worktree"],
+        canonical_string(&repo)
+    );
+}
+
+#[test]
+fn repo_save_from_bare_primary_worktree_has_no_main_worktree() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let src = tmp.path().join("src");
+    std::fs::create_dir(&src).expect("create src dir");
+    init_repo_with_commit(&src);
+
+    let bare = tmp.path().join("bare.git");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "--bare",
+            "-q",
+            src.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let linked = tmp.path().join("linked");
+    git(
+        &bare,
+        &["worktree", "add", "-q", linked.to_str().unwrap(), "main"],
+    );
+
+    let save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&linked)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save linked"),
+    );
+
+    assert_eq!(save["ok"], true);
+    assert_eq!(save["data"]["added"], true);
+    let repository = &save["data"]["repository"];
+    assert_eq!(repository["kind"], "bare_worktree_family");
+    assert_eq!(repository["main_worktree"], serde_json::Value::Null);
+    assert_eq!(repository["git_common_dir"], canonical_string(&bare));
+    assert_eq!(repository["saved_from"], canonical_string(&linked));
 }
 
 #[test]

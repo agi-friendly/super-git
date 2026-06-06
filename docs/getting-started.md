@@ -113,8 +113,9 @@ Important details:
 
 ## Runtime Config Location
 
-`super-git repo add <path>` stores registered repositories in an OS-specific
-config directory. Run `doctor` to see the exact path:
+`super-git repo save [path]` stores registered repository families in an
+OS-specific config directory. `repo add <path>` is still accepted as a
+compatibility alias. Run `doctor` to see the exact config path:
 
 ```bash
 cargo run -p super-git-cli -- doctor

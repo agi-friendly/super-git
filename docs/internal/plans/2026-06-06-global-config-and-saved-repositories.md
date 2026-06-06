@@ -146,11 +146,11 @@ plan.
 
 ## Saved Repository Registry
 
-The registry should save worktree families, not individual linked worktrees.
-Running `repo save` from a linked worktree should save the family represented by
-the Git common directory.
+Implemented in C5-C. The registry saves worktree families, not individual
+linked worktrees. Running `repo save` from a linked worktree saves the family
+represented by the Git common directory.
 
-Planned repository entry:
+Repository entry:
 
 ```json
 {
@@ -249,6 +249,8 @@ Config loading should be strict:
 - Missing `schema_version` means v0.
 - v0 is the current `{ "repositories": [...] }` style config and should migrate
   into v1 in memory.
+- Legacy repository paths that no longer resolve to Git repositories are skipped
+  during migration because they cannot be assigned a worktree-family identity.
 - `schema_version == 1` is current.
 - Unknown future versions must fail with an `unsupported_config_schema` style
   error instead of being partially interpreted.

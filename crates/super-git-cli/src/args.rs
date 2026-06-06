@@ -67,10 +67,13 @@ pub enum Commands {
 
 #[derive(Debug, Subcommand)]
 pub enum RepoCommands {
-    /// Add a local Git repository to the config file.
+    /// Compatibility alias for `repo save <path>`.
     Add { path: PathBuf },
 
-    /// List registered repositories.
+    /// Save a Git worktree family to the repository registry.
+    Save { path: Option<PathBuf> },
+
+    /// List saved repository families.
     List,
 }
 

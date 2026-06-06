@@ -23,6 +23,7 @@ wrappers.
 - JSON-first output with `--human`
 - `doctor`
 - `repo add`
+- `repo save`
 - `repo list`
 - `status`
 - `inspect`
@@ -50,12 +51,11 @@ Implemented:
 - OS-specific config path from `directories::ProjectDirs`
 - `config.json` schema version 1
 - v0 config migration to v1 in memory
+- saved repository registry by worktree family
+- registry-backed `repo list`
 
 Next:
 
-- saved repository registry by worktree family
-- `repo save`
-- registry-backed `repo list`
 - `repo forget`
 - worktree parent/name templates
 - `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables

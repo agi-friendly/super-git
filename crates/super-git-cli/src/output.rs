@@ -3,10 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
-use super_git_core::config::store::{AppConfig, AppHome};
+use super_git_core::config::store::{AppConfig, AppHome, SavedRepository};
 use super_git_core::model::{
-    ExecuteResult, Operation, PreviewPlan, RepoState, Repository, RiskLevel, StatusOutput,
-    UndoResult, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
+    WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
 };
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
@@ -123,31 +123,58 @@ pub fn print_config_show(mode: OutputMode, app_home: &AppHome, config: &AppConfi
             println!("Config: {}", app_home.config_file.display());
             println!("Repositories: {}", config.repositories.len());
             for (index, repo) in config.repositories.iter().enumerate() {
-                println!("  {:<4} {}", index + 1, repo.path.display());
+                println!(
+                    "  {:<4} {} ({})",
+                    index + 1,
+                    repo.name,
+                    repo.git_common_dir.display()
+                );
             }
             Ok(())
         }
     }
 }
 
-pub fn print_repo_add(mode: OutputMode, path: &Path, added: bool) -> Result<()> {
+pub fn print_repo_save(mode: OutputMode, repository: &SavedRepository, added: bool) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({
-            "path": path,
+            "repository": repository,
             "added": added,
         })),
         OutputMode::Human => {
             if added {
-                println!("Added repository: {}", path.display());
+                println!(
+                    "Saved repository family: {} ({})",
+                    repository.name, repository.id
+                );
             } else {
-                println!("Already registered: {}", path.display());
+                println!(
+                    "Already saved repository family: {} ({})",
+                    repository.name, repository.id
+                );
             }
             Ok(())
         }
     }
 }
 
-pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<()> {
+pub fn print_repo_add(
+    mode: OutputMode,
+    repository: &SavedRepository,
+    requested_path: &Path,
+    added: bool,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "path": requested_path,
+            "repository": repository,
+            "added": added,
+        })),
+        OutputMode::Human => print_repo_save(mode, repository, added),
+    }
+}
+
+pub fn print_repo_list(mode: OutputMode, repositories: &[SavedRepository]) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({ "repositories": repositories })),
         OutputMode::Human => {
@@ -156,9 +183,15 @@ pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<
                 return Ok(());
             }
 
-            println!("{:<4} Path", "#");
+            println!("{:<4} {:<24} {:<22} Git common dir", "#", "Name", "Kind");
             for (index, repo) in repositories.iter().enumerate() {
-                println!("{:<4} {}", index + 1, repo.path.display());
+                println!(
+                    "{:<4} {:<24} {:<22} {}",
+                    index + 1,
+                    repo.name,
+                    repo.kind.as_str(),
+                    repo.git_common_dir.display()
+                );
             }
             Ok(())
         }

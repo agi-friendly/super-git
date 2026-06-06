@@ -110,9 +110,21 @@ fn run_repo(mode: OutputMode, command: RepoCommands) -> Result<()> {
     match command {
         RepoCommands::Add { path } => {
             let result = store
-                .add_repository(&path)
+                .save_repository(&path)
                 .with_context(|| format!("could not add repository {}", path.display()))?;
-            output::print_repo_add(mode, &result.path, result.added)
+            output::print_repo_add(
+                mode,
+                &result.repository,
+                &result.requested_path,
+                result.added,
+            )
+        }
+        RepoCommands::Save { path } => {
+            let path = path_or_current_dir(path)?;
+            let result = store
+                .save_repository(&path)
+                .with_context(|| format!("could not save repository {}", path.display()))?;
+            output::print_repo_save(mode, &result.repository, result.added)
         }
         RepoCommands::List => {
             let config = store.load().context("could not read config file")?;

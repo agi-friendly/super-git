@@ -67,6 +67,8 @@ creating a file.
 Existing v0 files shaped like `{ "repositories": [...] }` are migrated in memory.
 The next write saves the current v1 shape. Unknown future schema versions fail
 with a JSON error envelope instead of being partially interpreted.
+Legacy repository paths that no longer resolve to Git repositories are skipped
+during migration because they cannot be assigned a worktree-family identity.
 
 Set `SUPER_GIT_HOME` to isolate tests, CI, dogfooding, or subagent work from the
 real user config. Without it, `super-git` uses the OS-specific config location.
@@ -155,11 +157,15 @@ super-git wt list /path/to/repo
 Use `inspect.worktree_context` for the current worktree's family summary, and
 `wt list` when the full list is needed.
 
-## `repo add <path>` / `repo list`
+## `repo save [path]` / `repo add <path>` / `repo list`
 
-Manages the local repository registry.
+Manages the local repository registry. The canonical command is `repo save`.
+`repo add <path>` remains as a compatibility alias for `repo save <path>`.
+Its JSON response also keeps the legacy `data.path` field for older automation.
 
 ```bash
+super-git repo save
+super-git repo save /path/to/repo
 super-git repo add /path/to/repo
 super-git repo list
 ```
@@ -167,3 +173,24 @@ super-git repo list
 The registry is stored under the resolved app home. `SUPER_GIT_HOME` overrides
 the OS-specific config location for tests, CI, dogfooding, and isolated agent
 work. Writes always persist the v1 config shape.
+
+Repository entries are worktree families, not individual linked worktrees.
+Saving from the main worktree and saving from a linked worktree deduplicate by
+Git common directory identity.
+
+```json
+{
+  "repository": {
+    "id": "sha256:<git-common-dir-identity>",
+    "name": "repo",
+    "kind": "worktree_family",
+    "main_worktree": "/path/to/repo",
+    "git_common_dir": "/path/to/repo/.git",
+    "saved_from": "/path/to/repo-feature"
+  },
+  "added": true
+}
+```
+
+For bare-primary worktree families, `kind` is `bare_worktree_family` and
+`main_worktree` is `null`.

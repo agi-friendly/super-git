@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::git::command::Git;
 use crate::git::repository::validate_repository_path;
-use crate::model::Repository;
+use crate::git::worktree;
 use crate::{Result, SuperGitError};
 
 pub const SUPER_GIT_HOME_ENV: &str = "SUPER_GIT_HOME";
@@ -21,7 +23,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub settings: ConfigSettings,
     #[serde(default)]
-    pub repositories: Vec<Repository>,
+    pub repositories: Vec<SavedRepository>,
 }
 
 impl Default for AppConfig {
@@ -35,26 +37,31 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    fn from_legacy_repositories(repositories: Vec<Repository>) -> Self {
+    fn from_repositories(repositories: Vec<SavedRepository>) -> Self {
         Self {
             repositories,
             ..Self::default()
         }
     }
 
-    pub fn add_repository_path(&mut self, path: PathBuf) -> bool {
-        let new_identity = RepositoryIdentity::from_path(&path);
+    pub fn add_repository(&mut self, repository: SavedRepository) -> bool {
+        self.add_or_get_repository(repository).1
+    }
 
-        if self
+    pub fn add_or_get_repository(
+        &mut self,
+        repository: SavedRepository,
+    ) -> (SavedRepository, bool) {
+        if let Some(existing) = self
             .repositories
             .iter()
-            .any(|repo| RepositoryIdentity::from_path(&repo.path) == new_identity)
+            .find(|repo| repo.id == repository.id)
         {
-            return false;
+            return (existing.clone(), false);
         }
 
-        self.repositories.push(Repository::new(path));
-        true
+        self.repositories.push(repository.clone());
+        (repository, true)
     }
 }
 
@@ -74,12 +81,38 @@ pub struct WorktreeSettings {
     pub ref_slug_algorithm: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedRepository {
+    pub id: String,
+    pub name: String,
+    pub kind: SavedRepositoryKind,
+    pub main_worktree: Option<PathBuf>,
+    pub git_common_dir: PathBuf,
+    pub saved_from: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedRepositoryKind {
+    WorktreeFamily,
+    BareWorktreeFamily,
+}
+
 impl Default for WorktreeSettings {
     fn default() -> Self {
         Self {
             parent_template: default_worktree_parent_template(),
             name_template: default_worktree_name_template(),
             ref_slug_algorithm: default_worktree_ref_slug_algorithm(),
+        }
+    }
+}
+
+impl SavedRepositoryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SavedRepositoryKind::WorktreeFamily => "worktree_family",
+            SavedRepositoryKind::BareWorktreeFamily => "bare_worktree_family",
         }
     }
 }
@@ -114,9 +147,16 @@ impl AppHomeSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddRepositoryResult {
-    pub path: PathBuf,
+pub struct SaveRepositoryResult {
+    pub repository: SavedRepository,
+    pub requested_path: PathBuf,
     pub added: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadedConfig {
+    config: AppConfig,
+    needs_save: bool,
 }
 
 impl ConfigStore {
@@ -135,8 +175,15 @@ impl ConfigStore {
     }
 
     pub fn load(&self) -> Result<AppConfig> {
+        Ok(self.load_with_metadata()?.config)
+    }
+
+    fn load_with_metadata(&self) -> Result<LoadedConfig> {
         if !self.path.exists() {
-            return Ok(AppConfig::default());
+            return Ok(LoadedConfig {
+                config: AppConfig::default(),
+                needs_save: false,
+            });
         }
 
         let content = fs::read_to_string(&self.path)?;
@@ -161,17 +208,19 @@ impl ConfigStore {
         Ok(())
     }
 
-    pub fn add_repository(&self, path: &Path) -> Result<AddRepositoryResult> {
-        let normalized = validate_repository_path(path)?;
-        let mut config = self.load()?;
-        let added = config.add_repository_path(normalized.clone());
+    pub fn save_repository(&self, path: &Path) -> Result<SaveRepositoryResult> {
+        let requested_path = validate_repository_path(path)?;
+        let candidate = SavedRepository::from_path(&requested_path)?;
+        let mut loaded = self.load_with_metadata()?;
+        let (repository, added) = loaded.config.add_or_get_repository(candidate);
 
-        if added {
-            self.save(&config)?;
+        if added || loaded.needs_save {
+            self.save(&loaded.config)?;
         }
 
-        Ok(AddRepositoryResult {
-            path: normalized,
+        Ok(SaveRepositoryResult {
+            repository,
+            requested_path,
             added,
         })
     }
@@ -180,16 +229,48 @@ impl ConfigStore {
 #[derive(Debug, Deserialize)]
 struct LegacyAppConfig {
     #[serde(default)]
-    repositories: Vec<Repository>,
+    repositories: Vec<LegacyRepository>,
 }
 
-fn parse_config(content: &str) -> Result<AppConfig> {
+#[derive(Debug, Deserialize)]
+struct ConfigFile {
+    #[serde(default = "current_config_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    settings: ConfigSettings,
+    #[serde(default)]
+    repositories: Vec<RepositoryFileEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RepositoryFileEntry {
+    Current(SavedRepository),
+    Legacy(LegacyRepository),
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyRepository {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepositoryEntries {
+    repositories: Vec<SavedRepository>,
+    needs_save: bool,
+}
+
+fn parse_config(content: &str) -> Result<LoadedConfig> {
     let value: serde_json::Value = serde_json::from_str(content)?;
 
     match value.get("schema_version") {
         None => {
             let legacy: LegacyAppConfig = serde_json::from_value(value)?;
-            Ok(AppConfig::from_legacy_repositories(legacy.repositories))
+            let entries = repository_entries_from_legacy(legacy.repositories)?;
+            Ok(LoadedConfig {
+                config: AppConfig::from_repositories(entries.repositories),
+                needs_save: true,
+            })
         }
         Some(version) => {
             let version = version
@@ -203,9 +284,76 @@ fn parse_config(content: &str) -> Result<AppConfig> {
                 });
             }
 
-            Ok(serde_json::from_value(value)?)
+            let config: ConfigFile = serde_json::from_value(value)?;
+            let entries = repository_entries_from_file(config.repositories)?;
+            let config = AppConfig {
+                schema_version: config.schema_version,
+                settings: config.settings,
+                repositories: entries.repositories,
+            };
+
+            Ok(LoadedConfig {
+                config,
+                needs_save: entries.needs_save,
+            })
         }
     }
+}
+
+fn repository_entries_from_file(entries: Vec<RepositoryFileEntry>) -> Result<RepositoryEntries> {
+    let mut config = AppConfig::default();
+    let mut needs_save = false;
+
+    for entry in entries {
+        match entry {
+            RepositoryFileEntry::Current(repository) => {
+                config.add_repository(repository);
+            }
+            RepositoryFileEntry::Legacy(repository) => {
+                needs_save = true;
+                if let Some(repository) = migrate_legacy_repository(repository)? {
+                    config.add_repository(repository);
+                }
+            }
+        }
+    }
+
+    Ok(RepositoryEntries {
+        repositories: config.repositories,
+        needs_save,
+    })
+}
+
+fn repository_entries_from_legacy(entries: Vec<LegacyRepository>) -> Result<RepositoryEntries> {
+    let mut config = AppConfig::default();
+
+    for entry in entries {
+        if let Some(repository) = migrate_legacy_repository(entry)? {
+            config.add_repository(repository);
+        }
+    }
+
+    Ok(RepositoryEntries {
+        repositories: config.repositories,
+        needs_save: true,
+    })
+}
+
+fn migrate_legacy_repository(entry: LegacyRepository) -> Result<Option<SavedRepository>> {
+    match SavedRepository::from_path(&entry.path) {
+        Ok(repository) => Ok(Some(repository)),
+        Err(err) if is_stale_legacy_repository_error(&err) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_stale_legacy_repository_error(err: &SuperGitError) -> bool {
+    matches!(
+        err,
+        SuperGitError::PathDoesNotExist(_)
+            | SuperGitError::PathIsNotDirectory(_)
+            | SuperGitError::NotGitRepository(_)
+    )
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -247,23 +395,96 @@ impl AppHome {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RepositoryIdentity(String);
+impl SavedRepository {
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let path = validate_repository_path(path)?;
+        let git = Git::default();
+        let saved_from = repository_root(&git, &path)?;
+        let git_common_dir = git_common_dir(&git, &path)?;
+        let worktrees = worktree::list_worktrees(&path)?;
+        let main_worktree = worktrees
+            .first()
+            .filter(|worktree| !worktree.bare)
+            .map(|worktree| normalize_path(&worktree.path))
+            .transpose()?;
+        let kind = if main_worktree.is_some() {
+            SavedRepositoryKind::WorktreeFamily
+        } else {
+            SavedRepositoryKind::BareWorktreeFamily
+        };
+        let name = repository_name(main_worktree.as_ref(), &git_common_dir);
+        let id = repository_id(&git_common_dir);
 
-impl RepositoryIdentity {
-    fn from_path(path: &Path) -> Self {
-        let mut value = path.to_string_lossy().into_owned();
-
-        if cfg!(windows) {
-            value = value.replace('\\', "/");
-        }
-
-        if cfg!(any(target_os = "macos", windows)) {
-            value = value.to_lowercase();
-        }
-
-        Self(value)
+        Ok(Self {
+            id,
+            name,
+            kind,
+            main_worktree,
+            git_common_dir,
+            saved_from,
+        })
     }
+}
+
+fn repository_root(git: &Git, path: &Path) -> Result<PathBuf> {
+    let result = git.try_run_in(path, ["rev-parse", "--show-toplevel"])?;
+    if result.success {
+        let root = result.stdout.trim();
+        if !root.is_empty() {
+            return normalize_path(Path::new(root));
+        }
+    }
+
+    normalize_path(path)
+}
+
+fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
+    let output = git.run_in(
+        path,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    normalize_path(Path::new(output.stdout.trim()))
+}
+
+fn normalize_path(path: &Path) -> Result<PathBuf> {
+    Ok(std::fs::canonicalize(path)?)
+}
+
+fn repository_id(git_common_dir: &Path) -> String {
+    let identity = normalized_identity(git_common_dir);
+    let digest = Sha256::digest(identity.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    format!("sha256:{hex}")
+}
+
+fn normalized_identity(path: &Path) -> String {
+    let mut value = path.to_string_lossy().into_owned();
+
+    if cfg!(windows) {
+        value = value.replace('\\', "/");
+    }
+
+    if cfg!(any(target_os = "macos", windows)) {
+        value = value.to_lowercase();
+    }
+
+    value
+}
+
+fn repository_name(main_worktree: Option<&PathBuf>, git_common_dir: &Path) -> String {
+    let source = main_worktree
+        .map(PathBuf::as_path)
+        .unwrap_or(git_common_dir);
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repository");
+
+    name.strip_suffix(".git").unwrap_or(name).to_string()
 }
 
 fn config_parent_dir(path: &Path) -> Option<&Path> {
@@ -289,14 +510,53 @@ fn default_worktree_ref_slug_algorithm() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
+
+    fn saved_repository(id: &str, name: &str, path: PathBuf) -> SavedRepository {
+        SavedRepository {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: SavedRepositoryKind::WorktreeFamily,
+            main_worktree: Some(path.clone()),
+            git_common_dir: path.join(".git"),
+            saved_from: path,
+        }
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let global_config = dir.join("empty-global-gitconfig");
+        let system_config = dir.join("empty-system-gitconfig");
+        std::fs::write(&global_config, "").expect("write empty global gitconfig");
+        std::fs::write(&system_config, "").expect("write empty system gitconfig");
+
+        let output = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn serializes_and_deserializes_config() {
         let mut config = AppConfig::default();
-        config
-            .repositories
-            .push(Repository::new(PathBuf::from("/repo/one")));
+        config.repositories.push(saved_repository(
+            "sha256:one",
+            "one",
+            PathBuf::from("/repo/one"),
+        ));
 
         let json = serde_json::to_string(&config).expect("serialize config");
         let value: serde_json::Value = serde_json::from_str(&json).expect("parse config json");
@@ -338,25 +598,34 @@ mod tests {
     fn prevents_duplicate_repositories() {
         let mut config = AppConfig::default();
 
-        assert!(config.add_repository_path(PathBuf::from("/repo/one")));
-        assert!(!config.add_repository_path(PathBuf::from("/repo/one")));
+        assert!(config.add_repository(saved_repository(
+            "sha256:one",
+            "one",
+            PathBuf::from("/repo/one")
+        )));
+        assert!(!config.add_repository(saved_repository(
+            "sha256:one",
+            "one-copy",
+            PathBuf::from("/repo/one-copy")
+        )));
         assert_eq!(config.repositories.len(), 1);
     }
 
     #[test]
-    fn prevents_case_variant_duplicates_on_case_insensitive_targets() {
+    fn allows_distinct_repository_families() {
         let mut config = AppConfig::default();
 
-        assert!(config.add_repository_path(PathBuf::from("/Repo/One")));
-        let second_added = config.add_repository_path(PathBuf::from("/repo/one"));
-
-        if cfg!(any(target_os = "macos", windows)) {
-            assert!(!second_added);
-            assert_eq!(config.repositories.len(), 1);
-        } else {
-            assert!(second_added);
-            assert_eq!(config.repositories.len(), 2);
-        }
+        assert!(config.add_repository(saved_repository(
+            "sha256:one",
+            "one",
+            PathBuf::from("/repo/one")
+        )));
+        assert!(config.add_repository(saved_repository(
+            "sha256:two",
+            "two",
+            PathBuf::from("/repo/two")
+        )));
+        assert_eq!(config.repositories.len(), 2);
     }
 
     #[test]
@@ -364,9 +633,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let store = ConfigStore::new(temp_dir.path().join("config.json"));
         let mut config = AppConfig::default();
-        config
-            .repositories
-            .push(Repository::new(PathBuf::from("/repo/one")));
+        config.repositories.push(saved_repository(
+            "sha256:one",
+            "one",
+            PathBuf::from("/repo/one"),
+        ));
 
         store.save(&config).expect("save config");
         let raw: serde_json::Value =
@@ -387,13 +658,17 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let store = ConfigStore::new(temp_dir.path().join("config.json"));
         let mut first_config = AppConfig::default();
-        first_config
-            .repositories
-            .push(Repository::new(PathBuf::from("/repo/one")));
+        first_config.repositories.push(saved_repository(
+            "sha256:one",
+            "one",
+            PathBuf::from("/repo/one"),
+        ));
         let mut second_config = AppConfig::default();
-        second_config
-            .repositories
-            .push(Repository::new(PathBuf::from("/repo/two")));
+        second_config.repositories.push(saved_repository(
+            "sha256:two",
+            "two",
+            PathBuf::from("/repo/two"),
+        ));
 
         store.save(&first_config).expect("save first config");
         store.save(&second_config).expect("replace config");
@@ -405,22 +680,31 @@ mod tests {
     #[test]
     fn load_migrates_legacy_v0_config_without_rewriting_file() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = temp_dir.path().join("repo");
+        fs::create_dir(&repo).expect("create repo dir");
+        git(&repo, &["init", "-q", "-b", "main"]);
         let path = temp_dir.path().join("config.json");
         let store = ConfigStore::new(path.clone());
-        let legacy = r#"{
-  "repositories": [
-    { "path": "/repo/one" }
-  ]
-}"#;
-        fs::write(&path, legacy).expect("write legacy config");
+        let legacy = serde_json::to_string_pretty(&serde_json::json!({
+            "repositories": [
+                { "path": repo }
+            ]
+        }))
+        .expect("serialize legacy config");
+        fs::write(&path, &legacy).expect("write legacy config");
 
         let loaded = store.load().expect("load legacy config");
         let raw_after_load = fs::read_to_string(&path).expect("read legacy config");
 
         assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.repositories.len(), 1);
         assert_eq!(
-            loaded.repositories,
-            vec![Repository::new(PathBuf::from("/repo/one"))]
+            loaded.repositories[0].kind,
+            SavedRepositoryKind::WorktreeFamily
+        );
+        assert_eq!(
+            loaded.repositories[0].main_worktree,
+            Some(repo.canonicalize().expect("canonical repo"))
         );
         assert_eq!(raw_after_load, legacy);
     }

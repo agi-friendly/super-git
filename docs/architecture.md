@@ -29,6 +29,7 @@ Current commands:
 - `super-git doctor`
 - `super-git config path`
 - `super-git config show`
+- `super-git repo save [path]`
 - `super-git repo add <path>`
 - `super-git repo list`
 - `super-git status [path]`
@@ -115,18 +116,35 @@ location plus the currently loaded config.
       "ref_slug_algorithm": "path_safe_v1"
     }
   },
-  "repositories": []
+  "repositories": [
+    {
+      "id": "sha256:<git-common-dir-identity>",
+      "name": "naon-dnl",
+      "kind": "worktree_family",
+      "main_worktree": "/path/to/naon-dnl",
+      "git_common_dir": "/path/to/naon-dnl/.git",
+      "saved_from": "/path/to/naon-dnl.worktrees/naon-dnl__feature"
+    }
+  ]
 }
 ```
 
-Legacy v0 files without `schema_version` are migrated in memory. Saving always
-writes the current v1 shape using the existing atomic write pattern. Unknown
-future schema versions fail instead of being partially interpreted.
+Legacy v0 files without `schema_version` are migrated in memory. Legacy entries
+that no longer resolve to Git repositories are skipped because they cannot be
+assigned a worktree-family identity. Saving always writes the current v1 shape
+using the existing atomic write pattern. Unknown future schema versions fail
+instead of being partially interpreted.
 
-The next config milestones are a saved repository registry and template editing,
-not a full user profile system. The planned direction is:
+Saved repositories are stored as worktree families, not individual linked
+worktrees. `repo save [path]` uses Git's common directory as the family identity
+so saving the main worktree and a linked worktree deduplicates to one entry.
+`repo add <path>` remains as a compatibility alias for `repo save <path>`.
+Bare-primary families are supported with `kind: "bare_worktree_family"` and
+`main_worktree: null`.
 
-- Store worktree family entries, not individual linked worktrees.
+The next config milestones are template editing and repository removal, not a
+full user profile system. The planned direction is:
+
 - Use worktree templates such as `{main_path}.worktrees` and
   `{repo_name}__{ref_slug}`.
 - Treat config as preview input, not execute authority.
