@@ -27,9 +27,14 @@ current product contract.
 - Failed JSON output uses `{ "ok": false, "error": ... }`.
 - `inspect` is read-only.
 - `inspect.next` actions are guarded suggestions, not execution permission.
-- Write actions must follow `inspect -> preview -> execute -> undo`.
+- Write actions must enter through `inspect -> preview -> execute`; automatic
+  `undo` exists only for action-specific contracts that can honestly prove
+  reversibility.
+- Destructive non-undoable actions, such as removing an existing worktree, must
+  remain preview-only until explicit confirmation and recovery contracts exist.
 - `execute` must rebuild trusted Git commands from an internal allowlist.
-- `undo` must validate local provenance before changing the index.
+- `undo` must validate local provenance before changing the index or removing
+  worktree state.
 
 Never treat a `reference_command` field as a command to execute directly.
 

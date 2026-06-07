@@ -76,7 +76,8 @@ risk hint, summary, and guarded next-action candidates.
 
 ## Preview/Execute/Undo Contract
 
-Write actions grow only through:
+Write actions enter through a staged safety lifecycle. The full loop for
+undoable actions is:
 
 ```text
 inspect -> preview -> execute -> undo
@@ -103,6 +104,11 @@ created by `super-git`, refuses locked/prunable/main/dirty/drifted targets, and
 then removes the linked worktree with `git worktree remove` without `--force`.
 It must not delete branch refs, remote refs, commits, history, or user-created
 files.
+
+Not every Git write can honestly offer automatic undo. Destructive actions such
+as removing an existing linked worktree must say so in their preview contract,
+stay preview-only until confirmation and revalidation are designed, and provide
+recovery hints instead of pretending to be reversible.
 
 ## Config
 
@@ -187,8 +193,8 @@ core safety lifecycle has explicit preview and confirmation rules for them.
 
 ## Worktrees
 
-Worktree management remains an important differentiator. Current functionality
-is intentionally read-oriented:
+Worktree management remains an important differentiator. The current foundation
+is read-first and safety-gated:
 
 - `inspect.worktree_context` shows where the current repository sits in its
   worktree family.
@@ -223,6 +229,14 @@ is required provenance; partial or tampered records are not cleanup permission.
 Successful undo removes only the linked worktree and an empty parent directory
 created by `super-git`, and refuses ignored files as well as tracked or
 untracked changes before removal.
+
+Worktree removal has a different boundary. Removing an existing linked
+worktree is a destructive action, not an undoable cleanup action. The C7
+contract starts with `preview worktree-remove` only: exact absolute
+linked-worktree path, read-only target scanning, no `--force`, no
+branch/history deletion, no automatic undo, and human confirmation required
+before any future execute support. The detailed checkpoint is recorded in
+`docs/internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md`.
 
 ## Plugins And Guides
 

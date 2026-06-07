@@ -5,11 +5,12 @@ should be useful before the next stage starts.
 
 ## Current Position
 
-The project has a working read-side inspection layer and the first write-side
-safety loop:
+The project has a working read-side inspection layer and two write-side safety
+flows:
 
 ```text
 inspect -> preview stage-changes -> execute --plan -> undo --token
+inspect -> preview worktree-create -> execute --plan -> undo --token
 ```
 
 The next stages should expand this lifecycle carefully instead of adding raw Git
@@ -64,7 +65,7 @@ Next:
 
 - no shell hooks, copy patterns, or profile system
 
-## Stage 4: Safe Worktree Create Preview
+## Stage 4: Safe Worktree Create
 
 Implemented so far:
 
@@ -104,12 +105,28 @@ Next:
 
 - richer ambiguous-ref diagnostics with candidate details
 
-## Stage 5: Worktree Create/Remove Execute
+## Stage 5: Safe Worktree Remove Preview
 
-- execute validated worktree removal plans
-- protect dirty worktrees and untracked files
-- require clear confirmation rules for destructive removal
-- provide cleanup guidance where true undo is not possible
+Planned:
+
+- C7-0 contract checkpoint for destructive worktree removal preview
+- `preview worktree-remove --worktree <absolute-linked-worktree-path>`
+- exact absolute linked-worktree path only in the first implementation
+- no `--current` shortcut in the first implementation
+- no `--force`
+- no branch, remote-ref, commit, or history deletion
+- target identity from `git worktree list --porcelain` plus Git directory
+  metadata
+- hard blocks for main, bare-primary, current, detached, staged, unstaged,
+  untracked, ignored, conflicted, locked, prunable, in-progress, and submodule
+  targets
+- report process-detection limitations for editors, terminals, development
+  servers, and file watchers
+- `execution.status: "preview_only"` for clean removable targets until a later
+  confirmation/execute contract exists
+- `undo_strategy.kind: "not_available"` plus recovery hints instead of
+  pretending removal is reversible
+- clear human confirmation model before any future execute support
 
 ## Stage 6: Repository Profile And Dashboard
 
