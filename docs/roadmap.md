@@ -107,19 +107,26 @@ Next:
 
 ## Stage 5: Safe Worktree Remove Preview
 
-Planned:
+Implemented so far:
 
 - C7-0 contract checkpoint for destructive worktree removal preview
+- C7-A read-only target resolver/scanner for exact absolute linked-worktree
+  paths
+- target identity from `git worktree list --porcelain` plus Git directory
+  metadata
+- block detection for main, bare-primary, current, detached, staged, unstaged,
+  untracked, ignored, conflicted, locked, prunable, in-progress, and submodule
+  targets
+- clean linked worktrees report `execution_status: "preview_only"` in the scan
+  result
+
+Next:
+
 - `preview worktree-remove --worktree <absolute-linked-worktree-path>`
 - exact absolute linked-worktree path only in the first implementation
 - no `--current` shortcut in the first implementation
 - no `--force`
 - no branch, remote-ref, commit, or history deletion
-- target identity from `git worktree list --porcelain` plus Git directory
-  metadata
-- hard blocks for main, bare-primary, current, detached, staged, unstaged,
-  untracked, ignored, conflicted, locked, prunable, in-progress, and submodule
-  targets
 - report process-detection limitations for editors, terminals, development
   servers, and file watchers
 - `execution.status: "preview_only"` for clean removable targets until a later

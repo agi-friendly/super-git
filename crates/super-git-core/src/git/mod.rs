@@ -12,3 +12,4 @@ pub mod undo_registry;
 pub mod undo_worktree;
 pub mod worktree;
 pub mod worktree_plan;
+pub mod worktree_remove;
