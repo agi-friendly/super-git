@@ -27,11 +27,13 @@ impl StatusOutput {
 
 pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
+pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.2";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
 pub const UNDO_REGISTRY_SCHEMA_VERSION: &str = "super-git.undo-registry.v0.1";
 pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
+pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -65,6 +67,8 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
     pub detached: bool,
     pub bare: bool,
+    pub locked: bool,
+    pub prunable: bool,
 }
 
 impl WorktreeInfo {
@@ -75,6 +79,8 @@ impl WorktreeInfo {
             branch: None,
             detached: false,
             bare: false,
+            locked: false,
+            prunable: false,
         }
     }
 }
@@ -294,6 +300,199 @@ pub struct PreviewAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WorktreeCreatePlan {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub action: WorktreeCreateAction,
+    pub repository: WorktreeCreateRepository,
+    pub config_used: WorktreeCreateConfigUsed,
+    pub source_ref: WorktreeSourceRef,
+    pub ref_policy: WorktreeRefPolicy,
+    pub target: WorktreeCreateTarget,
+    pub family_snapshot: WorktreeFamilySnapshot,
+    pub preconditions: Vec<WorktreeCreatePrecondition>,
+    pub execution: WorktreeCreateExecution,
+    pub risk: ActionRisk,
+    pub effects: Vec<String>,
+    pub reference_commands: WorktreeReferenceCommands,
+    pub undo_strategy: WorktreeCreateUndoStrategy,
+    pub undo_preview: WorktreeCreateUndoPreview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateAction {
+    pub kind: String,
+    pub options: WorktreeCreateOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateOptions {
+    pub repo_selector: Option<String>,
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateRepository {
+    pub family_id: String,
+    pub kind: String,
+    pub git_common_dir: PathBuf,
+    pub main_worktree: Option<PathBuf>,
+    pub selected_from: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateConfigUsed {
+    pub source: String,
+    pub config_home_source: String,
+    pub config_fingerprint: String,
+    pub worktree_template: WorktreeTemplateConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeTemplateConfig {
+    pub parent_template: String,
+    pub name_template: String,
+    pub ref_slug_algorithm: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeSourceRef {
+    pub input: String,
+    pub kind: String,
+    pub full_ref: Option<String>,
+    pub resolved_commit: Option<String>,
+    pub supported_for_execute: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRefPolicy {
+    pub mode: String,
+    pub will_create_branch: bool,
+    pub will_detach_head: bool,
+    pub will_track_upstream: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateTarget {
+    pub path: PathBuf,
+    pub parent: PathBuf,
+    pub name: String,
+    pub ref_slug: String,
+    pub variables: WorktreeTemplateVariablesView,
+    pub exists: bool,
+    pub parent_exists: bool,
+    pub parent_is_directory: bool,
+    pub parent_is_symlink: bool,
+    pub parent_creation: WorktreeParentCreationView,
+    pub inside_git_dir: bool,
+    pub inside_existing_worktree: bool,
+    pub case_insensitive_collision: bool,
+    pub reserved_name_collision: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeTemplateVariablesView {
+    pub main_path: PathBuf,
+    pub repo_name: String,
+    pub ref_slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeParentCreationView {
+    pub allowed: bool,
+    pub will_create: bool,
+    pub removable_by_undo_if_empty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeFamilySnapshot {
+    pub fingerprint: String,
+    pub worktrees: Vec<WorktreeSnapshotEntry>,
+    pub branch_occupancy: Vec<BranchOccupancy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeSnapshotEntry {
+    pub path: PathBuf,
+    pub kind: String,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub locked: bool,
+    pub prunable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchOccupancy {
+    pub branch: String,
+    pub worktree_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreatePrecondition {
+    pub code: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateExecution {
+    pub status: String,
+    pub super_git_execute_required: bool,
+    pub raw_git_allowed: bool,
+    pub suggested_super_git_command: Option<Vec<String>>,
+    pub blocked_reasons: Vec<WorktreeBlockedReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeBlockedReason {
+    pub code: String,
+    pub severity: String,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeReferenceCommands {
+    pub semantics: String,
+    pub never_execute_directly: bool,
+    pub commands: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateUndoStrategy {
+    pub kind: String,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeCreateUndoPreview {
+    pub kind: String,
+    pub available_after_execute: bool,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StateFingerprint {
     pub schema_version: String,
     pub repository: PathBuf,
@@ -343,7 +542,23 @@ pub struct ExecuteResult {
     pub repository: PathBuf,
     pub executed: bool,
     pub effects: Vec<String>,
-    pub undo_token: UndoToken,
+    pub undo_token: ExecuteUndoToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExecuteUndoToken {
+    Index(Box<UndoToken>),
+    Worktree(Box<WorktreeUndoToken>),
+}
+
+impl ExecuteUndoToken {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Index(token) => &token.kind,
+            Self::Worktree(token) => &token.kind,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,6 +574,43 @@ pub struct UndoToken {
     pub pre_index_existed: bool,
     pub pre_index_sha256: String,
     pub post_index_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeUndoToken {
+    pub schema_version: String,
+    pub kind: String,
+    pub repository: PathBuf,
+    pub action: String,
+    pub plan_id: String,
+    pub target_path: PathBuf,
+    pub target_head: String,
+    pub target_branch: Option<String>,
+    pub git_common_dir: PathBuf,
+    pub family_id: String,
+    pub source_ref: WorktreeSourceRef,
+    pub ref_policy: WorktreeRefPolicy,
+    pub created_parent: Option<PathBuf>,
+    pub execution_record_path: PathBuf,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeExecutionRecord {
+    pub schema_version: String,
+    pub status: String,
+    pub action: String,
+    pub plan_id: String,
+    pub repository: WorktreeCreateRepository,
+    pub target_path: PathBuf,
+    pub source_ref: WorktreeSourceRef,
+    pub expected_head: String,
+    pub expected_branch: Option<String>,
+    pub created_parent: Option<PathBuf>,
+    pub undo_token: Option<WorktreeUndoToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

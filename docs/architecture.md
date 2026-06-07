@@ -38,6 +38,7 @@ Current commands:
 - `super-git status [path]`
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
+- `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
 - `super-git execute --plan <file|->`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`
@@ -91,10 +92,17 @@ repository root, fingerprint, and resolved pathset immediately before writing.
 State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
 from the core allowlist.
 
-`undo --token <file|->` validates token schema, repository identity, snapshot
-checksum, current index checksum, and local undo registry provenance before
-restoring the previous index snapshot. It never edits working-tree file
-contents.
+`undo --token <file|->` is action-specific. `stage_changes` undo validates
+token schema, repository identity, snapshot checksum, current index checksum,
+and local undo registry provenance before restoring the previous index
+snapshot. `stage_changes` undo never edits working-tree file contents.
+
+`worktree_create` undo has a different boundary: it validates local execution
+record provenance, confirms the target is still the clean linked worktree
+created by `super-git`, refuses locked/prunable/main/dirty/drifted targets, and
+then removes the linked worktree with `git worktree remove` without `--force`.
+It must not delete branch refs, remote refs, commits, history, or user-created
+files.
 
 ## Config
 
@@ -186,8 +194,35 @@ is intentionally read-oriented:
   worktree family.
 - `wt list` returns the full worktree list.
 
-Create/remove workflows should start with preview plans and safety checks before
-they become executable.
+Create/remove workflows must start with preview plans and safety checks before
+they become executable. Worktree creation is a typed `worktree_create` plan,
+not a raw `git worktree add` command string.
+
+`preview worktree-create` is read-only. It resolves a repository family, source
+ref, config-derived target path, family snapshot, branch occupancy, execution
+status, risk, and undo boundary into `super-git.plan.v0.2`. Unblocked plans
+report `execution.status: "executable"`, but execution still revalidates plan
+hash, repository family identity, source ref commit, source-ref/ref-policy
+consistency, family snapshot, branch occupancy, and target path safety
+immediately before writing. Blocked Git-state cases such as remote-tracking
+branch input, ambiguous ref input, occupied local branches, and target
+collisions return useful `{ ok: true, data.execution.status: "blocked" }`
+plans. Repository selector failures still return `{ ok: false, error }`
+because no family-specific plan can be formed.
+
+The first worktree create contract intentionally avoids `--force`,
+`--guess-remote`, target overrides, copy patterns, and shell hooks. Preview
+should resolve the repository family, source ref, target path, target safety,
+branch occupancy, and undo boundary before execution is possible. The detailed
+contract is recorded in
+`docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
+
+`undo` supports unchanged `worktree_create` results by consuming the worktree
+undo token from `execute`. The execution record under the Git common directory
+is required provenance; partial or tampered records are not cleanup permission.
+Successful undo removes only the linked worktree and an empty parent directory
+created by `super-git`, and refuses ignored files as well as tracked or
+untracked changes before removal.
 
 ## Plugins And Guides
 

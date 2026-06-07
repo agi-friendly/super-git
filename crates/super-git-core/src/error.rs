@@ -82,6 +82,18 @@ pub enum SuperGitError {
         rollback_error: String,
     },
 
+    #[error(
+        "execute partial failure for {action}: {message}; execution_record_path={execution_record_path}; target_path={target_path}; target_path_exists={target_path_exists}; worktree_list_entry_present={worktree_list_entry_present}; cleanup=safe_next:inspect_cleanup_record"
+    )]
+    ExecutePartialFailure {
+        action: String,
+        message: String,
+        execution_record_path: PathBuf,
+        target_path: PathBuf,
+        target_path_exists: bool,
+        worktree_list_entry_present: bool,
+    },
+
     #[error("undo token invalid: {code} ({message})")]
     UndoTokenInvalid { code: String, message: String },
 

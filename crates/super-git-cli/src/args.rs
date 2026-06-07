@@ -117,6 +117,17 @@ pub enum ConfigCommands {
 pub enum PreviewCommands {
     /// Preview staging all current unstaged and untracked changes.
     StageChanges,
+
+    /// Preview creating a linked worktree from a branch, tag, or commit.
+    WorktreeCreate {
+        /// Saved repository id/name/path selector. Defaults to the current Git worktree family.
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Existing local branch, tag, commit, or remote-tracking branch to inspect.
+        #[arg(long = "ref")]
+        ref_name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

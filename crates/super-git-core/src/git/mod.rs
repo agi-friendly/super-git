@@ -1,10 +1,14 @@
 pub mod command;
 pub mod execute;
+pub mod execute_worktree;
 pub mod fingerprint;
 pub mod preview;
+pub mod preview_worktree;
 pub mod repository;
 pub mod state;
 pub mod status;
 pub mod undo;
 pub mod undo_registry;
+pub mod undo_worktree;
 pub mod worktree;
+pub mod worktree_plan;

@@ -73,16 +73,42 @@ For the current `stage_changes` action, undo is index-only:
 
 `undo` does not edit working-tree files.
 
+For the current `worktree_create` action, undo is removal-only for the linked
+worktree created by `super-git`:
+
+- validate token schema
+- validate repository family identity
+- validate the local execution record under the Git common directory
+- require a completed execution record whose undo token matches the provided
+  token
+- require the target to still be a linked, unlocked, non-prunable worktree
+- require the target HEAD/ref to match the execute record
+- require no in-progress Git operation and a clean target working tree,
+  including ignored files
+- remove the linked worktree with `git worktree remove` without `--force`
+- remove a parent directory created by `super-git` only if it is empty
+
+`worktree_create` undo does not delete branch refs, remote refs, commits,
+history, dirty files, untracked files, ignored files, locked worktrees, or main
+worktrees.
+
 ## Current Write Boundary
 
-Only one write action exists today:
+Two Git write actions exist today:
 
 ```text
 stage_changes
+worktree_create
 ```
 
-It stages the unstaged/untracked pathset captured by `preview`, but only after
-`execute` confirms that the pathset and fingerprint still match.
+`stage_changes` stages the unstaged/untracked pathset captured by `preview`,
+but only after `execute` confirms that the pathset and fingerprint still match.
+
+`worktree_create` creates one linked worktree from an executable
+`super-git.plan.v0.2`, but only after `execute` revalidates plan hash, source
+ref, ref-policy consistency, repository family identity, family snapshot, branch
+occupancy, target path safety, and post-create HEAD/ref state. It writes a local
+execution record before Git may mutate worktree metadata.
 
 Future actions must earn their way into the allowlist with tests and docs.
 
@@ -94,6 +120,22 @@ including cross-kind matches such as one repository id and another repository
 name. Because saved repositories become preview input for later worktree
 actions, `config validate` treats malformed registry entries as invalid instead
 of silently accepting arbitrary ids or relative paths.
+
+Worktree creation is the next Git write family, but it is not a raw
+`git worktree add` wrapper. The preview contract is documented in
+`docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
+`preview worktree-create` is read-only, does not use `--force` or
+`--guess-remote`, does not imply remote branch tracking, and hard-blocks a
+branch that is already checked out in another worktree. Target paths are
+resolved from config during preview and frozen into `super-git.plan.v0.2`;
+execute must not re-expand config templates as trusted authority. `execute`
+supports executable `worktree_create` plans only after revalidating the plan
+hash, source ref, repository family, branch occupancy, target path, and
+post-create HEAD/ref state. Reference commands remain documentation-only.
+
+Worktree create undo is intentionally narrow: remove the clean linked worktree
+created by `super-git` when local provenance and state checks still match. It
+does not delete branch refs, remote refs, commits, or user-created files.
 
 ## Risk Vocabulary
 

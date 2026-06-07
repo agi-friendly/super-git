@@ -10,7 +10,7 @@ use clap::Parser;
 use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
-use super_git_core::git::{execute, preview, state, status, undo, worktree};
+use super_git_core::git::{execute, preview, preview_worktree, state, status, undo, worktree};
 
 use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -183,6 +183,16 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
                 preview::preview_stage_changes(&path).context("could not preview stage_changes")?;
 
             output::print_preview_plan(mode, &plan)
+        }
+        PreviewCommands::WorktreeCreate { repo, ref_name } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let app_home = default_app_home().context("could not resolve config path")?;
+            let store = ConfigStore::new(app_home.config_file.clone());
+            let plan =
+                preview_worktree::preview_worktree_create(&path, &app_home, &store, repo, ref_name)
+                    .context("could not preview worktree_create")?;
+
+            output::print_worktree_create_plan(mode, &plan)
         }
     }
 }

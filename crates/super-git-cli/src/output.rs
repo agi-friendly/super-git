@@ -9,8 +9,9 @@ use super_git_core::config::store::{
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
 };
+use super_git_core::SuperGitError;
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
 /// 사람이 직접 읽을 때만 `--human`으로 Human을 고른다.
@@ -38,13 +39,16 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
         OutputMode::Json => {
             // anyhow의 context 체인을 펼쳐 최상위 메시지와 원인들을 분리한다.
             let causes: Vec<String> = err.chain().skip(1).map(|cause| cause.to_string()).collect();
-            let value = json!({
+            let mut value = json!({
                 "ok": false,
                 "error": {
                     "message": err.to_string(),
                     "causes": causes,
                 }
             });
+            if let Some(details) = structured_error_details(err) {
+                value["error"]["details"] = details;
+            }
 
             // 에러 직렬화 자체가 실패하는 극단적 경우의 최후 수단.
             match serde_json::to_string_pretty(&value) {
@@ -56,6 +60,38 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
             eprintln!("Error: {err:#}");
         }
     }
+}
+
+fn structured_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
+    err.chain().find_map(|cause| {
+        let error = cause.downcast_ref::<SuperGitError>()?;
+        match error {
+            SuperGitError::ExecutePartialFailure {
+                action,
+                message,
+                execution_record_path,
+                target_path,
+                target_path_exists,
+                worktree_list_entry_present,
+            } => Some(json!({
+                "status": "failed_partial",
+                "action": action,
+                "message": message,
+                "execution_record_path": execution_record_path,
+                "observed": {
+                    "target_path": target_path,
+                    "target_path_exists": target_path_exists,
+                    "worktree_list_entry_present": worktree_list_entry_present,
+                },
+                "cleanup": {
+                    "automatic_undo_available": false,
+                    "safe_next": "inspect_cleanup_record",
+                    "reason": "Git may have created partial worktree state; re-inspect the execution record before cleanup."
+                }
+            })),
+            _ => None,
+        }
+    })
 }
 
 /// clap 파싱 에러도 같은 출력 계약을 따른다.
@@ -433,6 +469,29 @@ pub fn print_preview_plan(mode: OutputMode, plan: &PreviewPlan) -> Result<()> {
     }
 }
 
+pub fn print_worktree_create_plan(mode: OutputMode, plan: &WorktreeCreatePlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.selected_from.display());
+            println!("Ref: {}", plan.action.options.ref_name);
+            println!("Target: {}", plan.target.path.display());
+            println!("Execution: {}", plan.execution.status);
+            if !plan.execution.blocked_reasons.is_empty() {
+                println!("Blocked reasons:");
+                for reason in &plan.execution.blocked_reasons {
+                    println!("  - {} ({})", reason.code, reason.severity);
+                }
+            }
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!("Writes now: no");
+            Ok(())
+        }
+    }
+}
+
 pub fn print_execute_result(mode: OutputMode, result: &ExecuteResult) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(result),
@@ -440,7 +499,7 @@ pub fn print_execute_result(mode: OutputMode, result: &ExecuteResult) -> Result<
             println!("Executed: {}", result.action);
             println!("Plan: {}", result.plan_id);
             println!("Repository: {}", result.repository.display());
-            println!("Undo token: {}", result.undo_token.kind);
+            println!("Undo token: {}", result.undo_token.kind());
             Ok(())
         }
     }

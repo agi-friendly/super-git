@@ -63,26 +63,53 @@ Implemented:
 Next:
 
 - no shell hooks, copy patterns, or profile system
-- actual `{ref_slug}` rendering and target path collision checks in worktree
-  create preview
 
 ## Stage 4: Safe Worktree Create Preview
 
-- preview plan for worktree creation
-- branch name validation
-- target path validation
-- base branch validation
-- existing path and branch-use warnings
+Implemented so far:
+
+- `path_safe_v1` ref slug rendering
+- config-derived target path resolver
+- target parent creation policy
+- target path safety flags for existing paths, Git dir nesting, existing
+  worktree nesting, case-insensitive name collisions, and reserved names
+- contract checkpoint for `worktree_create` preview
+- internal worktree-family snapshot based on Git porcelain data
+- `preview worktree-create --ref <ref>`
+- `preview worktree-create --repo <id-or-name-or-path> --ref <ref>`
+- source ref classification for local branch, tag, commit, remote-tracking
+  branch, ambiguous ref, and unknown ref
+- remote-tracking branch input is recognized and blocked
+- ambiguous branch/tag/remote/commit ref input is blocked
+- branch occupancy hard blocks when a branch is already checked out elsewhere
+- explicit `execution.status` and structured blocked reasons
+- unblocked plans report `executable`
 - clear risk and reversibility metadata
 - target path resolved from config and frozen in the plan
+- no `--force`, `--guess-remote`, `--target`, copy patterns, or shell hooks in
+  the first implementation
+- `execute` revalidates executable `super-git.plan.v0.2` worktree-create plans
+  before creating one linked worktree, including source-ref/ref-policy
+  consistency
+- worktree-create execution writes a local execution record and returns a
+  worktree undo token
+- `undo` removes unchanged linked worktrees created by `super-git` only after
+  local execution-record provenance, clean target state including ignored files,
+  lock/prunable checks, and HEAD/ref drift checks pass
+- successful worktree-create undo preserves branch refs and history and removes
+  an empty parent directory created by `super-git` only when safe
+- full `locked` and `prunable` worktree snapshot parsing
+
+Next:
+
+- richer ambiguous-ref diagnostics with candidate details
 
 ## Stage 5: Worktree Create/Remove Execute
 
-- execute validated worktree creation plans
 - execute validated worktree removal plans
 - protect dirty worktrees and untracked files
 - require clear confirmation rules for destructive removal
-- provide undo guidance where true undo is not possible
+- provide cleanup guidance where true undo is not possible
 
 ## Stage 6: Repository Profile And Dashboard
 

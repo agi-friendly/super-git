@@ -185,6 +185,25 @@ super-git preview stage-changes > /tmp/super-git-plan.json
 The plan is a contract, not a script. `reference_commands` are documentation
 references only.
 
+## `preview worktree-create`
+
+Builds a read-only `super-git.plan.v0.2` plan for creating one linked worktree.
+
+```bash
+super-git preview worktree-create --ref <branch-or-tag-or-commit>
+super-git preview worktree-create --repo <id-or-name-or-path> --ref <branch-or-tag-or-commit>
+```
+
+Supported source refs are existing local branches, tags, and commit hashes.
+Remote-tracking branches are recognized but blocked until an explicit
+local-branch policy exists. Ambiguous refs, occupied local branches, and target
+path collisions also return blocked plans instead of letting Git fail later.
+
+`preview worktree-create` does not create directories, worktrees, config files,
+or Git worktree metadata. Unblocked plans use
+`execution.status: "executable"` and must still pass `execute --plan`
+re-validation before any write occurs.
+
 ## `execute --plan <file|->`
 
 Executes a previously previewed plan after re-validation.
@@ -194,9 +213,10 @@ super-git execute --plan /tmp/super-git-plan.json > /tmp/super-git-result.json
 super-git execute --plan - < /tmp/super-git-plan.json
 ```
 
-Current support is intentionally limited to the internal `stage_changes`
-allowlist. `execute` rejects stale plans, tampered plans, unsupported actions,
-unsupported options, and mismatched repository state.
+Current support is intentionally limited to internal allowlisted actions:
+`stage_changes` and executable `worktree_create` plans. `execute` rejects stale
+plans, tampered plans, unsupported actions, unsupported options, blocked
+worktree plans, and mismatched repository state.
 
 ## `undo --token <file|->`
 
@@ -210,6 +230,13 @@ super-git undo --token - < /tmp/super-git-result.json
 The token is treated as untrusted input. `undo` validates local registry
 provenance and index checksums before restoring the previous index snapshot.
 It does not modify working-tree file contents.
+
+For `worktree_create` results, `undo` validates the local execution record,
+target worktree identity, lock/prunable state, HEAD/ref drift, and a clean
+target working tree including ignored files before removing the linked
+worktree. It uses `git worktree remove` without `--force`, does not delete
+branch refs or history, and removes a parent directory created by `super-git`
+only when that parent is empty.
 
 ## `status [path]`
 

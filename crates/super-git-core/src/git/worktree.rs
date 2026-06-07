@@ -37,6 +37,10 @@ pub fn parse_worktree_list(output: &str) -> Vec<WorktreeInfo> {
             worktree.detached = true;
         } else if line == "bare" {
             worktree.bare = true;
+        } else if line == "locked" || line.starts_with("locked ") {
+            worktree.locked = true;
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            worktree.prunable = true;
         }
     }
 
@@ -74,19 +78,35 @@ detached
 
 worktree /bare
 bare
+
+worktree /locked
+HEAD 3333333333333333333333333333333333333333
+branch refs/heads/locked
+locked manual reason
+
+worktree /prunable
+HEAD 4444444444444444444444444444444444444444
+branch refs/heads/prunable
+prunable gitdir file points to non-existent location
 ";
 
         let worktrees = parse_worktree_list(output);
 
-        assert_eq!(worktrees.len(), 3);
+        assert_eq!(worktrees.len(), 5);
         assert_eq!(worktrees[0].path, PathBuf::from("/repo"));
         assert_eq!(worktrees[0].branch, Some("main".to_string()));
         assert!(!worktrees[0].detached);
+        assert!(!worktrees[0].locked);
+        assert!(!worktrees[0].prunable);
         assert_eq!(
             worktrees[1].head,
             Some("2222222222222222222222222222222222222222".to_string())
         );
         assert!(worktrees[1].detached);
         assert!(worktrees[2].bare);
+        assert!(worktrees[3].locked);
+        assert!(!worktrees[3].prunable);
+        assert!(!worktrees[4].locked);
+        assert!(worktrees[4].prunable);
     }
 }

@@ -49,6 +49,24 @@ fn status_porcelain(dir: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn git_stdout(dir: &Path, args: &[&str]) -> String {
+    let output = run_git(dir, args);
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("git stdout utf8")
+}
+
+fn path_string(path: impl AsRef<Path>) -> String {
+    path.as_ref().to_string_lossy().into_owned()
+}
+
+fn worktree_list(dir: &Path) -> String {
+    git_stdout(dir, &["worktree", "list", "--porcelain"])
+}
+
 fn preview_plan_file(dir: &Path) -> PathBuf {
     let output = super_git(dir)
         .args(["preview", "stage-changes"])
@@ -65,6 +83,30 @@ fn preview_plan_file(dir: &Path) -> PathBuf {
     plan_path
 }
 
+fn preview_worktree_plan_file(dir: &Path, app_home: &Path, ref_name: &str) -> (PathBuf, PathBuf) {
+    let output = super_git(dir)
+        .args(["preview", "worktree-create", "--ref", ref_name])
+        .env("SUPER_GIT_HOME", app_home)
+        .output()
+        .expect("run worktree preview");
+    assert!(
+        output.status.success(),
+        "worktree preview failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("preview json");
+    let target = PathBuf::from(
+        json["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+
+    let plan_path = dir.join(".git").join("super-git-test-worktree-plan.json");
+    std::fs::write(&plan_path, output.stdout).expect("write worktree plan");
+    (plan_path, target)
+}
+
 fn execute_plan(dir: &Path, plan: &Path) -> serde_json::Value {
     let output = super_git(dir)
         .args(["execute", "--plan"])
@@ -74,6 +116,22 @@ fn execute_plan(dir: &Path, plan: &Path) -> serde_json::Value {
     assert!(
         output.status.success(),
         "execute failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).expect("parse execute json")
+}
+
+fn execute_worktree_plan(dir: &Path, app_home: &Path, plan: &Path) -> serde_json::Value {
+    let output = super_git(dir)
+        .args(["execute", "--plan"])
+        .arg(plan)
+        .env("SUPER_GIT_HOME", app_home)
+        .output()
+        .expect("run worktree execute");
+    assert!(
+        output.status.success(),
+        "worktree execute failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
     serde_json::from_slice(&output.stdout).expect("parse execute json")
@@ -105,6 +163,21 @@ fn undo_token(dir: &Path, token: &Path) -> Output {
         .arg(token)
         .output()
         .expect("run undo")
+}
+
+fn setup_worktree_create(
+    tmp: &tempfile::TempDir,
+    branch: &str,
+) -> (PathBuf, PathBuf, serde_json::Value, PathBuf) {
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", branch]);
+    let (plan, target) = preview_worktree_plan_file(&repo, &app_home, branch);
+    let execute_output = execute_worktree_plan(&repo, &app_home, &plan);
+    let token = write_token_file(&repo, &execute_output);
+    (repo, target, execute_output, token)
 }
 
 #[test]
@@ -675,4 +748,284 @@ fn undo_stage_changes_fails_when_index_lock_exists() {
         .iter()
         .any(|cause| cause.as_str().unwrap_or_default().contains("index.lock")));
     assert_eq!(status_porcelain(dir), "M  file.txt\n");
+}
+
+#[test]
+fn undo_worktree_create_removes_clean_linked_worktree_and_preserves_branch() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let branch = "feature/undo-clean";
+    let (repo, target, execute_output, token) = setup_worktree_create(&tmp, branch);
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_head_before = git_stdout(&repo, &["rev-parse", &branch_ref])
+        .trim()
+        .to_string();
+    let parent = execute_output["data"]["undo_token"]["created_parent"]
+        .as_str()
+        .map(PathBuf::from)
+        .expect("created parent");
+    assert!(
+        target.join(".git").exists(),
+        "target worktree starts present"
+    );
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target starts as an active worktree"
+    );
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        output.status.success(),
+        "undo failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["action"], "worktree_create");
+    assert_eq!(json["data"]["undone"], true);
+    assert!(
+        !worktree_list(&repo).contains(&path_string(&target)),
+        "target must no longer be an active worktree"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", &branch_ref])
+            .trim()
+            .to_string(),
+        branch_head_before,
+        "undo must preserve the branch ref and commit"
+    );
+    assert!(
+        !parent.exists(),
+        "undo should remove an empty parent directory created by super-git"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_dirty_target_without_removing_it() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, _execute_output, token) = setup_worktree_create(&tmp, "feature/undo-dirty");
+    std::fs::write(target.join("untracked.txt"), "do not remove me\n").expect("dirty target");
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject a dirty target worktree"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_working_tree_clean")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "dirty target must remain active"
+    );
+    assert!(
+        target.join("untracked.txt").exists(),
+        "dirty file must remain untouched"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_ignored_target_files_without_removing_them() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, _execute_output, token) =
+        setup_worktree_create(&tmp, "feature/undo-ignored");
+    std::fs::write(
+        repo.join(".git").join("info").join("exclude"),
+        "ignored.log\n",
+    )
+    .expect("write git exclude");
+    std::fs::write(target.join("ignored.log"), "do not remove me\n").expect("write ignored file");
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject ignored files before removing a target worktree"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_working_tree_clean_including_ignored")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target with ignored files must remain active"
+    );
+    assert!(
+        target.join("ignored.log").exists(),
+        "ignored file must remain untouched"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_locked_target_without_removing_it() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, _execute_output, token) = setup_worktree_create(&tmp, "feature/undo-locked");
+    git(&repo, &["worktree", "lock", target.to_str().unwrap()]);
+
+    let output = undo_token(&repo, &token);
+
+    let _ = run_git(&repo, &["worktree", "unlock", target.to_str().unwrap()]);
+    assert!(
+        !output.status.success(),
+        "undo should reject a locked target worktree"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause.as_str().unwrap_or_default().contains("target_locked")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "locked target must remain active"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_execution_record_tampering() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, execute_output, token) =
+        setup_worktree_create(&tmp, "feature/undo-record-tamper");
+    let record_path = PathBuf::from(
+        execute_output["data"]["undo_token"]["execution_record_path"]
+            .as_str()
+            .expect("execution record path"),
+    );
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).expect("read record"))
+            .expect("parse record");
+    record["undo_token"]["plan_id"] = serde_json::json!("sha256:tampered");
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&record).expect("serialize record"),
+    )
+    .expect("write tampered record");
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject record/token mismatch"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("execution_record_token_mismatch")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target must remain active after provenance failure"
+    );
+}
+
+#[test]
+fn undo_worktree_create_accepts_raw_undo_token() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let branch = "feature/undo-raw";
+    let (repo, target, execute_output, _token) = setup_worktree_create(&tmp, branch);
+    let raw_token = execute_output["data"]["undo_token"].clone();
+    let token = write_token_file(&repo, &raw_token);
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        output.status.success(),
+        "undo failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !worktree_list(&repo).contains(&path_string(&target)),
+        "raw worktree token should remove the linked worktree"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_incomplete_execution_record() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, execute_output, token) =
+        setup_worktree_create(&tmp, "feature/undo-incomplete-record");
+    let record_path = PathBuf::from(
+        execute_output["data"]["undo_token"]["execution_record_path"]
+            .as_str()
+            .expect("execution record path"),
+    );
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).expect("read record"))
+            .expect("parse record");
+    record["status"] = serde_json::json!("intent");
+    record["undo_token"] = serde_json::Value::Null;
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&record).expect("serialize record"),
+    )
+    .expect("write incomplete record");
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject incomplete execution records"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("execution_record_incomplete")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target must remain active when record is incomplete"
+    );
+}
+
+#[test]
+fn undo_worktree_create_rejects_target_branch_drift() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, _execute_output, token) =
+        setup_worktree_create(&tmp, "feature/undo-branch-drift");
+    git(&target, &["checkout", "-q", "--detach"]);
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject target branch drift"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause.as_str().unwrap_or_default().contains("target_branch")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target must remain active after branch drift refusal"
+    );
 }
