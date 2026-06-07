@@ -9,7 +9,7 @@ use super_git_core::config::store::{
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -492,6 +492,49 @@ pub fn print_worktree_create_plan(mode: OutputMode, plan: &WorktreeCreatePlan) -
     }
 }
 
+pub fn print_worktree_remove_plan(mode: OutputMode, plan: &WorktreeRemovePlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.selected_from.display());
+            println!("Target: {}", plan.target.worktree_list_path.display());
+            println!("Execution: {}", plan.execution.status);
+            if !plan.execution.blocked_reasons.is_empty() {
+                println!("Blocked reasons:");
+                for reason in &plan.execution.blocked_reasons {
+                    println!("  - {} ({})", reason.code, reason.severity);
+                }
+            }
+            println!("Execute supported: {}", plan.execution.execute_supported);
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!(
+                "Confirmation required: {}",
+                yes_no(plan.confirmation.required_before_execute)
+            );
+            if !plan.confirmation.reason_codes.is_empty() {
+                println!("Confirmation reasons:");
+                for reason in &plan.confirmation.reason_codes {
+                    println!("  - {reason}");
+                }
+            }
+            println!("Automatic undo: not available");
+            println!("Undo strategy: {}", plan.undo_strategy.kind);
+            println!("Writes now: no");
+            Ok(())
+        }
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
 pub fn print_execute_result(mode: OutputMode, result: &ExecuteResult) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(result),
@@ -499,7 +542,10 @@ pub fn print_execute_result(mode: OutputMode, result: &ExecuteResult) -> Result<
             println!("Executed: {}", result.action);
             println!("Plan: {}", result.plan_id);
             println!("Repository: {}", result.repository.display());
-            println!("Undo token: {}", result.undo_token.kind());
+            match &result.undo_token {
+                Some(token) => println!("Undo token: {}", token.kind()),
+                None => println!("Undo token: not available"),
+            }
             Ok(())
         }
     }

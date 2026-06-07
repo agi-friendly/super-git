@@ -3,7 +3,7 @@
 `super-git` treats Git as a powerful state machine that should be inspected and
 validated before writes happen.
 
-The current lifecycle is:
+The full lifecycle for undoable actions is:
 
 ```text
 inspect -> preview -> execute -> undo
@@ -36,7 +36,7 @@ Automation should not scrape prose when structured data is available.
 ### Preview Produces A Contract
 
 `preview` creates a plan with action kind, preconditions, state fingerprint,
-resolved paths, risk metadata, and undo strategy.
+resolved paths, risk metadata, and action-specific undo or recovery strategy.
 
 The plan is not a shell script. Documentation fields such as
 `reference_commands` must not be executed directly.
@@ -94,11 +94,12 @@ worktrees.
 
 ## Current Write Boundary
 
-Two Git write actions exist today:
+Three Git write actions exist today:
 
 ```text
 stage_changes
 worktree_create
+worktree_remove
 ```
 
 `stage_changes` stages the unstaged/untracked pathset captured by `preview`,
@@ -109,6 +110,13 @@ but only after `execute` confirms that the pathset and fingerprint still match.
 ref, ref-policy consistency, repository family identity, family snapshot, branch
 occupancy, target path safety, and post-create HEAD/ref state. It writes a local
 execution record before Git may mutate worktree metadata.
+
+`worktree_remove` removes one existing linked worktree from a confirmed
+`super-git.plan.v0.3`, but only after `execute` validates a separate
+`super-git.confirmation.v0.1` artifact, revalidates the target immediately
+before deletion, writes an execution record, and confirms the command is not
+being run from inside the target worktree. It is destructive and does not
+return an automatic undo token.
 
 Future actions must earn their way into the allowlist with tests and docs.
 
@@ -121,7 +129,7 @@ name. Because saved repositories become preview input for later worktree
 actions, `config validate` treats malformed registry entries as invalid instead
 of silently accepting arbitrary ids or relative paths.
 
-Worktree creation is the next Git write family, but it is not a raw
+Worktree creation is implemented as a typed Git write family, not a raw
 `git worktree add` wrapper. The preview contract is documented in
 `docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
 `preview worktree-create` is read-only, does not use `--force` or
@@ -136,6 +144,51 @@ post-create HEAD/ref state. Reference commands remain documentation-only.
 Worktree create undo is intentionally narrow: remove the clean linked worktree
 created by `super-git` when local provenance and state checks still match. It
 does not delete branch refs, remote refs, commits, or user-created files.
+
+## Destructive Preview Boundary
+
+`worktree_remove` preview is the first destructive preview boundary.
+
+The guiding rule is:
+
+```text
+Worktree remove is not an undoable action; it is a previewable destructive action.
+```
+
+This means removal must not copy the `worktree_create` undo model. Removing an
+existing linked worktree deletes a filesystem tree and Git worktree metadata.
+`super-git` cannot promise to recreate untracked files, ignored files, local
+build outputs, editor state, or process state after deletion.
+
+The first `worktree_remove` slice established the preview boundary:
+
+- exact absolute linked-worktree path only
+- read-only target scan
+- no `--current`
+- no `--force`
+- no branch, remote-ref, commit, or history deletion
+- hard blocks for main, bare-primary, current, detached, staged, unstaged,
+  untracked, ignored, conflicted, locked, prunable, in-progress, and submodule
+  targets
+- running editors, terminals, development servers, and file watchers are not
+  detected and must be reported as a limitation
+- `reference_commands` stay documentation-only
+- `undo_strategy.kind` is `not_available`
+- `recovery_hints` are advisory, not a reversibility guarantee
+
+Worktree removal execute requires a separate `super-git.confirmation.v0.1`
+artifact. That artifact is explicit authorization, not execution permission by
+itself: execute still re-parses and re-hashes the plan, matches the confirmation
+to the plan and target identity, revalidates the full target state immediately
+before deletion, writes an intent record, then calls `git worktree remove`
+without `--force`.
+
+Successful worktree removal results do not return an `undo_token`. The local
+execution record states `automatic_undo_available: false` so downstream agents
+cannot accidentally treat the destructive action as reversible.
+
+The confirmation contract is documented in
+`docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`.
 
 ## Risk Vocabulary
 

@@ -56,15 +56,22 @@ creating a file.
 
 ```json
 {
-  "schema_version": 1,
-  "settings": {
-    "worktree": {
-      "parent_template": "{main_path}.worktrees",
-      "name_template": "{repo_name}__{ref_slug}",
-      "ref_slug_algorithm": "path_safe_v1"
-    }
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
   },
-  "repositories": []
+  "config": {
+    "schema_version": 1,
+    "settings": {
+      "worktree": {
+        "parent_template": "{main_path}.worktrees",
+        "name_template": "{repo_name}__{ref_slug}",
+        "ref_slug_algorithm": "path_safe_v1"
+      }
+    },
+    "repositories": []
+  }
 }
 ```
 
@@ -87,6 +94,11 @@ not as a command failure:
 
 ```json
 {
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
+  },
   "valid": false,
   "issues": [
     {
@@ -118,6 +130,11 @@ Successful updates write the v1 config shape and return the updated config data:
 
 ```json
 {
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
+  },
   "changed": true,
   "config": {
     "schema_version": 1,
@@ -204,19 +221,58 @@ or Git worktree metadata. Unblocked plans use
 `execution.status: "executable"` and must still pass `execute --plan`
 re-validation before any write occurs.
 
-## `execute --plan <file|->`
+## `preview worktree-remove`
+
+Builds a read-only `super-git.plan.v0.3` plan for removing one existing linked
+worktree.
+
+```bash
+super-git preview worktree-remove --worktree <absolute-linked-worktree-path>
+```
+
+The first implementation intentionally accepts only an exact absolute path that
+matches one `git worktree list --porcelain` entry. There is no `--current`, no
+`--force`, no branch deletion, and no automatic undo.
+
+If the path does not exactly match a worktree-list entry, no target-specific
+plan is emitted; the command fails with `{ ok: false, error }` instead.
+
+Clean linked worktrees return `execution.status: "preview_only"` with
+`execute_supported: true`. Blocked targets return `execution.status:
+"blocked"` with structured hard-block reasons. In both cases the plan is
+read-only and includes high-risk metadata, explicit confirmation requirements,
+`undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
+`reference_commands`.
+
+## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.
 
 ```bash
 super-git execute --plan /tmp/super-git-plan.json > /tmp/super-git-result.json
 super-git execute --plan - < /tmp/super-git-plan.json
+super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confirmation.json
 ```
 
 Current support is intentionally limited to internal allowlisted actions:
-`stage_changes` and executable `worktree_create` plans. `execute` rejects stale
-plans, tampered plans, unsupported actions, unsupported options, blocked
-worktree plans, and mismatched repository state.
+`stage_changes`, executable `worktree_create` plans, and confirmed
+`worktree_remove` plans. `execute` rejects stale plans, tampered plans,
+unsupported actions, unsupported options, blocked worktree plans, and
+mismatched repository state.
+
+Successful execute results currently use `schema_version` value
+`"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;
+non-undoable destructive actions intentionally omit it.
+
+`worktree_remove` is destructive and not automatically undoable. It requires a
+separate `super-git.confirmation.v0.1` artifact, then re-scans the target
+immediately before deletion. Execute removes only the linked worktree with
+`git worktree remove <target>` without `--force`; it does not delete branch
+refs, remote refs, commits, or history. Successful remove results intentionally
+omit `undo_token`.
+
+`--plan -` and `--confirmation -` cannot be used together because they cannot
+both read independent JSON documents from the same stdin stream.
 
 ## `undo --token <file|->`
 

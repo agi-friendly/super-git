@@ -10,25 +10,44 @@ use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
 use crate::git::execute_worktree;
+use crate::git::execute_worktree_remove;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
 use crate::git::preview::compute_plan_id;
+use crate::git::preview_worktree_remove;
 use crate::git::state;
 use crate::git::undo_registry;
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, Operation, PreviewPlan, PreviewPrecondition, UndoToken,
-    WorktreeCreatePlan, EXECUTE_SCHEMA_VERSION, PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
-    WORKTREE_PLAN_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeRemoveConfirmation, WorktreeRemovePlan,
+    CONFIRMATION_SCHEMA_VERSION, DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION, EXECUTE_SCHEMA_VERSION,
+    PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION, WORKTREE_PLAN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
 const ACTION_STAGE_CHANGES: &str = "stage_changes";
+const ACTION_WORKTREE_REMOVE: &str = "worktree_remove";
 
 pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteResult> {
+    execute_plan_bytes_with_confirmation(current_path, bytes, None)
+}
+
+pub fn execute_plan_bytes_with_confirmation(
+    current_path: &Path,
+    bytes: &[u8],
+    confirmation_bytes: Option<&[u8]>,
+) -> Result<ExecuteResult> {
     let plan = parse_plan(bytes)?;
     match plan {
-        PlanToExecute::StageChanges(plan) => execute_stage_changes_plan(current_path, *plan),
+        PlanToExecute::StageChanges(plan) => {
+            reject_unexpected_confirmation(confirmation_bytes)?;
+            execute_stage_changes_plan(current_path, *plan)
+        }
         PlanToExecute::WorktreeCreate(plan) => {
+            reject_unexpected_confirmation(confirmation_bytes)?;
             execute_worktree::execute_worktree_create_plan(*plan)
+        }
+        PlanToExecute::WorktreeRemove(plan) => {
+            execute_worktree_remove_plan(current_path, *plan, confirmation_bytes)
         }
     }
 }
@@ -36,6 +55,7 @@ pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteRe
 enum PlanToExecute {
     StageChanges(Box<PreviewPlan>),
     WorktreeCreate(Box<WorktreeCreatePlan>),
+    WorktreeRemove(Box<WorktreeRemovePlan>),
 }
 
 fn parse_plan(bytes: &[u8]) -> Result<PlanToExecute> {
@@ -68,11 +88,197 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
         Some(WORKTREE_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeCreate(Box::new(
             serde_json::from_value(value)?,
         ))),
+        Some(DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeRemove(
+            Box::new(serde_json::from_value(value)?),
+        )),
         _ => invalid_plan(
             "unsupported_schema_version",
-            "execute supports only super-git.plan.v0.1 and super-git.plan.v0.2",
+            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, and super-git.plan.v0.3",
         ),
     }
+}
+
+fn execute_worktree_remove_plan(
+    current_path: &Path,
+    plan: WorktreeRemovePlan,
+    confirmation_bytes: Option<&[u8]>,
+) -> Result<ExecuteResult> {
+    validate_worktree_remove_static_contract(&plan)?;
+    let Some(confirmation_bytes) = confirmation_bytes else {
+        return invalid_plan(
+            "confirmation_required",
+            "worktree_remove execute requires a separate confirmation artifact before delete support can be considered",
+        );
+    };
+
+    let confirmation = parse_worktree_remove_confirmation(confirmation_bytes)?;
+    validate_worktree_remove_confirmation(&plan, &confirmation)?;
+    execute_worktree_remove::execute_worktree_remove_plan(current_path, plan)
+}
+
+fn validate_worktree_remove_static_contract(plan: &WorktreeRemovePlan) -> Result<()> {
+    if plan.schema_version != DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION {
+        return invalid_plan(
+            "unsupported_schema_version",
+            "worktree_remove execute requires super-git.plan.v0.3",
+        );
+    }
+
+    let expected_plan_id = preview_worktree_remove::compute_worktree_remove_plan_id(plan)?;
+    ensure_match("plan_id", &plan.plan_id, &expected_plan_id)?;
+
+    if plan.action.kind != ACTION_WORKTREE_REMOVE {
+        return invalid_plan(
+            "unsupported_action",
+            "worktree_remove execute supports only worktree_remove plans",
+        );
+    }
+    if !plan.confirmation.required_before_execute {
+        return invalid_plan(
+            "confirmation_required",
+            "worktree_remove plans must require explicit confirmation before execute",
+        );
+    }
+    if plan.undo_strategy.kind != "not_available" {
+        return invalid_plan(
+            "unsupported_undo_strategy",
+            "worktree_remove execute cannot claim automatic undo support",
+        );
+    }
+
+    Ok(())
+}
+
+fn reject_unexpected_confirmation(confirmation_bytes: Option<&[u8]>) -> Result<()> {
+    if confirmation_bytes.is_some() {
+        return invalid_plan(
+            "confirmation_not_supported",
+            "confirmation artifacts are supported only for destructive worktree_remove plans",
+        );
+    }
+    Ok(())
+}
+
+fn parse_worktree_remove_confirmation(bytes: &[u8]) -> Result<WorktreeRemoveConfirmation> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if value.get("schema_version").and_then(Value::as_str) != Some(CONFIRMATION_SCHEMA_VERSION) {
+        return invalid_plan(
+            "confirmation_schema_unsupported",
+            "worktree_remove confirmation requires super-git.confirmation.v0.1",
+        );
+    }
+
+    serde_json::from_value(value).map_err(|err| SuperGitError::ExecutePlanInvalid {
+        code: "confirmation_artifact_invalid".to_string(),
+        message: format!("worktree_remove confirmation artifact is invalid JSON shape: {err}"),
+    })
+}
+
+fn validate_worktree_remove_confirmation(
+    plan: &WorktreeRemovePlan,
+    confirmation: &WorktreeRemoveConfirmation,
+) -> Result<()> {
+    if confirmation.kind.as_deref() != Some("destructive_action_confirmation") {
+        return invalid_plan(
+            "confirmation_kind_unsupported",
+            "worktree_remove confirmation kind must be destructive_action_confirmation",
+        );
+    }
+    if confirmation.action.as_deref() != Some(plan.action.kind.as_str()) {
+        return invalid_plan(
+            "confirmation_action_mismatch",
+            "worktree_remove confirmation action must match the plan action",
+        );
+    }
+    if confirmation.plan_schema_version.as_deref() != Some(plan.schema_version.as_str())
+        || confirmation.plan_id.as_deref() != Some(plan.plan_id.as_str())
+    {
+        return invalid_plan(
+            "confirmation_plan_mismatch",
+            "worktree_remove confirmation must match the plan schema version and plan id",
+        );
+    }
+
+    validate_confirmation_target(plan, confirmation)?;
+
+    if confirmation.acknowledged_reason_codes.as_ref() != Some(&plan.confirmation.reason_codes) {
+        return invalid_plan(
+            "confirmation_reason_codes_mismatch",
+            "worktree_remove confirmation must acknowledge the exact plan reason codes",
+        );
+    }
+    if confirmation.acknowledged_undo_strategy.as_deref() != Some(plan.undo_strategy.kind.as_str())
+    {
+        return invalid_plan(
+            "confirmation_undo_strategy_mismatch",
+            "worktree_remove confirmation must acknowledge the plan undo strategy",
+        );
+    }
+
+    let Some(acknowledgement) = &confirmation.acknowledgement else {
+        return invalid_plan(
+            "confirmation_acknowledgement_missing",
+            "worktree_remove confirmation must include an explicit acknowledgement",
+        );
+    };
+    if acknowledgement.method.as_deref() != Some("cli_typed_phrase") {
+        return invalid_plan(
+            "confirmation_acknowledgement_missing",
+            "worktree_remove confirmation acknowledgement method must be cli_typed_phrase",
+        );
+    }
+
+    let expected_phrase = format!(
+        "remove worktree {} without automatic undo",
+        plan.target.worktree_list_path.display()
+    );
+    if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
+        return invalid_plan(
+            "confirmation_phrase_mismatch",
+            "worktree_remove confirmation phrase must match the deterministic target phrase",
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_confirmation_target(
+    plan: &WorktreeRemovePlan,
+    confirmation: &WorktreeRemoveConfirmation,
+) -> Result<()> {
+    let Some(confirmation_target) = &confirmation.target else {
+        return invalid_plan(
+            "confirmation_target_mismatch",
+            "worktree_remove confirmation target is required",
+        );
+    };
+    let Some(plan_git_common_dir) = &plan.target.git_common_dir else {
+        return invalid_plan(
+            "confirmation_target_mismatch",
+            "worktree_remove plan target must include git_common_dir",
+        );
+    };
+
+    ensure_confirmation_path_match(
+        "confirmation.target.worktree_list_path",
+        &plan.target.worktree_list_path,
+        &confirmation_target.worktree_list_path,
+    )?;
+    ensure_confirmation_path_match(
+        "confirmation.target.git_common_dir",
+        plan_git_common_dir,
+        &confirmation_target.git_common_dir,
+    )?;
+    ensure_confirmation_optional_match(
+        "confirmation.target.head",
+        &plan.target.head,
+        &confirmation_target.head,
+    )?;
+    ensure_confirmation_optional_match(
+        "confirmation.target.branch",
+        &plan.target.branch,
+        &confirmation_target.branch,
+    )
 }
 
 fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult> {
@@ -133,7 +339,7 @@ fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<
         repository: state.root,
         executed: true,
         effects: vec!["Staged previewed paths in the current worktree index.".to_string()],
-        undo_token: ExecuteUndoToken::Index(Box::new(undo_token)),
+        undo_token: Some(ExecuteUndoToken::Index(Box::new(undo_token))),
     })
 }
 
@@ -442,6 +648,44 @@ fn ensure_match(field: &str, expected: &str, actual: &str) -> Result<()> {
         return Ok(());
     }
     mismatch(field, expected, actual)
+}
+
+fn ensure_confirmation_path_match(
+    field: &str,
+    expected: &Path,
+    actual: &Option<PathBuf>,
+) -> Result<()> {
+    let Some(actual) = actual else {
+        return invalid_plan(
+            "confirmation_target_mismatch",
+            &format!("{field} is required"),
+        );
+    };
+    if expected == actual {
+        return Ok(());
+    }
+    invalid_plan(
+        "confirmation_target_mismatch",
+        &format!(
+            "{field} expected {} but confirmation has {}",
+            expected.display(),
+            actual.display()
+        ),
+    )
+}
+
+fn ensure_confirmation_optional_match(
+    field: &str,
+    expected: &Option<String>,
+    actual: &Option<String>,
+) -> Result<()> {
+    if expected == actual {
+        return Ok(());
+    }
+    invalid_plan(
+        "confirmation_target_mismatch",
+        &format!("{field} expected {expected:?} but confirmation has {actual:?}"),
+    )
 }
 
 fn mismatch<T>(field: &str, expected: &str, actual: &str) -> Result<T> {

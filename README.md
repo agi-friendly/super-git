@@ -9,6 +9,10 @@ explicit before any write action happens. The core product contract is:
 inspect -> preview -> execute -> undo
 ```
 
+Undo is action-specific, not promised for every write. Destructive flows must
+use explicit confirmation and recovery contracts when automatic undo cannot be
+honestly proven.
+
 The tool is designed for AI agents first, but the same properties make it useful
 for humans: clear state, structured output, dry-run planning, guarded execution,
 and undo provenance.
@@ -48,11 +52,18 @@ Implemented today:
   - builds a read-only plan for creating a linked worktree
   - recognizes blocked cases such as occupied branches, remote-tracking refs,
     and target collisions without writing
-- `super-git execute --plan <file|->`
+- `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
+  - builds a read-only destructive-action plan for removing an existing linked
+    worktree
+  - reports strict hard blocks, human confirmation requirements, no automatic
+    undo, and manual recovery hints without deleting anything
+- `super-git execute --plan <file|-> [--confirmation <file|->]`
   - re-validates the plan and state before writing
-  - executes only internal allowlisted actions: `stage_changes` and
-    executable `worktree_create` plans
+  - executes only internal allowlisted actions: `stage_changes`, executable
+    `worktree_create` plans, and confirmed `worktree_remove` plans
   - writes local provenance before reporting success
+  - for destructive `worktree_remove`, requires a separate confirmation
+    artifact and returns no automatic undo token
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current

@@ -49,6 +49,11 @@ pub enum Commands {
         /// Plan file to execute. Use '-' to read from stdin.
         #[arg(long)]
         plan: PathBuf,
+
+        /// Confirmation artifact for destructive actions. Use '-' to read from stdin,
+        /// but not together with --plan -.
+        #[arg(long)]
+        confirmation: Option<PathBuf>,
     },
 
     /// Undo a write using a validated undo token.
@@ -127,6 +132,13 @@ pub enum PreviewCommands {
         /// Existing local branch, tag, commit, or remote-tracking branch to inspect.
         #[arg(long = "ref")]
         ref_name: String,
+    },
+
+    /// Preview removing an existing linked worktree.
+    WorktreeRemove {
+        /// Exact absolute linked worktree path to inspect for removal.
+        #[arg(long)]
+        worktree: PathBuf,
     },
 }
 

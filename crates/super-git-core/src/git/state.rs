@@ -555,7 +555,7 @@ fn action(
     }
 }
 
-fn detect_operation(git: &Git, path: &Path) -> Result<Operation> {
+pub(crate) fn detect_operation(git: &Git, path: &Path) -> Result<Operation> {
     let git_dir = absolute_git_dir(git, path)?;
     Ok(classify_operation(&git_dir))
 }

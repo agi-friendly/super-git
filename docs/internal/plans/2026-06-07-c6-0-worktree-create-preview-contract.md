@@ -1,5 +1,9 @@
 # C6-0 Worktree Create Preview Contract Implementation Plan
 
+> **Status:** Historical contract checkpoint. C6 later implemented
+> `worktree_create` preview, execute, and undo. Use command-reference and
+> architecture docs for the current public contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Define the first safe worktree creation contract before any worktree creation write action is implemented.

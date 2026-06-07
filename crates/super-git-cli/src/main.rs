@@ -10,7 +10,9 @@ use clap::Parser;
 use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
-use super_git_core::git::{execute, preview, preview_worktree, state, status, undo, worktree};
+use super_git_core::git::{
+    execute, preview, preview_worktree, preview_worktree_remove, state, status, undo, worktree,
+};
 
 use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -77,7 +79,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
-        Commands::Execute { plan } => run_execute(mode, plan),
+        Commands::Execute { plan, confirmation } => run_execute(mode, plan, confirmation),
         Commands::Undo { token } => run_undo(mode, token),
         Commands::Wt { command } => run_worktree(mode, command),
     }
@@ -194,15 +196,38 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
 
             output::print_worktree_create_plan(mode, &plan)
         }
+        PreviewCommands::WorktreeRemove { worktree } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let plan = preview_worktree_remove::preview_worktree_remove(&path, &worktree)
+                .context("could not preview worktree_remove")?;
+
+            output::print_worktree_remove_plan(mode, &plan)
+        }
     }
 }
 
-fn run_execute(mode: OutputMode, plan: PathBuf) -> Result<()> {
+fn run_execute(mode: OutputMode, plan: PathBuf, confirmation: Option<PathBuf>) -> Result<()> {
     let current_dir = std::env::current_dir().context("could not read current directory")?;
-    let bytes = read_json_arg(&plan, "plan")?;
+    if plan.as_os_str() == "-"
+        && confirmation
+            .as_ref()
+            .is_some_and(|path| path.as_os_str() == "-")
+    {
+        anyhow::bail!("--plan - and --confirmation - cannot both read from stdin");
+    }
 
-    let result =
-        execute::execute_plan_bytes(&current_dir, &bytes).context("could not execute plan")?;
+    let bytes = read_json_arg(&plan, "plan")?;
+    let confirmation_bytes = confirmation
+        .as_ref()
+        .map(|path| read_json_arg(path, "confirmation"))
+        .transpose()?;
+
+    let result = execute::execute_plan_bytes_with_confirmation(
+        &current_dir,
+        &bytes,
+        confirmation_bytes.as_deref(),
+    )
+    .context("could not execute plan")?;
     output::print_execute_result(mode, &result)
 }
 

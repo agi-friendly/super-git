@@ -39,7 +39,8 @@ Current commands:
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
 - `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
-- `super-git execute --plan <file|->`
+- `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
+- `super-git execute --plan <file|-> [--confirmation <file|->]`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`
 
@@ -76,7 +77,8 @@ risk hint, summary, and guarded next-action candidates.
 
 ## Preview/Execute/Undo Contract
 
-Write actions grow only through:
+Write actions enter through a staged safety lifecycle. The full loop for
+undoable actions is:
 
 ```text
 inspect -> preview -> execute -> undo
@@ -90,7 +92,13 @@ explanatory and cannot be executed by `execute`.
 `execute --plan <file|->` validates schema, plan hash, action kind, options,
 repository root, fingerprint, and resolved pathset immediately before writing.
 State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
-from the core allowlist.
+from the core allowlist. Destructive actions may also require
+`--confirmation <file|->`; confirmation is parsed and validated as a separate
+artifact, not as prompt text.
+
+Successful execute results use `super-git.execute.v0.2`. Undoable actions
+include an `undo_token`; destructive non-undoable actions such as
+`worktree_remove` omit it by contract.
 
 `undo --token <file|->` is action-specific. `stage_changes` undo validates
 token schema, repository identity, snapshot checksum, current index checksum,
@@ -103,6 +111,12 @@ created by `super-git`, refuses locked/prunable/main/dirty/drifted targets, and
 then removes the linked worktree with `git worktree remove` without `--force`.
 It must not delete branch refs, remote refs, commits, history, or user-created
 files.
+
+Not every Git write can honestly offer automatic undo. Destructive actions such
+as removing an existing linked worktree must say so in their preview contract,
+require separate confirmation plus fresh revalidation, and provide recovery
+hints instead of pretending to be reversible. Successful destructive actions can
+therefore omit `undo_token`.
 
 ## Config
 
@@ -178,21 +192,25 @@ saving:
   `{main_path}` or path separators.
 - `ref_slug_algorithm` currently supports only `path_safe_v1`.
 
-Config is preview input, not execute authority. Future worktree preview commands
-must resolve and freeze paths into plans; execute should not re-expand template
-strings as trusted instructions.
+Config is preview input, not execute authority. Worktree preview commands
+resolve and freeze paths into plans; execute does not re-expand template strings
+as trusted instructions.
 
 Shell hooks, copy patterns, and multiple profiles are out of scope until the
 core safety lifecycle has explicit preview and confirmation rules for them.
 
 ## Worktrees
 
-Worktree management remains an important differentiator. Current functionality
-is intentionally read-oriented:
+Worktree management remains an important differentiator. The current foundation
+is safety-gated:
 
 - `inspect.worktree_context` shows where the current repository sits in its
   worktree family.
 - `wt list` returns the full worktree list.
+- `worktree_create` supports preview, execute, and automatic undo when the
+  created linked worktree is still unchanged.
+- `worktree_remove` supports preview and confirmation-gated execute, but no
+  automatic undo.
 
 Create/remove workflows must start with preview plans and safety checks before
 they become executable. Worktree creation is a typed `worktree_create` plan,
@@ -223,6 +241,19 @@ is required provenance; partial or tampered records are not cleanup permission.
 Successful undo removes only the linked worktree and an empty parent directory
 created by `super-git`, and refuses ignored files as well as tracked or
 untracked changes before removal.
+
+Worktree removal has a different boundary. Removing an existing linked
+worktree is a destructive action, not an undoable cleanup action. The C7
+contract starts with exact absolute linked-worktree paths, read-only target
+scanning, no `--force`, no branch/history deletion, no automatic undo, and
+human confirmation. The detailed checkpoint is recorded in
+`docs/internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md`.
+The execute-side confirmation model is recorded separately in
+`docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`:
+`execute` parses typed `super-git.confirmation.v0.1` artifacts for
+`worktree_remove`, revalidates the full target state, writes a local execution
+record, and then removes only the linked worktree without deleting refs or
+history.
 
 ## Plugins And Guides
 

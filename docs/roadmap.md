@@ -5,12 +5,17 @@ should be useful before the next stage starts.
 
 ## Current Position
 
-The project has a working read-side inspection layer and the first write-side
-safety loop:
+The project has a working read-side inspection layer, two undoable write-side
+safety flows, and one confirmed destructive flow:
 
 ```text
 inspect -> preview stage-changes -> execute --plan -> undo --token
+inspect -> preview worktree-create -> execute --plan -> undo --token
+inspect -> preview worktree-remove -> execute --plan --confirmation
 ```
+
+`worktree_remove` is intentionally not automatically undoable; it requires
+explicit confirmation and recovery hints instead of an `undo_token`.
 
 The next stages should expand this lifecycle carefully instead of adding raw Git
 wrappers.
@@ -64,7 +69,7 @@ Next:
 
 - no shell hooks, copy patterns, or profile system
 
-## Stage 4: Safe Worktree Create Preview
+## Stage 4: Safe Worktree Create
 
 Implemented so far:
 
@@ -104,12 +109,47 @@ Next:
 
 - richer ambiguous-ref diagnostics with candidate details
 
-## Stage 5: Worktree Create/Remove Execute
+## Stage 5: Safe Worktree Remove
 
-- execute validated worktree removal plans
-- protect dirty worktrees and untracked files
-- require clear confirmation rules for destructive removal
-- provide cleanup guidance where true undo is not possible
+Implemented so far:
+
+- C7-0 contract checkpoint for destructive worktree removal preview
+- C7-A read-only target resolver/scanner for exact absolute linked-worktree
+  paths
+- target identity from `git worktree list --porcelain` plus Git directory
+  metadata
+- block detection for main, bare-primary, current, detached, staged, unstaged,
+  untracked, ignored, conflicted, locked, prunable, in-progress, and submodule
+  targets
+- clean linked worktrees report `execution_status: "preview_only"` in the scan
+  result
+- `preview worktree-remove --worktree <absolute-linked-worktree-path>`
+- exact absolute linked-worktree path only in the first implementation
+- no `--current` shortcut in the first implementation
+- no `--force`
+- no branch, remote-ref, commit, or history deletion
+- report process-detection limitations for editors, terminals, development
+  servers, and file watchers
+- `execution.status: "preview_only"` for clean removable targets, with
+  execution allowed only after a separate confirmation artifact
+- `undo_strategy.kind: "not_available"` plus recovery hints instead of
+  pretending removal is reversible
+- `super-git.confirmation.v0.1` contract for destructive execute
+  authorization
+- confirmation is separate from display prompt text and is never enough to skip
+  fresh target revalidation
+- `execute` parses `super-git.plan.v0.3` `worktree_remove` plans and rejects
+  missing confirmation with `confirmation_required` before any write
+- `execute --confirmation <file|->` parses and statically validates
+  `super-git.confirmation.v0.1` artifacts, revalidates the target, writes an
+  execution record, and removes only the linked worktree without `--force`
+- successful `worktree_remove` execute omits `undo_token` and records
+  `automatic_undo_available: false`
+
+Next:
+
+- extend worktree remove coverage with additional stale-state fixtures before
+  expanding into remove cleanup workflows
 
 ## Stage 6: Repository Profile And Dashboard
 

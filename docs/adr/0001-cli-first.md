@@ -51,6 +51,11 @@ The project should first prove:
 inspect -> preview -> execute -> undo
 ```
 
+Undo is part of the lifecycle only for action contracts that can honestly prove
+reversibility. Destructive actions may still follow `inspect -> preview ->
+execute`, but they must use explicit confirmation and recovery guidance instead
+of returning a misleading undo token.
+
 ## Why Wrap System Git First
 
 `super-git` does not reimplement Git. The early versions call the installed
