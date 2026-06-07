@@ -185,6 +185,25 @@ super-git preview stage-changes > /tmp/super-git-plan.json
 The plan is a contract, not a script. `reference_commands` are documentation
 references only.
 
+## `preview worktree-create`
+
+Builds a read-only `super-git.plan.v0.2` plan for creating one linked worktree.
+
+```bash
+super-git preview worktree-create --ref <branch-or-tag-or-commit>
+super-git preview worktree-create --repo <id-or-name-or-path> --ref <branch-or-tag-or-commit>
+```
+
+Supported source refs are existing local branches, tags, and commit hashes.
+Remote-tracking branches are recognized but blocked until an explicit
+local-branch policy exists. Occupied local branches and target path collisions
+also return blocked plans instead of letting Git fail later.
+
+`preview worktree-create` does not create directories, worktrees, config files,
+or Git worktree metadata. Unblocked plans currently use
+`execution.status: "preview_only"` because `execute` does not yet run
+`worktree_create` plans.
+
 ## `execute --plan <file|->`
 
 Executes a previously previewed plan after re-validation.

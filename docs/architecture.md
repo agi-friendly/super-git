@@ -38,6 +38,7 @@ Current commands:
 - `super-git status [path]`
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
+- `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
 - `super-git execute --plan <file|->`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`
@@ -192,8 +193,18 @@ is intentionally read-oriented:
 - `wt list` returns the full worktree list.
 
 Create/remove workflows must start with preview plans and safety checks before
-they become executable. Worktree creation is planned as a typed
-`worktree_create` plan, not as a raw `git worktree add` command string.
+they become executable. Worktree creation is a typed `worktree_create` plan,
+not a raw `git worktree add` command string.
+
+`preview worktree-create` is read-only. It resolves a repository family, source
+ref, config-derived target path, family snapshot, branch occupancy, execution
+status, risk, and undo boundary into `super-git.plan.v0.2`. Until C6-C adds
+write-side support, unblocked plans report `execution.status: "preview_only"`;
+they are not executable yet. Blocked Git-state
+cases such as remote-tracking branch input, occupied local branches, and target
+collisions return useful `{ ok: true, data.execution.status: "blocked" }`
+plans. Repository selector failures still return `{ ok: false, error }` because
+no family-specific plan can be formed.
 
 The first worktree create contract intentionally avoids `--force`,
 `--guess-remote`, target overrides, copy patterns, and shell hooks. Preview

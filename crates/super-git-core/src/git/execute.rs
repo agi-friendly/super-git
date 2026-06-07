@@ -42,7 +42,18 @@ fn parse_plan(bytes: &[u8]) -> Result<PreviewPlan> {
                 code: "missing_data".to_string(),
                 message: "plan envelope must contain data".to_string(),
             })?;
-        return Ok(serde_json::from_value(data.clone())?);
+        return parse_plan_value(data.clone());
+    }
+
+    parse_plan_value(value)
+}
+
+fn parse_plan_value(value: Value) -> Result<PreviewPlan> {
+    if value.get("schema_version").and_then(Value::as_str) != Some(PLAN_SCHEMA_VERSION) {
+        return invalid_plan(
+            "unsupported_schema_version",
+            "execute supports only super-git.plan.v0.1",
+        );
     }
 
     Ok(serde_json::from_value(value)?)

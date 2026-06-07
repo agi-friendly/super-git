@@ -95,14 +95,16 @@ name. Because saved repositories become preview input for later worktree
 actions, `config validate` treats malformed registry entries as invalid instead
 of silently accepting arbitrary ids or relative paths.
 
-Worktree creation is the next planned Git write family, but it is not a raw
-`git worktree add` wrapper. The contract is documented in
+Worktree creation is the next Git write family, but it is not a raw
+`git worktree add` wrapper. The preview contract is documented in
 `docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
-The first worktree create preview must be read-only, must not use `--force` or
-`--guess-remote`, must not imply remote branch tracking, and must hard-block a
+`preview worktree-create` is read-only, does not use `--force` or
+`--guess-remote`, does not imply remote branch tracking, and hard-blocks a
 branch that is already checked out in another worktree. Target paths are
-resolved from config during preview and frozen into the plan; execute must not
-re-expand config templates as trusted authority.
+resolved from config during preview and frozen into `super-git.plan.v0.2`;
+execute must not re-expand config templates as trusted authority. `execute`
+still rejects `worktree_create` plans until the write-side validation slice is
+implemented.
 
 Worktree create undo is intentionally narrow: remove the clean linked worktree
 created by `super-git` when local provenance and state checks still match. It

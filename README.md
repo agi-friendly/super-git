@@ -44,6 +44,10 @@ Implemented today:
   - warnings, risk hint, summary, and guarded next-action candidates
 - `super-git preview stage-changes`
   - builds a read-only plan for staging current unstaged/untracked changes
+- `super-git preview worktree-create --ref <ref> [--repo <selector>]`
+  - builds a read-only plan for creating a linked worktree
+  - recognizes blocked cases such as occupied branches, remote-tracking refs,
+    and target collisions without writing
 - `super-git execute --plan <file|->`
   - re-validates the plan and state before staging
   - executes only the internal `stage_changes` allowlist

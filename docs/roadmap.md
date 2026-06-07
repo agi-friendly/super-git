@@ -63,8 +63,6 @@ Implemented:
 Next:
 
 - no shell hooks, copy patterns, or profile system
-- actual `{ref_slug}` rendering and target path collision checks in worktree
-  create preview
 
 ## Stage 4: Safe Worktree Create Preview
 
@@ -75,19 +73,28 @@ Implemented so far:
 - target parent creation policy
 - target path safety flags for existing paths, Git dir nesting, existing
   worktree nesting, case-insensitive name collisions, and reserved names
-
-Next:
-
 - contract checkpoint for `worktree_create` preview
 - internal worktree-family snapshot based on Git porcelain data
+- `preview worktree-create --ref <ref>`
+- `preview worktree-create --repo <id-or-name-or-path> --ref <ref>`
 - source ref classification for local branch, tag, commit, remote-tracking
-  branch, unknown ref, and ambiguous ref
+  branch, and unknown ref
+- remote-tracking branch input is recognized and blocked
 - branch occupancy hard blocks when a branch is already checked out elsewhere
 - explicit `execution.status` and structured blocked reasons
+- unblocked plans report `preview_only` until C6-C implements execute support
 - clear risk and reversibility metadata
 - target path resolved from config and frozen in the plan
 - no `--force`, `--guess-remote`, `--target`, copy patterns, or shell hooks in
   the first implementation
+- `execute` rejects `super-git.plan.v0.2` until validated worktree execution is
+  implemented
+
+Next:
+
+- ambiguous ref handling beyond exact local branch/tag/remote/commit lookup
+- full `locked` and `prunable` worktree snapshot parsing
+- execute validated worktree creation plans
 
 ## Stage 5: Worktree Create/Remove Execute
 

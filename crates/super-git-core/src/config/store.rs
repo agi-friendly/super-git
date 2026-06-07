@@ -185,6 +185,12 @@ impl RepositoryTargetMatch {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSavedRepository {
+    pub repository: SavedRepository,
+    pub matched_by: RepositoryTargetMatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConfigUpdateResult {
     pub config: AppConfig,
@@ -215,6 +221,11 @@ impl ConfigStore {
 
     pub fn load(&self) -> Result<AppConfig> {
         Ok(self.load_with_metadata()?.config)
+    }
+
+    pub fn resolve_saved_repository(&self, target: &str) -> Result<ResolvedSavedRepository> {
+        let config = self.load()?;
+        resolve_repository_in_config(&config, target)
     }
 
     fn load_with_metadata(&self) -> Result<LoadedConfig> {
@@ -499,6 +510,17 @@ fn resolve_repository_target(
 
     Err(SuperGitError::RepositoryNotFound {
         target: target.to_string(),
+    })
+}
+
+pub fn resolve_repository_in_config(
+    config: &AppConfig,
+    target: &str,
+) -> Result<ResolvedSavedRepository> {
+    let resolved = resolve_repository_target(&config.repositories, target)?;
+    Ok(ResolvedSavedRepository {
+        repository: config.repositories[resolved.index].clone(),
+        matched_by: resolved.matched_by,
     })
 }
 

@@ -9,7 +9,7 @@ use super_git_core::config::store::{
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
 };
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
@@ -425,6 +425,29 @@ pub fn print_preview_plan(mode: OutputMode, plan: &PreviewPlan) -> Result<()> {
             println!("Paths: {}", plan.action.resolved_paths.len());
             for path in &plan.action.resolved_paths {
                 println!("  - {path}");
+            }
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!("Writes now: no");
+            Ok(())
+        }
+    }
+}
+
+pub fn print_worktree_create_plan(mode: OutputMode, plan: &WorktreeCreatePlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.selected_from.display());
+            println!("Ref: {}", plan.action.options.ref_name);
+            println!("Target: {}", plan.target.path.display());
+            println!("Execution: {}", plan.execution.status);
+            if !plan.execution.blocked_reasons.is_empty() {
+                println!("Blocked reasons:");
+                for reason in &plan.execution.blocked_reasons {
+                    println!("  - {} ({})", reason.code, reason.severity);
+                }
             }
             println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
             println!("Writes now: no");
