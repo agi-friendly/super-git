@@ -151,7 +151,9 @@ Bare-primary families are supported with `kind: "bare_worktree_family"` and
 `repo forget <id-or-name-or-path>` removes only the saved registry entry. It
 never deletes repository directories, linked worktrees, bare Git directories, or
 working-tree files. Selectors match full repository id, path-like selectors, or
-unique repository name. Ambiguous names fail without rewriting the config file.
+unique repository name. Ambiguous selectors fail without rewriting the config
+file, including cases where the same token points to different repositories by
+different selector kinds.
 
 Worktree template settings can be edited with
 `config set-worktree-template`. Template variables use braces, not shell syntax.

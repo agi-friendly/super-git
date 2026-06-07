@@ -24,6 +24,9 @@ Failure:
 Parse errors, runtime errors, and command errors should all respect this
 contract unless the user explicitly asks for `--help` or `--version`.
 
+Unless a JSON example is explicitly labeled as a full envelope, examples below
+show the `data` payload inside `{ "ok": true, "data": ... }`.
+
 ## `doctor`
 
 Checks whether the local environment can run `super-git`.
@@ -79,7 +82,8 @@ valid case-preserving `sha256:<git-common-dir>` identities, unique ids, and a
 `kind`/`main_worktree` combination that matches whether the family has a primary
 worktree.
 
-Invalid user-editable settings are reported as data, not as a command failure:
+Invalid user-editable settings are reported as a successful validation payload,
+not as a command failure:
 
 ```json
 {
@@ -110,7 +114,7 @@ super-git config set-worktree-template \
 
 At least one option is required. Omitted fields are preserved.
 
-Successful updates write the v1 config shape and return the updated config:
+Successful updates write the v1 config shape and return the updated config data:
 
 ```json
 {
@@ -284,10 +288,11 @@ Selectors:
 - unique repository `name`
 
 Plain words without path separators are treated as names. Use `./repo` or an
-absolute path when you intend a filesystem path. If a name matches multiple
-saved repository families, the command fails and leaves the config unchanged.
+absolute path when you intend a filesystem path. If a selector matches multiple
+saved repository families, even across selector kinds such as id and name, the
+command fails and leaves the config unchanged.
 
-Successful output includes explicit safety fields:
+Successful data includes explicit safety fields:
 
 ```json
 {
