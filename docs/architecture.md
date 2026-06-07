@@ -202,12 +202,13 @@ not a raw `git worktree add` command string.
 ref, config-derived target path, family snapshot, branch occupancy, execution
 status, risk, and undo boundary into `super-git.plan.v0.2`. Unblocked plans
 report `execution.status: "executable"`, but execution still revalidates plan
-hash, repository family identity, source ref commit, family snapshot, branch
-occupancy, and target path safety immediately before writing. Blocked Git-state
-cases such as remote-tracking branch input, occupied local branches, and target
+hash, repository family identity, source ref commit, source-ref/ref-policy
+consistency, family snapshot, branch occupancy, and target path safety
+immediately before writing. Blocked Git-state cases such as remote-tracking
+branch input, ambiguous ref input, occupied local branches, and target
 collisions return useful `{ ok: true, data.execution.status: "blocked" }`
-plans. Repository selector failures still return `{ ok: false, error }` because
-no family-specific plan can be formed.
+plans. Repository selector failures still return `{ ok: false, error }`
+because no family-specific plan can be formed.
 
 The first worktree create contract intentionally avoids `--force`,
 `--guess-remote`, target overrides, copy patterns, and shell hooks. Preview
@@ -220,7 +221,8 @@ contract is recorded in
 undo token from `execute`. The execution record under the Git common directory
 is required provenance; partial or tampered records are not cleanup permission.
 Successful undo removes only the linked worktree and an empty parent directory
-created by `super-git`.
+created by `super-git`, and refuses ignored files as well as tracked or
+untracked changes before removal.
 
 ## Plugins And Guides
 

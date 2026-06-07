@@ -184,9 +184,10 @@ fn selected_from_path(repository: &SavedRepository) -> PathBuf {
 
 fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {
     let git = Git::default();
+    let mut candidates = Vec::new();
 
     if let Some(commit) = verify_commitish(&git, path, &format!("refs/heads/{input}"))? {
-        return Ok(WorktreeSourceRef {
+        candidates.push(WorktreeSourceRef {
             input: input.to_string(),
             kind: "local_branch".to_string(),
             full_ref: Some(format!("refs/heads/{input}")),
@@ -196,7 +197,7 @@ fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {
     }
 
     if let Some(commit) = verify_commitish(&git, path, &format!("refs/tags/{input}"))? {
-        return Ok(WorktreeSourceRef {
+        candidates.push(WorktreeSourceRef {
             input: input.to_string(),
             kind: "tag".to_string(),
             full_ref: Some(format!("refs/tags/{input}")),
@@ -206,7 +207,7 @@ fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {
     }
 
     if let Some(commit) = verify_commitish(&git, path, &format!("refs/remotes/{input}"))? {
-        return Ok(WorktreeSourceRef {
+        candidates.push(WorktreeSourceRef {
             input: input.to_string(),
             kind: "remote_tracking_branch".to_string(),
             full_ref: Some(format!("refs/remotes/{input}")),
@@ -217,7 +218,7 @@ fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {
 
     if looks_like_commit(input) {
         if let Some(commit) = verify_commitish(&git, path, input)? {
-            return Ok(WorktreeSourceRef {
+            candidates.push(WorktreeSourceRef {
                 input: input.to_string(),
                 kind: "commit".to_string(),
                 full_ref: None,
@@ -225,6 +226,20 @@ fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {
                 supported_for_execute: true,
             });
         }
+    }
+
+    if candidates.len() > 1 {
+        return Ok(WorktreeSourceRef {
+            input: input.to_string(),
+            kind: "ambiguous".to_string(),
+            full_ref: None,
+            resolved_commit: None,
+            supported_for_execute: false,
+        });
+    }
+
+    if let Some(candidate) = candidates.into_iter().next() {
+        return Ok(candidate);
     }
 
     Ok(WorktreeSourceRef {
@@ -417,6 +432,10 @@ fn collect_source_blocks(
     match source_ref.kind.as_str() {
         "remote_tracking_branch" => blocked_reasons.push(blocked(
             "remote_tracking_branch_requires_local_branch_policy",
+            json!({ "ref": source_ref.input }),
+        )),
+        "ambiguous" => blocked_reasons.push(blocked(
+            "source_ref_ambiguous",
             json!({ "ref": source_ref.input }),
         )),
         "unknown" => blocked_reasons.push(blocked(

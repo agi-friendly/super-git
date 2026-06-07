@@ -184,6 +184,7 @@ fn validate_static_contract(plan: &WorktreeCreatePlan) -> Result<()> {
             "worktree_create execute supports local_branch, tag, and commit refs",
         );
     }
+    validate_ref_policy_consistency(plan)?;
     if plan.ref_policy.will_create_branch || plan.ref_policy.will_track_upstream {
         return invalid_plan(
             "unsupported_ref_policy",
@@ -219,6 +220,76 @@ fn validate_static_contract(plan: &WorktreeCreatePlan) -> Result<()> {
         );
     }
     validate_static_target(plan)?;
+    Ok(())
+}
+
+fn validate_ref_policy_consistency(plan: &WorktreeCreatePlan) -> Result<()> {
+    match plan.source_ref.kind.as_str() {
+        "local_branch" => {
+            ensure_ref_policy(
+                plan,
+                "existing_local_branch",
+                false,
+                "local branches must use existing_local_branch without detach",
+            )?;
+            ensure_full_ref(
+                plan,
+                &format!("refs/heads/{}", plan.source_ref.input),
+                "local branches must carry refs/heads/<input> as source_ref.full_ref",
+            )
+        }
+        "tag" => {
+            ensure_ref_policy(
+                plan,
+                "detached_head",
+                true,
+                "tags must use detached_head with detach",
+            )?;
+            ensure_full_ref(
+                plan,
+                &format!("refs/tags/{}", plan.source_ref.input),
+                "tags must carry refs/tags/<input> as source_ref.full_ref",
+            )
+        }
+        "commit" => {
+            ensure_ref_policy(
+                plan,
+                "detached_head",
+                true,
+                "commits must use detached_head with detach",
+            )?;
+            if plan.source_ref.full_ref.is_some() {
+                return invalid_plan(
+                    "ref_policy_consistency",
+                    "commit refs must not carry source_ref.full_ref",
+                );
+            }
+            Ok(())
+        }
+        _ => invalid_plan(
+            "unsupported_source_ref_kind",
+            "worktree_create execute supports local_branch, tag, and commit refs",
+        ),
+    }
+}
+
+fn ensure_full_ref(plan: &WorktreeCreatePlan, expected: &str, message: &str) -> Result<()> {
+    if plan.source_ref.full_ref.as_deref() != Some(expected) {
+        return invalid_plan("ref_policy_consistency", message);
+    }
+    Ok(())
+}
+
+fn ensure_ref_policy(
+    plan: &WorktreeCreatePlan,
+    expected_mode: &str,
+    expected_detach: bool,
+    message: &str,
+) -> Result<()> {
+    if plan.ref_policy.mode != expected_mode || plan.ref_policy.will_detach_head != expected_detach
+    {
+        return invalid_plan("ref_policy_consistency", message);
+    }
     Ok(())
 }
 
@@ -400,7 +471,7 @@ fn trusted_git_args(plan: &WorktreeCreatePlan) -> Result<Vec<OsString>> {
         OsString::from("add"),
         OsString::from("-q"),
     ];
-    if plan.ref_policy.will_detach_head {
+    if matches!(plan.source_ref.kind.as_str(), "tag" | "commit") {
         args.push(OsString::from("--detach"));
     }
     args.push(plan.target.path.as_os_str().to_os_string());

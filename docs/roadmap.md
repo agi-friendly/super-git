@@ -78,8 +78,9 @@ Implemented so far:
 - `preview worktree-create --ref <ref>`
 - `preview worktree-create --repo <id-or-name-or-path> --ref <ref>`
 - source ref classification for local branch, tag, commit, remote-tracking
-  branch, and unknown ref
+  branch, ambiguous ref, and unknown ref
 - remote-tracking branch input is recognized and blocked
+- ambiguous branch/tag/remote/commit ref input is blocked
 - branch occupancy hard blocks when a branch is already checked out elsewhere
 - explicit `execution.status` and structured blocked reasons
 - unblocked plans report `executable`
@@ -88,19 +89,20 @@ Implemented so far:
 - no `--force`, `--guess-remote`, `--target`, copy patterns, or shell hooks in
   the first implementation
 - `execute` revalidates executable `super-git.plan.v0.2` worktree-create plans
-  before creating one linked worktree
+  before creating one linked worktree, including source-ref/ref-policy
+  consistency
 - worktree-create execution writes a local execution record and returns a
   worktree undo token
 - `undo` removes unchanged linked worktrees created by `super-git` only after
-  local execution-record provenance, clean target state, lock/prunable checks,
-  and HEAD/ref drift checks pass
+  local execution-record provenance, clean target state including ignored files,
+  lock/prunable checks, and HEAD/ref drift checks pass
 - successful worktree-create undo preserves branch refs and history and removes
   an empty parent directory created by `super-git` only when safe
 - full `locked` and `prunable` worktree snapshot parsing
 
 Next:
 
-- ambiguous ref handling beyond exact local branch/tag/remote/commit lookup
+- richer ambiguous-ref diagnostics with candidate details
 
 ## Stage 5: Worktree Create/Remove Execute
 

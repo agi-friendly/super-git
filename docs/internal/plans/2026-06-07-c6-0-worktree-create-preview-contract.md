@@ -513,6 +513,7 @@ Undo must validate:
 - target has no staged changes
 - target has no unstaged changes
 - target has no untracked files
+- target has no ignored files
 - target is still part of the expected family
 - any parent directory marked as created by `super-git` is empty before undo
   removes it

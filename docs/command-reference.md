@@ -196,8 +196,8 @@ super-git preview worktree-create --repo <id-or-name-or-path> --ref <branch-or-t
 
 Supported source refs are existing local branches, tags, and commit hashes.
 Remote-tracking branches are recognized but blocked until an explicit
-local-branch policy exists. Occupied local branches and target path collisions
-also return blocked plans instead of letting Git fail later.
+local-branch policy exists. Ambiguous refs, occupied local branches, and target
+path collisions also return blocked plans instead of letting Git fail later.
 
 `preview worktree-create` does not create directories, worktrees, config files,
 or Git worktree metadata. Unblocked plans use
@@ -233,10 +233,10 @@ It does not modify working-tree file contents.
 
 For `worktree_create` results, `undo` validates the local execution record,
 target worktree identity, lock/prunable state, HEAD/ref drift, and a clean
-target working tree before removing the linked worktree. It uses
-`git worktree remove` without `--force`, does not delete branch refs or history,
-and removes a parent directory created by `super-git` only when that parent is
-empty.
+target working tree including ignored files before removing the linked
+worktree. It uses `git worktree remove` without `--force`, does not delete
+branch refs or history, and removes a parent directory created by `super-git`
+only when that parent is empty.
 
 ## `status [path]`
 

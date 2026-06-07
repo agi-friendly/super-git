@@ -284,9 +284,30 @@ fn validate_target_is_clean(token: &WorktreeUndoToken) -> Result<()> {
         );
     }
     if repo_state.working_tree.clean {
-        return Ok(());
+        return validate_target_has_no_ignored_files(token);
     }
     mismatch("target_working_tree_clean", "true", "false")
+}
+
+fn validate_target_has_no_ignored_files(token: &WorktreeUndoToken) -> Result<()> {
+    let git = Git::default();
+    let output = git.run_in(
+        &token.target_path,
+        [
+            "status",
+            "--porcelain=v1",
+            "--ignored",
+            "--untracked-files=all",
+        ],
+    )?;
+    if output.stdout.trim().is_empty() {
+        return Ok(());
+    }
+    mismatch(
+        "target_working_tree_clean_including_ignored",
+        "true",
+        "false",
+    )
 }
 
 fn read_branch_ref(git: &Git, token: &WorktreeUndoToken) -> Result<Option<String>> {

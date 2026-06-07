@@ -311,6 +311,26 @@ fn preview_worktree_create_supports_tag_and_commit_as_detached_head_plans() {
 }
 
 #[test]
+fn preview_worktree_create_blocks_ambiguous_branch_and_tag_ref() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "release"]);
+    git(&repo, &["tag", "release"]);
+
+    let json = preview_worktree(&repo, &app_home, None, "release");
+
+    assert_eq!(json["ok"], true);
+    let data = &json["data"];
+    assert_eq!(data["source_ref"]["kind"], "ambiguous");
+    assert_eq!(data["source_ref"]["supported_for_execute"], false);
+    assert_eq!(data["execution"]["status"], "blocked");
+    assert!(blocked_codes(data).contains(&"source_ref_ambiguous"));
+}
+
+#[test]
 fn preview_worktree_create_blocks_remote_tracking_branch() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");
@@ -739,6 +759,39 @@ fn execute_worktree_create_ignores_advisory_reference_commands() {
         !repo.join("pwned").exists(),
         "execute must rebuild trusted git args, not run reference_commands"
     );
+}
+
+#[test]
+fn execute_worktree_create_rejects_rehashed_inconsistent_ref_policy_before_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/ref-policy"]);
+    let mut plan = preview_worktree(&repo, &app_home, None, "feature/ref-policy");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+    plan["data"]["ref_policy"]["mode"] = serde_json::json!("detached_head");
+    plan["data"]["ref_policy"]["will_detach_head"] = serde_json::json!(true);
+    rehash_worktree_plan(&mut plan);
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("ref_policy_consistency")));
+    assert!(!target.exists(), "execute must fail before creating target");
 }
 
 fn blocked_codes(data: &serde_json::Value) -> Vec<&str> {

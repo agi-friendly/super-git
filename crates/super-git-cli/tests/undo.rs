@@ -834,6 +834,44 @@ fn undo_worktree_create_rejects_dirty_target_without_removing_it() {
 }
 
 #[test]
+fn undo_worktree_create_rejects_ignored_target_files_without_removing_them() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let (repo, target, _execute_output, token) =
+        setup_worktree_create(&tmp, "feature/undo-ignored");
+    std::fs::write(
+        repo.join(".git").join("info").join("exclude"),
+        "ignored.log\n",
+    )
+    .expect("write git exclude");
+    std::fs::write(target.join("ignored.log"), "do not remove me\n").expect("write ignored file");
+
+    let output = undo_token(&repo, &token);
+
+    assert!(
+        !output.status.success(),
+        "undo should reject ignored files before removing a target worktree"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_working_tree_clean_including_ignored")));
+    assert!(
+        worktree_list(&repo).contains(&path_string(&target)),
+        "target with ignored files must remain active"
+    );
+    assert!(
+        target.join("ignored.log").exists(),
+        "ignored file must remain untouched"
+    );
+}
+
+#[test]
 fn undo_worktree_create_rejects_locked_target_without_removing_it() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let (repo, target, _execute_output, token) = setup_worktree_create(&tmp, "feature/undo-locked");
