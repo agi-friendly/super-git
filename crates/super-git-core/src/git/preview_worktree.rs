@@ -342,8 +342,8 @@ pub(crate) fn family_snapshot(worktrees: &[WorktreeInfo]) -> Result<WorktreeFami
             head: worktree.head.clone(),
             branch: worktree.branch.as_deref().map(full_local_branch),
             detached: worktree.detached,
-            locked: false,
-            prunable: false,
+            locked: worktree.locked,
+            prunable: worktree.prunable,
         })
         .collect::<Vec<_>>();
     let branch_occupancy = snapshot_worktrees

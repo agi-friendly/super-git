@@ -92,15 +92,17 @@ repository root, fingerprint, and resolved pathset immediately before writing.
 State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
 from the core allowlist.
 
-`undo --token <file|->` is action-specific. For the current `stage_changes`
-action, undo validates token schema, repository identity, snapshot checksum,
-current index checksum, and local undo registry provenance before restoring the
-previous index snapshot. `stage_changes` undo never edits working-tree file
-contents.
+`undo --token <file|->` is action-specific. `stage_changes` undo validates
+token schema, repository identity, snapshot checksum, current index checksum,
+and local undo registry provenance before restoring the previous index
+snapshot. `stage_changes` undo never edits working-tree file contents.
 
-Future worktree-create undo has a different boundary: it may remove the clean
-linked worktree created by `super-git`, but it must not delete branch refs,
-remote refs, commits, or user-created files.
+`worktree_create` undo has a different boundary: it validates local execution
+record provenance, confirms the target is still the clean linked worktree
+created by `super-git`, refuses locked/prunable/main/dirty/drifted targets, and
+then removes the linked worktree with `git worktree remove` without `--force`.
+It must not delete branch refs, remote refs, commits, history, or user-created
+files.
 
 ## Config
 
@@ -213,6 +215,12 @@ should resolve the repository family, source ref, target path, target safety,
 branch occupancy, and undo boundary before execution is possible. The detailed
 contract is recorded in
 `docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
+
+`undo` supports unchanged `worktree_create` results by consuming the worktree
+undo token from `execute`. The execution record under the Git common directory
+is required provenance; partial or tampered records are not cleanup permission.
+Successful undo removes only the linked worktree and an empty parent directory
+created by `super-git`.
 
 ## Plugins And Guides
 

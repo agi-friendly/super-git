@@ -231,9 +231,12 @@ The token is treated as untrusted input. `undo` validates local registry
 provenance and index checksums before restoring the previous index snapshot.
 It does not modify working-tree file contents.
 
-`worktree_create` execute results include a worktree undo token and local
-execution record for the upcoming removal-undo slice. `undo` does not remove
-created worktrees yet.
+For `worktree_create` results, `undo` validates the local execution record,
+target worktree identity, lock/prunable state, HEAD/ref drift, and a clean
+target working tree before removing the linked worktree. It uses
+`git worktree remove` without `--force`, does not delete branch refs or history,
+and removes a parent directory created by `super-git` only when that parent is
+empty.
 
 ## `status [path]`
 

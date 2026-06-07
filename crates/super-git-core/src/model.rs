@@ -67,6 +67,8 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
     pub detached: bool,
     pub bare: bool,
+    pub locked: bool,
+    pub prunable: bool,
 }
 
 impl WorktreeInfo {
@@ -77,6 +79,8 @@ impl WorktreeInfo {
             branch: None,
             detached: false,
             bare: false,
+            locked: false,
+            prunable: false,
         }
     }
 }

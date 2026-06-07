@@ -73,6 +73,23 @@ For the current `stage_changes` action, undo is index-only:
 
 `undo` does not edit working-tree files.
 
+For the current `worktree_create` action, undo is removal-only for the linked
+worktree created by `super-git`:
+
+- validate token schema
+- validate repository family identity
+- validate the local execution record under the Git common directory
+- require a completed execution record whose undo token matches the provided
+  token
+- require the target to still be a linked, unlocked, non-prunable worktree
+- require the target HEAD/ref to match the execute record
+- require no in-progress Git operation and a clean target working tree
+- remove the linked worktree with `git worktree remove` without `--force`
+- remove a parent directory created by `super-git` only if it is empty
+
+`worktree_create` undo does not delete branch refs, remote refs, commits,
+history, dirty files, untracked files, locked worktrees, or main worktrees.
+
 ## Current Write Boundary
 
 Two Git write actions exist today:
@@ -116,9 +133,7 @@ post-create HEAD/ref state. Reference commands remain documentation-only.
 
 Worktree create undo is intentionally narrow: remove the clean linked worktree
 created by `super-git` when local provenance and state checks still match. It
-does not delete branch refs, remote refs, commits, or user-created files. C6-C
-produces worktree undo tokens and execution records; removal undo itself is the
-next slice.
+does not delete branch refs, remote refs, commits, or user-created files.
 
 ## Risk Vocabulary
 

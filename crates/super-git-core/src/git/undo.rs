@@ -10,7 +10,11 @@ use sha2::{Digest, Sha256};
 use crate::git::command::Git;
 use crate::git::state;
 use crate::git::undo_registry;
-use crate::model::{UndoResult, UndoToken, UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION};
+use crate::git::undo_worktree;
+use crate::model::{
+    ExecuteUndoToken, UndoResult, UndoToken, WorktreeUndoToken, UNDO_RESULT_SCHEMA_VERSION,
+    UNDO_TOKEN_SCHEMA_VERSION,
+};
 use crate::{Result, SuperGitError};
 
 const ACTION_STAGE_CHANGES: &str = "stage_changes";
@@ -20,7 +24,7 @@ pub fn undo_token_bytes(current_path: &Path, bytes: &[u8]) -> Result<UndoResult>
     undo_token(current_path, token)
 }
 
-fn parse_token(bytes: &[u8]) -> Result<UndoToken> {
+fn parse_token(bytes: &[u8]) -> Result<ExecuteUndoToken> {
     let value: Value = serde_json::from_slice(bytes)?;
     if value.get("ok").is_some() {
         if value.get("ok") != Some(&Value::Bool(true)) {
@@ -42,32 +46,46 @@ fn parse_token(bytes: &[u8]) -> Result<UndoToken> {
     token_from_data(&value)
 }
 
-fn token_from_data(value: &Value) -> Result<UndoToken> {
+fn token_from_data(value: &Value) -> Result<ExecuteUndoToken> {
     if let Some(token) = value.get("undo_token") {
-        return parse_index_token_value(token);
+        return parse_token_value(token);
     }
 
     if value.get("schema_version").and_then(Value::as_str) == Some(UNDO_TOKEN_SCHEMA_VERSION) {
-        return parse_index_token_value(value);
+        return parse_token_value(value);
     }
 
-    parse_index_token_value(value)
+    parse_token_value(value)
 }
 
-fn parse_index_token_value(value: &Value) -> Result<UndoToken> {
-    if let Some(kind) = value.get("kind").and_then(Value::as_str) {
-        if kind != "restore_index_snapshot" {
-            return invalid_token(
-                "unsupported_undo_kind",
-                "undo currently supports only restore_index_snapshot",
-            );
+fn parse_token_value(value: &Value) -> Result<ExecuteUndoToken> {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("restore_index_snapshot") => Ok(ExecuteUndoToken::Index(Box::new(
+            serde_json::from_value(value.clone())?,
+        ))),
+        Some("remove_created_worktree_if_clean") => Ok(ExecuteUndoToken::Worktree(Box::new(
+            serde_json::from_value::<WorktreeUndoToken>(value.clone())?,
+        ))),
+        Some(_) => invalid_token(
+            "unsupported_undo_kind",
+            "undo supports restore_index_snapshot and remove_created_worktree_if_clean",
+        ),
+        None => Ok(ExecuteUndoToken::Index(Box::new(serde_json::from_value(
+            value.clone(),
+        )?))),
+    }
+}
+
+fn undo_token(current_path: &Path, token: ExecuteUndoToken) -> Result<UndoResult> {
+    match token {
+        ExecuteUndoToken::Index(token) => undo_index_token(current_path, *token),
+        ExecuteUndoToken::Worktree(token) => {
+            undo_worktree::undo_worktree_token(current_path, *token)
         }
     }
-
-    Ok(serde_json::from_value(value.clone())?)
 }
 
-fn undo_token(current_path: &Path, token: UndoToken) -> Result<UndoResult> {
+fn undo_index_token(current_path: &Path, token: UndoToken) -> Result<UndoResult> {
     validate_static_token(&token)?;
 
     let git = Git::default();

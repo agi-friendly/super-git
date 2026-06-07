@@ -90,20 +90,23 @@ Implemented so far:
 - `execute` revalidates executable `super-git.plan.v0.2` worktree-create plans
   before creating one linked worktree
 - worktree-create execution writes a local execution record and returns a
-  worktree undo token for the next undo slice
+  worktree undo token
+- `undo` removes unchanged linked worktrees created by `super-git` only after
+  local execution-record provenance, clean target state, lock/prunable checks,
+  and HEAD/ref drift checks pass
+- successful worktree-create undo preserves branch refs and history and removes
+  an empty parent directory created by `super-git` only when safe
+- full `locked` and `prunable` worktree snapshot parsing
 
 Next:
 
 - ambiguous ref handling beyond exact local branch/tag/remote/commit lookup
-- full `locked` and `prunable` worktree snapshot parsing
-- undo unchanged worktree creation
 
 ## Stage 5: Worktree Create/Remove Execute
 
 - execute validated worktree removal plans
 - protect dirty worktrees and untracked files
 - require clear confirmation rules for destructive removal
-- undo unchanged worktree creation without deleting branch refs or commits
 - provide cleanup guidance where true undo is not possible
 
 ## Stage 6: Repository Profile And Dashboard

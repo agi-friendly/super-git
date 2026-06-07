@@ -137,7 +137,7 @@ when all of these are true:
 - the plan records `target.parent_creation.will_create = true`
 
 If execute creates the parent, undo may remove that parent only when it is empty
-after the created worktree is removed and only when the undo registry proves
+after the created worktree is removed and only when the execution record proves
 that `super-git` created it. Otherwise undo leaves the parent directory in
 place.
 
@@ -487,7 +487,7 @@ A partial failure record is not permission to delete anything blindly. It is a
 provenance anchor for a future cleanup or undo command to re-inspect the target
 state before acting.
 
-## Undo Contract For Future C6-D
+## Undo Contract For C6-D
 
 Worktree create undo means:
 
@@ -504,7 +504,7 @@ delete branch refs, delete remote refs, delete commits, or reset history
 Undo must validate:
 
 - token schema
-- local undo registry provenance
+- local execution-record provenance
 - target path
 - target path is still a linked worktree
 - target is not the main worktree
@@ -587,10 +587,12 @@ Acceptance:
 
 ### C6-D: Undo unchanged worktree create
 
+Implemented in C6-D.
+
 Acceptance:
 
 - Undo removes only a worktree created by `super-git` and recorded in the local
-  undo registry.
+  execution record under the Git common directory.
 - Undo refuses dirty, untracked, locked, moved, main, mismatched, or
   user-mutated worktrees.
 - Undo does not delete branch refs or commits.
