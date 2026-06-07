@@ -94,6 +94,17 @@ fn execute_plan(dir: &Path, plan: &Path) -> Output {
         .expect("run execute")
 }
 
+fn execute_plan_with_confirmation(dir: &Path, plan: &Path, confirmation: &Path) -> Output {
+    super_git(dir)
+        .arg("execute")
+        .arg("--plan")
+        .arg(plan)
+        .arg("--confirmation")
+        .arg(confirmation)
+        .output()
+        .expect("run execute with confirmation")
+}
+
 fn status_porcelain(dir: &Path) -> String {
     let output = run_git(dir, &["status", "--porcelain=v1"]);
     assert!(output.status.success(), "status should succeed");
@@ -147,6 +158,39 @@ fn hex_char(value: u8) -> char {
         10..=15 => (b'a' + value - 10) as char,
         _ => unreachable!("nibble is always <= 15"),
     }
+}
+
+#[test]
+fn execute_stage_changes_rejects_unexpected_confirmation_without_staging() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    let plan = preview_plan_file(dir);
+    let confirmation = dir.join(".git").join("unused-confirmation.json");
+    std::fs::write(&confirmation, "{}").expect("write confirmation");
+
+    let output = execute_plan_with_confirmation(dir, &plan, &confirmation);
+
+    assert!(
+        !output.status.success(),
+        "unexpected confirmation should fail"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_not_supported")));
+    assert_eq!(
+        status_porcelain(dir),
+        " M file.txt\n",
+        "unexpected confirmation must not stage changes"
+    );
 }
 
 #[test]

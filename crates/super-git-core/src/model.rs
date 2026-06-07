@@ -29,6 +29,7 @@ pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.2";
 pub const DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.3";
+pub const CONFIRMATION_SCHEMA_VERSION: &str = "super-git.confirmation.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
@@ -610,6 +611,36 @@ pub struct RecoveryHint {
     pub kind: String,
     pub description: String,
     pub reference_command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveConfirmation {
+    pub schema_version: String,
+    pub kind: Option<String>,
+    pub action: Option<String>,
+    pub plan_schema_version: Option<String>,
+    pub plan_id: Option<String>,
+    pub target: Option<WorktreeRemoveConfirmationTarget>,
+    pub acknowledged_reason_codes: Option<Vec<String>>,
+    pub acknowledged_undo_strategy: Option<String>,
+    pub acknowledgement: Option<WorktreeRemoveAcknowledgement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveConfirmationTarget {
+    pub worktree_list_path: Option<PathBuf>,
+    pub git_common_dir: Option<PathBuf>,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveAcknowledgement {
+    pub method: Option<String>,
+    pub phrase: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

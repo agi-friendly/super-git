@@ -136,11 +136,14 @@ Implemented so far:
   fresh target revalidation
 - `execute` parses `super-git.plan.v0.3` `worktree_remove` plans and rejects
   them with `confirmation_required` before any write
+- `execute --confirmation <file|->` parses and statically validates
+  `super-git.confirmation.v0.1` artifacts, then still refuses deletion with
+  `execute_not_supported_yet`
 
 Next:
 
-- parse and validate `super-git.confirmation.v0.1` artifacts while still
-  refusing to delete
+- implement the destructive remove execute path behind confirmation and fresh
+  target revalidation
 
 ## Stage 6: Repository Profile And Dashboard
 

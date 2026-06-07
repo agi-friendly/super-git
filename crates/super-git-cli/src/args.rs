@@ -49,6 +49,11 @@ pub enum Commands {
         /// Plan file to execute. Use '-' to read from stdin.
         #[arg(long)]
         plan: PathBuf,
+
+        /// Confirmation artifact for destructive actions. Use '-' to read from stdin,
+        /// but not together with --plan -.
+        #[arg(long)]
+        confirmation: Option<PathBuf>,
     },
 
     /// Undo a write using a validated undo token.

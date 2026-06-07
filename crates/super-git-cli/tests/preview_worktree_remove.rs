@@ -119,6 +119,78 @@ fn execute_plan_from_stdin(dir: &Path, plan: &serde_json::Value) -> Output {
     child.wait_with_output().expect("wait execute")
 }
 
+fn execute_plan_and_confirmation_from_same_stdin(dir: &Path, plan: &serde_json::Value) -> Output {
+    let mut command = super_git(dir);
+    command
+        .args(["execute", "--plan", "-", "--confirmation", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("spawn execute");
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin
+            .write_all(
+                serde_json::to_string(plan)
+                    .expect("serialize plan")
+                    .as_bytes(),
+            )
+            .expect("write plan to stdin");
+    }
+    child.wait_with_output().expect("wait execute")
+}
+
+fn execute_plan_with_confirmation_files(
+    dir: &Path,
+    plan_file: &Path,
+    confirmation_file: &Path,
+) -> Output {
+    super_git(dir)
+        .arg("execute")
+        .arg("--plan")
+        .arg(plan_file)
+        .arg("--confirmation")
+        .arg(confirmation_file)
+        .output()
+        .expect("run execute with confirmation")
+}
+
+fn write_json(path: &Path, value: &serde_json::Value) {
+    std::fs::write(
+        path,
+        serde_json::to_vec(value).expect("serialize json fixture"),
+    )
+    .expect("write json fixture");
+}
+
+fn confirmation_for_remove_plan(plan: &serde_json::Value) -> serde_json::Value {
+    let data = &plan["data"];
+    let target = &data["target"];
+    let worktree_path = target["worktree_list_path"]
+        .as_str()
+        .expect("worktree_list_path");
+    serde_json::json!({
+        "schema_version": "super-git.confirmation.v0.1",
+        "kind": "destructive_action_confirmation",
+        "action": "worktree_remove",
+        "plan_schema_version": data["schema_version"],
+        "plan_id": data["plan_id"],
+        "target": {
+            "worktree_list_path": target["worktree_list_path"],
+            "git_common_dir": target["git_common_dir"],
+            "head": target["head"],
+            "branch": target["branch"]
+        },
+        "acknowledged_reason_codes": data["confirmation"]["reason_codes"],
+        "acknowledged_undo_strategy": data["undo_strategy"]["kind"],
+        "acknowledgement": {
+            "method": "cli_typed_phrase",
+            "phrase": format!("remove worktree {worktree_path} without automatic undo")
+        }
+    })
+}
+
 fn super_git_metadata_dir(repo: &Path) -> std::path::PathBuf {
     repo.join(".git/super-git")
 }
@@ -386,6 +458,236 @@ fn execute_worktree_remove_ignores_advisory_prompt_and_reference_commands() {
         !super_git_metadata_dir(&repo).exists(),
         "advisory field forgery must not create super-git metadata"
     );
+}
+
+#[test]
+fn execute_worktree_remove_with_valid_confirmation_still_rejects_without_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-valid-confirmation",
+        &tmp.path().join("repo.worktrees/remove-valid-confirmation"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let confirmation = confirmation_for_remove_plan(&plan);
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("execute_not_supported_yet")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "valid confirmation must still not remove the target in C7-E"
+    );
+    assert!(
+        !super_git_metadata_dir(&repo).exists(),
+        "valid confirmation reject must not create super-git metadata"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_rejects_unsupported_confirmation_schema_without_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-bad-confirmation-schema",
+        &tmp.path()
+            .join("repo.worktrees/remove-bad-confirmation-schema"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let mut confirmation = confirmation_for_remove_plan(&plan);
+    confirmation["schema_version"] = serde_json::json!("super-git.confirmation.v999");
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_schema_unsupported")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(target.exists(), "bad confirmation must not remove target");
+}
+
+#[test]
+fn execute_worktree_remove_rejects_malformed_confirmation_with_structured_code() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-malformed-confirmation",
+        &tmp.path()
+            .join("repo.worktrees/remove-malformed-confirmation"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let confirmation = serde_json::json!({
+        "schema_version": "super-git.confirmation.v0.1"
+    });
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_kind_unsupported")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "malformed confirmation must not remove target"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_rejects_confirmation_target_mismatch_without_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-target-mismatch",
+        &tmp.path().join("repo.worktrees/remove-target-mismatch"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let mut confirmation = confirmation_for_remove_plan(&plan);
+    confirmation["target"]["branch"] = serde_json::json!("feature/something-else");
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_target_mismatch")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "mismatch confirmation must not remove target"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_rejects_confirmation_phrase_mismatch_without_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-phrase-mismatch",
+        &tmp.path().join("repo.worktrees/remove-phrase-mismatch"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let mut confirmation = confirmation_for_remove_plan(&plan);
+    confirmation["acknowledgement"]["phrase"] =
+        serde_json::json!("remove whatever without automatic undo");
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_phrase_mismatch")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(target.exists(), "phrase mismatch must not remove target");
+}
+
+#[test]
+fn execute_worktree_remove_rejects_plan_and_confirmation_from_same_stdin() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-stdin-conflict",
+        &tmp.path().join("repo.worktrees/remove-stdin-conflict"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_and_confirmation_from_same_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("cannot both read from stdin"));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(target.exists(), "stdin conflict must not remove target");
 }
 
 #[test]

@@ -168,13 +168,14 @@ Acceptance:
 
 ### C7-E: Confirmation Artifact Parsing
 
-Add typed confirmation parsing and static validation, but still do not delete.
+C7-E adds typed confirmation parsing and static validation, but still does not
+delete.
 
 Acceptance:
 
-- invalid confirmation artifacts fail with structured errors
-- valid confirmation plus valid plan still reaches a no-write rejection
-- confirmation mismatch cases are tested
+- [x] invalid confirmation artifacts fail with structured errors
+- [x] valid confirmation plus valid plan still reaches a no-write rejection
+- [x] confirmation mismatch cases are tested
 
 ### C7-F: Worktree Remove Execute
 

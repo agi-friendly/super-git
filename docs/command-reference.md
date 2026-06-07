@@ -227,13 +227,14 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 `undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
 `reference_commands`.
 
-## `execute --plan <file|->`
+## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.
 
 ```bash
 super-git execute --plan /tmp/super-git-plan.json > /tmp/super-git-result.json
 super-git execute --plan - < /tmp/super-git-plan.json
+super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confirmation.json
 ```
 
 Current support is intentionally limited to internal allowlisted actions:
@@ -242,10 +243,14 @@ plans, tampered plans, unsupported actions, unsupported options, blocked
 worktree plans, and mismatched repository state.
 
 `worktree_remove` plans are destructive previews only. `execute` can parse
-`super-git.plan.v0.3` remove plans, but it rejects them before any write with a
-structured `confirmation_required` error. Future delete support must require a
-separate `super-git.confirmation.v0.1` artifact and fresh target revalidation
-before any deletion.
+`super-git.plan.v0.3` remove plans and optional
+`super-git.confirmation.v0.1` artifacts, but it still rejects them before any
+write. Missing confirmation returns `confirmation_required`; valid confirmation
+currently reaches `execute_not_supported_yet`. Future delete support must still
+perform fresh target revalidation before any deletion.
+
+`--plan -` and `--confirmation -` cannot be used together because they cannot
+both read independent JSON documents from the same stdin stream.
 
 ## `undo --token <file|->`
 

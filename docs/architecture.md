@@ -40,7 +40,7 @@ Current commands:
 - `super-git preview stage-changes`
 - `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
 - `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
-- `super-git execute --plan <file|->`
+- `super-git execute --plan <file|-> [--confirmation <file|->]`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`
 
@@ -92,7 +92,9 @@ explanatory and cannot be executed by `execute`.
 `execute --plan <file|->` validates schema, plan hash, action kind, options,
 repository root, fingerprint, and resolved pathset immediately before writing.
 State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
-from the core allowlist.
+from the core allowlist. Destructive actions may also require
+`--confirmation <file|->`; confirmation is parsed and validated as a separate
+artifact, not as prompt text.
 
 `undo --token <file|->` is action-specific. `stage_changes` undo validates
 token schema, repository identity, snapshot checksum, current index checksum,
@@ -240,8 +242,9 @@ before any future execute support. The detailed checkpoint is recorded in
 `docs/internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md`.
 The execute-side confirmation model is recorded separately in
 `docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`:
-future removal execute must require a typed `super-git.confirmation.v0.1`
-artifact and still revalidate the full target state before deleting anything.
+current `execute` can parse typed `super-git.confirmation.v0.1` artifacts for
+`worktree_remove`, but still refuses to delete. Future removal execute must
+revalidate the full target state before deleting anything.
 
 ## Plugins And Guides
 
