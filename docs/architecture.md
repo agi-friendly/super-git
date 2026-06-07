@@ -91,10 +91,15 @@ repository root, fingerprint, and resolved pathset immediately before writing.
 State drift becomes `precondition_mismatch`. Actual Git commands are rebuilt
 from the core allowlist.
 
-`undo --token <file|->` validates token schema, repository identity, snapshot
-checksum, current index checksum, and local undo registry provenance before
-restoring the previous index snapshot. It never edits working-tree file
+`undo --token <file|->` is action-specific. For the current `stage_changes`
+action, undo validates token schema, repository identity, snapshot checksum,
+current index checksum, and local undo registry provenance before restoring the
+previous index snapshot. `stage_changes` undo never edits working-tree file
 contents.
+
+Future worktree-create undo has a different boundary: it may remove the clean
+linked worktree created by `super-git`, but it must not delete branch refs,
+remote refs, commits, or user-created files.
 
 ## Config
 
@@ -186,8 +191,16 @@ is intentionally read-oriented:
   worktree family.
 - `wt list` returns the full worktree list.
 
-Create/remove workflows should start with preview plans and safety checks before
-they become executable.
+Create/remove workflows must start with preview plans and safety checks before
+they become executable. Worktree creation is planned as a typed
+`worktree_create` plan, not as a raw `git worktree add` command string.
+
+The first worktree create contract intentionally avoids `--force`,
+`--guess-remote`, target overrides, copy patterns, and shell hooks. Preview
+should resolve the repository family, source ref, target path, target safety,
+branch occupancy, and undo boundary before execution is possible. The detailed
+contract is recorded in
+`docs/internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md`.
 
 ## Plugins And Guides
 

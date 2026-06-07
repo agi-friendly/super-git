@@ -68,13 +68,18 @@ Next:
 
 ## Stage 4: Safe Worktree Create Preview
 
-- preview plan for worktree creation
-- branch name validation
-- target path validation
-- base branch validation
-- existing path and branch-use warnings
+- contract checkpoint for `worktree_create` preview
+- internal worktree-family snapshot based on Git porcelain data
+- `{ref_slug}` rendering with `path_safe_v1`
+- target path validation from saved config templates
+- source ref classification for local branch, tag, commit, remote-tracking
+  branch, unknown ref, and ambiguous ref
+- branch occupancy hard blocks when a branch is already checked out elsewhere
+- explicit `execution.status` and structured blocked reasons
 - clear risk and reversibility metadata
 - target path resolved from config and frozen in the plan
+- no `--force`, `--guess-remote`, `--target`, copy patterns, or shell hooks in
+  the first implementation
 
 ## Stage 5: Worktree Create/Remove Execute
 
@@ -82,7 +87,8 @@ Next:
 - execute validated worktree removal plans
 - protect dirty worktrees and untracked files
 - require clear confirmation rules for destructive removal
-- provide undo guidance where true undo is not possible
+- undo unchanged worktree creation without deleting branch refs or commits
+- provide cleanup guidance where true undo is not possible
 
 ## Stage 6: Repository Profile And Dashboard
 

@@ -27,6 +27,7 @@ Implementation plans and design checkpoints live under:
 
 - [internal/plans](internal/plans/)
 - [Global config and saved repositories design](internal/plans/2026-06-06-global-config-and-saved-repositories.md)
+- [Worktree create preview contract](internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md)
 
 These files are useful for project history and implementation context, but the
 public-facing contract should be reflected in the main docs listed above.
