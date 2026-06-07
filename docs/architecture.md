@@ -96,6 +96,10 @@ from the core allowlist. Destructive actions may also require
 `--confirmation <file|->`; confirmation is parsed and validated as a separate
 artifact, not as prompt text.
 
+Successful execute results use `super-git.execute.v0.2`. Undoable actions
+include an `undo_token`; destructive non-undoable actions such as
+`worktree_remove` omit it by contract.
+
 `undo --token <file|->` is action-specific. `stage_changes` undo validates
 token schema, repository identity, snapshot checksum, current index checksum,
 and local undo registry provenance before restoring the previous index

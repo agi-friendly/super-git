@@ -100,12 +100,13 @@ pub fn execute_worktree_remove_plan(
             &plan.target.worktree_list_path,
         )
     })?;
+    let result_repository = execution_context.to_path_buf();
 
     Ok(ExecuteResult {
         schema_version: EXECUTE_SCHEMA_VERSION.to_string(),
         plan_id: plan.plan_id,
         action: ACTION_WORKTREE_REMOVE.to_string(),
-        repository: plan.repository.selected_from,
+        repository: result_repository,
         executed: true,
         effects: vec![format!(
             "Removed linked worktree at {} without deleting branch refs or history.",
@@ -119,7 +120,7 @@ fn execution_context(plan: &WorktreeRemovePlan) -> &Path {
     plan.repository
         .main_worktree
         .as_deref()
-        .unwrap_or(&plan.repository.selected_from)
+        .unwrap_or(&plan.repository.git_common_dir)
 }
 
 fn validate_execution_contract(plan: &WorktreeRemovePlan) -> Result<()> {

@@ -57,8 +57,8 @@ The first worktree remove preview implementation must follow these rules:
 - No shell hooks.
 - No copy or archive behavior.
 - `reference_commands` are documentation only.
-- `execute` must not run a remove plan until a later slice defines explicit
-  human confirmation and revalidation.
+- `execute` must not run a remove plan without explicit human confirmation and
+  execute-time revalidation.
 - Running editors, terminals, development servers, file watchers, and other
   processes inside the target directory are not detected in the first
   implementation. Preview must warn about this limitation.
@@ -177,7 +177,9 @@ first remove preview.
 
 ## Execution Status
 
-C7 preview-only plans should not advertise immediate execution.
+C7-0 preview-only plans did not advertise immediate execution. After C7-F,
+clean unblocked plans can be executed only through the separate confirmation
+artifact and execute-time revalidation contract.
 
 Recommended values:
 
@@ -185,7 +187,7 @@ Recommended values:
 {
   "execution": {
     "status": "preview_only",
-    "execute_supported": false,
+    "execute_supported": true,
     "future_execute_eligibility": "needs_human_confirmation",
     "raw_git_allowed": false,
     "blocked_reasons": []
@@ -212,9 +214,9 @@ If hard blocks exist, the status becomes:
 }
 ```
 
-`preview_only` means: the target appears removable under the current strict
-policy, but `super-git execute` must still refuse the plan until a later C7/C8
-slice defines the confirmation and revalidation contract.
+`preview_only` means: the preview command itself performs no writes. Execution
+is available only after `super-git execute` validates a separate confirmation
+artifact and revalidates the target immediately before removal.
 
 ## Risk And Confirmation
 
@@ -340,7 +342,7 @@ Preview output remains wrapped by the global JSON envelope:
     ],
     "execution": {
       "status": "preview_only",
-      "execute_supported": false,
+      "execute_supported": true,
       "future_execute_eligibility": "needs_human_confirmation",
       "raw_git_allowed": false,
       "suggested_super_git_command": null,
@@ -420,10 +422,10 @@ Preview output remains wrapped by the global JSON envelope:
 - recovery-hint descriptions
 - timestamps
 
-## Future Execute Contract
+## Execute Contract
 
-This is not part of C7-0 or the first preview implementation, but future execute
-support must satisfy all of these before it can remove anything:
+This was not part of C7-0 or the first preview implementation, but current
+execute support must satisfy all of these before it can remove anything:
 
 1. Parse and validate the plan schema.
 2. Recompute the plan hash.
@@ -527,5 +529,5 @@ These are product ideas, not part of the first worktree remove preview:
       locked, prunable, detached, current, main, bare, and submodule targets.
 - [x] The contract keeps `reference_commands` documentation-only.
 - [x] The contract records the limitation around running processes.
-- [x] The contract keeps future execute behind explicit human confirmation.
+- [x] The contract keeps execute behind explicit human confirmation.
 - [x] The contract distinguishes destructive preview from create undo.

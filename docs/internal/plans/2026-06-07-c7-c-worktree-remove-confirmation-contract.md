@@ -16,7 +16,7 @@ revalidation.
 
 **Tech Stack:** Rust workspace, JSON envelopes, serde-compatible schema design,
 existing `super-git.plan.v0.3` destructive preview plans, system `git`
-revalidation in future execute slices.
+revalidation in execute slices.
 
 ---
 
@@ -120,7 +120,7 @@ for humans and a machine-checkable contract for agents and UIs.
 
 A valid confirmation artifact is not enough to delete anything.
 
-After static confirmation validation, future execute support must still:
+After static confirmation validation, execute support must still:
 
 1. Re-parse and re-hash the plan.
 2. Confirm action kind is allowlisted.
@@ -180,7 +180,7 @@ Acceptance:
 
 ### C7-F: Worktree Remove Execute
 
-Only after C7-D and C7-E are green, implement the destructive write.
+C7-F implemented the destructive write only after C7-D and C7-E were green.
 
 Acceptance:
 

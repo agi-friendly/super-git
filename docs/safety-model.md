@@ -94,11 +94,12 @@ worktrees.
 
 ## Current Write Boundary
 
-Two Git write actions exist today:
+Three Git write actions exist today:
 
 ```text
 stage_changes
 worktree_create
+worktree_remove
 ```
 
 `stage_changes` stages the unstaged/untracked pathset captured by `preview`,
@@ -109,6 +110,13 @@ but only after `execute` confirms that the pathset and fingerprint still match.
 ref, ref-policy consistency, repository family identity, family snapshot, branch
 occupancy, target path safety, and post-create HEAD/ref state. It writes a local
 execution record before Git may mutate worktree metadata.
+
+`worktree_remove` removes one existing linked worktree from a confirmed
+`super-git.plan.v0.3`, but only after `execute` validates a separate
+`super-git.confirmation.v0.1` artifact, revalidates the target immediately
+before deletion, writes an execution record, and confirms the command is not
+being run from inside the target worktree. It is destructive and does not
+return an automatic undo token.
 
 Future actions must earn their way into the allowlist with tests and docs.
 
@@ -152,7 +160,7 @@ existing linked worktree deletes a filesystem tree and Git worktree metadata.
 `super-git` cannot promise to recreate untracked files, ignored files, local
 build outputs, editor state, or process state after deletion.
 
-The first `worktree_remove` slice is therefore preview-only:
+The first `worktree_remove` slice established the preview boundary:
 
 - exact absolute linked-worktree path only
 - read-only target scan

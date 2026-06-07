@@ -243,6 +243,10 @@ Current support is intentionally limited to internal allowlisted actions:
 unsupported actions, unsupported options, blocked worktree plans, and
 mismatched repository state.
 
+Successful execute results currently use `schema_version` value
+`"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;
+non-undoable destructive actions intentionally omit it.
+
 `worktree_remove` is destructive and not automatically undoable. It requires a
 separate `super-git.confirmation.v0.1` artifact, then re-scans the target
 immediately before deletion. Execute removes only the linked worktree with

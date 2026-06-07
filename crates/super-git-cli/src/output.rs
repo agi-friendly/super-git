@@ -509,10 +509,29 @@ pub fn print_worktree_remove_plan(mode: OutputMode, plan: &WorktreeRemovePlan) -
             }
             println!("Execute supported: {}", plan.execution.execute_supported);
             println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
-            println!("Undo: {}", plan.undo_strategy.kind);
+            println!(
+                "Confirmation required: {}",
+                yes_no(plan.confirmation.required_before_execute)
+            );
+            if !plan.confirmation.reason_codes.is_empty() {
+                println!("Confirmation reasons:");
+                for reason in &plan.confirmation.reason_codes {
+                    println!("  - {reason}");
+                }
+            }
+            println!("Automatic undo: not available");
+            println!("Undo strategy: {}", plan.undo_strategy.kind);
             println!("Writes now: no");
             Ok(())
         }
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
     }
 }
 

@@ -53,11 +53,13 @@ Implemented today:
     worktree
   - reports strict hard blocks, human confirmation requirements, no automatic
     undo, and manual recovery hints without deleting anything
-- `super-git execute --plan <file|->`
+- `super-git execute --plan <file|-> [--confirmation <file|->]`
   - re-validates the plan and state before writing
   - executes only internal allowlisted actions: `stage_changes`, executable
     `worktree_create` plans, and confirmed `worktree_remove` plans
   - writes local provenance before reporting success
+  - for destructive `worktree_remove`, requires a separate confirmation
+    artifact and returns no automatic undo token
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current

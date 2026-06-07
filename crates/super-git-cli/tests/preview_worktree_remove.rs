@@ -295,6 +295,37 @@ fn preview_worktree_remove_clean_linked_worktree_emits_preview_only_plan_without
 }
 
 #[test]
+fn preview_worktree_remove_human_output_names_confirmation_and_no_undo() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-human",
+        &tmp.path().join("repo.worktrees/remove-human"),
+    );
+
+    let output = super_git(&repo)
+        .arg("--human")
+        .args(["preview", "worktree-remove", "--worktree"])
+        .arg(&target)
+        .output()
+        .expect("run human preview worktree-remove");
+
+    assert!(
+        output.status.success(),
+        "human preview failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("human stdout utf8");
+    assert!(stdout.contains("Confirmation required: yes"));
+    assert!(stdout.contains("Confirmation reasons:"));
+    assert!(stdout.contains("deletes_worktree_directory"));
+    assert!(stdout.contains("no_automatic_undo"));
+    assert!(stdout.contains("Automatic undo: not available"));
+}
+
+#[test]
 fn preview_worktree_remove_dirty_target_returns_blocked_plan() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("repo");
@@ -504,7 +535,9 @@ fn execute_worktree_remove_with_valid_confirmation_removes_target_without_undo_t
     ));
 
     assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["schema_version"], "super-git.execute.v0.2");
     assert_eq!(json["data"]["action"], "worktree_remove");
+    assert_eq!(json["data"]["repository"], canonical_string(&repo));
     assert_eq!(json["data"]["executed"], true);
     assert!(
         json["data"].get("undo_token").is_none(),
@@ -565,6 +598,82 @@ fn execute_worktree_remove_with_valid_confirmation_removes_target_without_undo_t
             .as_str()
             .unwrap_or_default()
             .contains("undo_token_not_available")));
+}
+
+#[test]
+fn execute_worktree_remove_supports_bare_primary_family() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let src = tmp.path().join("src");
+    init_repo_with_commit(&src);
+    let bare = tmp.path().join("bare.git");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "--bare",
+            "-q",
+            src.to_str().expect("src utf8"),
+            bare.to_str().expect("bare utf8"),
+        ],
+    );
+    let target = tmp.path().join("bare-linked");
+    git(
+        &bare,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            target.to_str().expect("target utf8"),
+            "main",
+        ],
+    );
+    let target = target.canonicalize().expect("canonical target");
+    let before_branch_oid =
+        String::from_utf8(run_git(&bare, &["rev-parse", "--verify", "refs/heads/main"]).stdout)
+            .expect("branch oid")
+            .trim()
+            .to_string();
+    let plan = json_output(preview_worktree_remove(&bare, &target));
+    assert_eq!(
+        plan["data"]["repository"]["main_worktree"],
+        serde_json::Value::Null
+    );
+    let confirmation = confirmation_for_remove_plan(&plan);
+    let plan_file = tmp.path().join("bare-plan.json");
+    let confirmation_file = tmp.path().join("bare-confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+
+    let json = json_output(execute_plan_with_confirmation_files(
+        &bare,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["data"]["schema_version"], "super-git.execute.v0.2");
+    assert_eq!(json["data"]["action"], "worktree_remove");
+    assert_eq!(json["data"]["repository"], canonical_string(&bare));
+    assert!(
+        json["data"].get("undo_token").is_none(),
+        "bare-primary remove must not claim automatic undo"
+    );
+    assert!(
+        !target.exists(),
+        "bare-primary execute should remove the linked worktree"
+    );
+    assert!(
+        !worktree_list(&bare).contains(target.to_str().expect("target utf8")),
+        "removed bare-primary target must disappear from git worktree list"
+    );
+    let after_branch_oid =
+        String::from_utf8(run_git(&bare, &["rev-parse", "--verify", "refs/heads/main"]).stdout)
+            .expect("branch oid")
+            .trim()
+            .to_string();
+    assert_eq!(
+        after_branch_oid, before_branch_oid,
+        "bare-primary remove execute must not move the branch ref"
+    );
 }
 
 #[test]

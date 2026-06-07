@@ -126,11 +126,11 @@ Implemented so far:
 - no branch, remote-ref, commit, or history deletion
 - report process-detection limitations for editors, terminals, development
   servers, and file watchers
-- `execution.status: "preview_only"` for clean removable targets until a later
-  confirmation/execute contract exists
+- `execution.status: "preview_only"` for clean removable targets, with
+  execution allowed only after a separate confirmation artifact
 - `undo_strategy.kind: "not_available"` plus recovery hints instead of
   pretending removal is reversible
-- `super-git.confirmation.v0.1` contract for future destructive execute
+- `super-git.confirmation.v0.1` contract for destructive execute
   authorization
 - confirmation is separate from display prompt text and is never enough to skip
   fresh target revalidation
