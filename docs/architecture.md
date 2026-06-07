@@ -39,6 +39,7 @@ Current commands:
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
 - `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
+- `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
 - `super-git execute --plan <file|->`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`

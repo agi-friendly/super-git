@@ -9,7 +9,7 @@ use super_git_core::config::store::{
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
     ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -486,6 +486,30 @@ pub fn print_worktree_create_plan(mode: OutputMode, plan: &WorktreeCreatePlan) -
                 }
             }
             println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!("Writes now: no");
+            Ok(())
+        }
+    }
+}
+
+pub fn print_worktree_remove_plan(mode: OutputMode, plan: &WorktreeRemovePlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.selected_from.display());
+            println!("Target: {}", plan.target.worktree_list_path.display());
+            println!("Execution: {}", plan.execution.status);
+            if !plan.execution.blocked_reasons.is_empty() {
+                println!("Blocked reasons:");
+                for reason in &plan.execution.blocked_reasons {
+                    println!("  - {} ({})", reason.code, reason.severity);
+                }
+            }
+            println!("Execute supported: no");
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
+            println!("Undo: {}", plan.undo_strategy.kind);
             println!("Writes now: no");
             Ok(())
         }

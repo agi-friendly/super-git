@@ -137,9 +137,9 @@ Worktree create undo is intentionally narrow: remove the clean linked worktree
 created by `super-git` when local provenance and state checks still match. It
 does not delete branch refs, remote refs, commits, or user-created files.
 
-## Planned Destructive Preview Boundary
+## Destructive Preview Boundary
 
-The next worktree safety checkpoint is `worktree_remove` preview.
+`worktree_remove` preview is the first destructive preview boundary.
 
 The guiding rule is:
 

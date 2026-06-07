@@ -84,6 +84,7 @@ target-specific plan at all, for example:
 - the path cannot be canonicalized enough to compare safely
 - Git cannot locate a worktree family for the path
 - `git worktree list --porcelain` cannot be read
+- the path does not exactly match one worktree-list entry
 
 When a family and target can be identified, Git-state problems should normally
 produce `{ ok: true, data.execution.status: "blocked" }` so the caller receives
@@ -158,7 +159,6 @@ The first remove preview must block removal when any of these are true:
 | `target_is_bare_primary` | Bare primary repositories are not removable by this workflow. |
 | `target_is_current_worktree` | Avoid deleting the worktree from which the command is running. |
 | `target_not_linked_worktree` | Only linked worktrees are in scope. |
-| `target_not_in_worktree_list` | Git does not report the path as an active worktree. |
 | `target_family_mismatch` | The target path and Git metadata do not agree on the family. |
 | `target_locked` | Git says the worktree is locked. |
 | `target_prunable` | Prunable entries need repair/prune handling, not removal preview. |
@@ -273,8 +273,9 @@ used by `execute` as commands.
 
 ## Plan Schema
 
-C7-0 proposes `super-git.plan.v0.3` only if destructive preview introduces a
-common confirmation/recovery contract shared by future actions.
+C7-B uses `super-git.plan.v0.3` because destructive preview introduces a common
+preview-side confirmation/recovery contract that future destructive actions can
+reuse.
 
 That version bump is justified by these common fields:
 
@@ -283,11 +284,6 @@ That version bump is justified by these common fields:
 - `confirmation`
 - `undo_strategy.kind: "not_available"`
 - `recovery_hints`
-
-If implementation later keeps those fields action-local, C7 should downgrade to
-`super-git.plan.v0.2` plus an action-specific `worktree_remove` schema revision
-before writing code. Do not bump a global plan version merely because a new
-action kind exists.
 
 Preview output remains wrapped by the global JSON envelope:
 
@@ -493,9 +489,10 @@ Acceptance:
 
 ### C7-C: Confirmation model checkpoint
 
-Before `execute` can support worktree removal, define the human confirmation
-shape and decide whether it belongs in global `super-git.plan.v0.3` or remains
-action-local.
+Before `execute` can support worktree removal, define the execute-side human
+confirmation record. The preview-side confirmation/recovery fields are already
+part of `super-git.plan.v0.3`, but execute still needs an explicit,
+machine-readable acknowledgement that cannot be forged by changing prompt text.
 
 Acceptance:
 

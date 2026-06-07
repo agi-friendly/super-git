@@ -4,6 +4,7 @@ pub mod execute_worktree;
 pub mod fingerprint;
 pub mod preview;
 pub mod preview_worktree;
+pub mod preview_worktree_remove;
 pub mod repository;
 pub mod state;
 pub mod status;

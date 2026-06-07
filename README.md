@@ -48,6 +48,11 @@ Implemented today:
   - builds a read-only plan for creating a linked worktree
   - recognizes blocked cases such as occupied branches, remote-tracking refs,
     and target collisions without writing
+- `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
+  - builds a read-only destructive-action plan for removing an existing linked
+    worktree
+  - reports strict hard blocks, human confirmation requirements, no automatic
+    undo, and manual recovery hints without deleting anything
 - `super-git execute --plan <file|->`
   - re-validates the plan and state before writing
   - executes only internal allowlisted actions: `stage_changes` and

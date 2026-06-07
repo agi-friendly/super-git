@@ -128,6 +128,13 @@ pub enum PreviewCommands {
         #[arg(long = "ref")]
         ref_name: String,
     },
+
+    /// Preview removing an existing linked worktree.
+    WorktreeRemove {
+        /// Exact absolute linked worktree path to inspect for removal.
+        #[arg(long)]
+        worktree: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]

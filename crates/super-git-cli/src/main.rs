@@ -10,7 +10,9 @@ use clap::Parser;
 use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
-use super_git_core::git::{execute, preview, preview_worktree, state, status, undo, worktree};
+use super_git_core::git::{
+    execute, preview, preview_worktree, preview_worktree_remove, state, status, undo, worktree,
+};
 
 use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
@@ -193,6 +195,13 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
                     .context("could not preview worktree_create")?;
 
             output::print_worktree_create_plan(mode, &plan)
+        }
+        PreviewCommands::WorktreeRemove { worktree } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let plan = preview_worktree_remove::preview_worktree_remove(&path, &worktree)
+                .context("could not preview worktree_remove")?;
+
+            output::print_worktree_remove_plan(mode, &plan)
         }
     }
 }

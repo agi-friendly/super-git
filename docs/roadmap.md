@@ -119,9 +119,6 @@ Implemented so far:
   targets
 - clean linked worktrees report `execution_status: "preview_only"` in the scan
   result
-
-Next:
-
 - `preview worktree-remove --worktree <absolute-linked-worktree-path>`
 - exact absolute linked-worktree path only in the first implementation
 - no `--current` shortcut in the first implementation
@@ -133,6 +130,9 @@ Next:
   confirmation/execute contract exists
 - `undo_strategy.kind: "not_available"` plus recovery hints instead of
   pretending removal is reversible
+
+Next:
+
 - clear human confirmation model before any future execute support
 
 ## Stage 6: Repository Profile And Dashboard

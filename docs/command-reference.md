@@ -204,6 +204,29 @@ or Git worktree metadata. Unblocked plans use
 `execution.status: "executable"` and must still pass `execute --plan`
 re-validation before any write occurs.
 
+## `preview worktree-remove`
+
+Builds a read-only `super-git.plan.v0.3` plan for removing one existing linked
+worktree.
+
+```bash
+super-git preview worktree-remove --worktree <absolute-linked-worktree-path>
+```
+
+The first implementation intentionally accepts only an exact absolute path that
+matches one `git worktree list --porcelain` entry. There is no `--current`, no
+`--force`, no branch deletion, and no automatic undo.
+
+If the path does not exactly match a worktree-list entry, no target-specific
+plan is emitted; the command fails with `{ ok: false, error }` instead.
+
+Clean linked worktrees return `execution.status: "preview_only"` with
+`execute_supported: false`. Blocked targets return `execution.status:
+"blocked"` with structured hard-block reasons. In both cases the plan is
+read-only and includes high-risk metadata, explicit confirmation requirements,
+`undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
+`reference_commands`.
+
 ## `execute --plan <file|->`
 
 Executes a previously previewed plan after re-validation.

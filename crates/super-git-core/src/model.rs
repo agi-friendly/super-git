@@ -28,6 +28,7 @@ impl StatusOutput {
 pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.2";
+pub const DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.3";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
@@ -489,6 +490,126 @@ pub struct WorktreeCreateUndoPreview {
     pub kind: String,
     pub available_after_execute: bool,
     pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemovePlan {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub action: WorktreeRemoveAction,
+    pub repository: WorktreeRemoveRepository,
+    pub target: WorktreeRemoveTarget,
+    pub target_state: WorktreeRemoveTargetState,
+    pub preconditions: Vec<WorktreeRemovePrecondition>,
+    pub execution: DestructivePreviewExecution,
+    pub risk: ActionRisk,
+    pub confirmation: PreviewConfirmation,
+    pub effects: Vec<String>,
+    pub limitations: Vec<String>,
+    pub reference_commands: WorktreeReferenceCommands,
+    pub undo_strategy: UnavailableUndoStrategy,
+    pub recovery_hints: Vec<RecoveryHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveAction {
+    pub kind: String,
+    pub options: WorktreeRemoveOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveOptions {
+    pub worktree: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveRepository {
+    pub family_id: String,
+    pub git_common_dir: PathBuf,
+    pub main_worktree: Option<PathBuf>,
+    pub selected_from: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveTarget {
+    pub input_path: PathBuf,
+    pub canonical_path: PathBuf,
+    pub worktree_list_path: PathBuf,
+    pub kind: String,
+    pub worktree_git_dir: Option<PathBuf>,
+    pub git_common_dir: Option<PathBuf>,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub locked: bool,
+    pub prunable: bool,
+    pub is_current_worktree: bool,
+    pub has_submodules: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveTargetState {
+    pub operation: Operation,
+    pub working_tree: WorktreeRemoveWorkingTree,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveWorkingTree {
+    pub clean: bool,
+    pub staged: u32,
+    pub unstaged: u32,
+    pub untracked: u32,
+    pub ignored: u32,
+    pub conflict_count: u32,
+    pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemovePrecondition {
+    pub code: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestructivePreviewExecution {
+    pub status: String,
+    pub execute_supported: bool,
+    pub future_execute_eligibility: String,
+    pub raw_git_allowed: bool,
+    pub suggested_super_git_command: Option<Vec<String>>,
+    pub blocked_reasons: Vec<WorktreeBlockedReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewConfirmation {
+    pub required_before_execute: bool,
+    pub reason_codes: Vec<String>,
+    pub human_prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnavailableUndoStrategy {
+    pub kind: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryHint {
+    pub kind: String,
+    pub description: String,
+    pub reference_command: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
