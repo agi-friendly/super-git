@@ -110,8 +110,9 @@ files.
 
 Not every Git write can honestly offer automatic undo. Destructive actions such
 as removing an existing linked worktree must say so in their preview contract,
-stay preview-only until confirmation and revalidation are designed, and provide
-recovery hints instead of pretending to be reversible.
+require separate confirmation plus fresh revalidation, and provide recovery
+hints instead of pretending to be reversible. Successful destructive actions can
+therefore omit `undo_token`.
 
 ## Config
 
@@ -235,16 +236,16 @@ untracked changes before removal.
 
 Worktree removal has a different boundary. Removing an existing linked
 worktree is a destructive action, not an undoable cleanup action. The C7
-contract starts with `preview worktree-remove` only: exact absolute
-linked-worktree path, read-only target scanning, no `--force`, no
-branch/history deletion, no automatic undo, and human confirmation required
-before any future execute support. The detailed checkpoint is recorded in
+contract starts with exact absolute linked-worktree paths, read-only target
+scanning, no `--force`, no branch/history deletion, no automatic undo, and
+human confirmation. The detailed checkpoint is recorded in
 `docs/internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md`.
 The execute-side confirmation model is recorded separately in
 `docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`:
-current `execute` can parse typed `super-git.confirmation.v0.1` artifacts for
-`worktree_remove`, but still refuses to delete. Future removal execute must
-revalidate the full target state before deleting anything.
+`execute` parses typed `super-git.confirmation.v0.1` artifacts for
+`worktree_remove`, revalidates the full target state, writes a local execution
+record, and then removes only the linked worktree without deleting refs or
+history.
 
 ## Plugins And Guides
 

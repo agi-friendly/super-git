@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
 use crate::git::execute_worktree;
+use crate::git::execute_worktree_remove;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
 use crate::git::preview::compute_plan_id;
 use crate::git::preview_worktree_remove;
@@ -46,7 +47,7 @@ pub fn execute_plan_bytes_with_confirmation(
             execute_worktree::execute_worktree_create_plan(*plan)
         }
         PlanToExecute::WorktreeRemove(plan) => {
-            reject_worktree_remove_plan(*plan, confirmation_bytes)
+            execute_worktree_remove_plan(*plan, confirmation_bytes)
         }
     }
 }
@@ -97,7 +98,7 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
     }
 }
 
-fn reject_worktree_remove_plan(
+fn execute_worktree_remove_plan(
     plan: WorktreeRemovePlan,
     confirmation_bytes: Option<&[u8]>,
 ) -> Result<ExecuteResult> {
@@ -111,10 +112,7 @@ fn reject_worktree_remove_plan(
 
     let confirmation = parse_worktree_remove_confirmation(confirmation_bytes)?;
     validate_worktree_remove_confirmation(&plan, &confirmation)?;
-    invalid_plan(
-        "execute_not_supported_yet",
-        "worktree_remove confirmation is valid, but delete support is not implemented yet",
-    )
+    execute_worktree_remove::execute_worktree_remove_plan(plan)
 }
 
 fn validate_worktree_remove_static_contract(plan: &WorktreeRemovePlan) -> Result<()> {
@@ -340,7 +338,7 @@ fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<
         repository: state.root,
         executed: true,
         effects: vec!["Staged previewed paths in the current worktree index.".to_string()],
-        undo_token: ExecuteUndoToken::Index(Box::new(undo_token)),
+        undo_token: Some(ExecuteUndoToken::Index(Box::new(undo_token))),
     })
 }
 

@@ -36,6 +36,8 @@ pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
 pub const UNDO_REGISTRY_SCHEMA_VERSION: &str = "super-git.undo-registry.v0.1";
 pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
+pub const WORKTREE_REMOVE_EXECUTION_RECORD_SCHEMA_VERSION: &str =
+    "super-git.worktree-remove-execution.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -694,7 +696,8 @@ pub struct ExecuteResult {
     pub repository: PathBuf,
     pub executed: bool,
     pub effects: Vec<String>,
-    pub undo_token: ExecuteUndoToken,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo_token: Option<ExecuteUndoToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -763,6 +766,22 @@ pub struct WorktreeExecutionRecord {
     pub expected_branch: Option<String>,
     pub created_parent: Option<PathBuf>,
     pub undo_token: Option<WorktreeUndoToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeRemoveExecutionRecord {
+    pub schema_version: String,
+    pub status: String,
+    pub action: String,
+    pub plan_id: String,
+    pub repository: WorktreeRemoveRepository,
+    pub target: WorktreeRemoveTarget,
+    pub target_state: WorktreeRemoveTargetState,
+    pub confirmation_reason_codes: Vec<String>,
+    pub automatic_undo_available: bool,
+    pub undo_strategy: UnavailableUndoStrategy,
+    pub trusted_git_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

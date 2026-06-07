@@ -127,7 +127,7 @@ pub fn execute_worktree_create_plan(plan: WorktreeCreatePlan) -> Result<ExecuteR
             "Created linked worktree at {}.",
             plan.target.path.display()
         )],
-        undo_token: ExecuteUndoToken::Worktree(Box::new(undo_token)),
+        undo_token: Some(ExecuteUndoToken::Worktree(Box::new(undo_token))),
     })
 }
 

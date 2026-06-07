@@ -168,12 +168,16 @@ The first `worktree_remove` slice is therefore preview-only:
 - `undo_strategy.kind` is `not_available`
 - `recovery_hints` are advisory, not a reversibility guarantee
 
-Any future execute support for worktree removal must require a separate
-`super-git.confirmation.v0.1` artifact. That artifact is explicit
-authorization, not execution permission by itself: execute must still re-parse
-and re-hash the plan, match the confirmation to the plan and target identity,
-then revalidate the full target state immediately before calling
-`git worktree remove` without `--force`.
+Worktree removal execute requires a separate `super-git.confirmation.v0.1`
+artifact. That artifact is explicit authorization, not execution permission by
+itself: execute still re-parses and re-hashes the plan, matches the confirmation
+to the plan and target identity, writes an intent record, then revalidates the
+full target state immediately before calling `git worktree remove` without
+`--force`.
+
+Successful worktree removal results do not return an `undo_token`. The local
+execution record states `automatic_undo_available: false` so downstream agents
+cannot accidentally treat the destructive action as reversible.
 
 The confirmation contract is documented in
 `docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`.

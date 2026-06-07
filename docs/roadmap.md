@@ -135,15 +135,17 @@ Implemented so far:
 - confirmation is separate from display prompt text and is never enough to skip
   fresh target revalidation
 - `execute` parses `super-git.plan.v0.3` `worktree_remove` plans and rejects
-  them with `confirmation_required` before any write
+  missing confirmation with `confirmation_required` before any write
 - `execute --confirmation <file|->` parses and statically validates
-  `super-git.confirmation.v0.1` artifacts, then still refuses deletion with
-  `execute_not_supported_yet`
+  `super-git.confirmation.v0.1` artifacts, revalidates the target, writes an
+  execution record, and removes only the linked worktree without `--force`
+- successful `worktree_remove` execute omits `undo_token` and records
+  `automatic_undo_available: false`
 
 Next:
 
-- implement the destructive remove execute path behind confirmation and fresh
-  target revalidation
+- extend worktree remove coverage with additional stale-state fixtures before
+  expanding into remove cleanup workflows
 
 ## Stage 6: Repository Profile And Dashboard
 

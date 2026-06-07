@@ -174,7 +174,8 @@ delete.
 Acceptance:
 
 - [x] invalid confirmation artifacts fail with structured errors
-- [x] valid confirmation plus valid plan still reaches a no-write rejection
+- [x] valid confirmation plus valid plan reached a no-write rejection in C7-E
+  before C7-F enabled destructive execute
 - [x] confirmation mismatch cases are tested
 
 ### C7-F: Worktree Remove Execute

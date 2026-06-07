@@ -507,7 +507,7 @@ pub fn print_worktree_remove_plan(mode: OutputMode, plan: &WorktreeRemovePlan) -
                     println!("  - {} ({})", reason.code, reason.severity);
                 }
             }
-            println!("Execute supported: no");
+            println!("Execute supported: {}", plan.execution.execute_supported);
             println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
             println!("Undo: {}", plan.undo_strategy.kind);
             println!("Writes now: no");
@@ -523,7 +523,10 @@ pub fn print_execute_result(mode: OutputMode, result: &ExecuteResult) -> Result<
             println!("Executed: {}", result.action);
             println!("Plan: {}", result.plan_id);
             println!("Repository: {}", result.repository.display());
-            println!("Undo token: {}", result.undo_token.kind());
+            match &result.undo_token {
+                Some(token) => println!("Undo token: {}", token.kind()),
+                None => println!("Undo token: not available"),
+            }
             Ok(())
         }
     }

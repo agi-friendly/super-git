@@ -156,6 +156,15 @@ fn execute_plan_with_confirmation_files(
         .expect("run execute with confirmation")
 }
 
+fn undo_token_file(dir: &Path, token_file: &Path) -> Output {
+    super_git(dir)
+        .arg("undo")
+        .arg("--token")
+        .arg(token_file)
+        .output()
+        .expect("run undo")
+}
+
 fn write_json(path: &Path, value: &serde_json::Value) {
     std::fs::write(
         path,
@@ -235,7 +244,7 @@ fn preview_worktree_remove_clean_linked_worktree_emits_preview_only_plan_without
     assert_eq!(data["target_state"]["operation"], "none");
     assert_eq!(data["target_state"]["working_tree"]["clean"], true);
     assert_eq!(data["execution"]["status"], "preview_only");
-    assert_eq!(data["execution"]["execute_supported"], false);
+    assert_eq!(data["execution"]["execute_supported"], true);
     assert_eq!(
         data["execution"]["future_execute_eligibility"],
         "needs_human_confirmation"
@@ -461,13 +470,14 @@ fn execute_worktree_remove_ignores_advisory_prompt_and_reference_commands() {
 }
 
 #[test]
-fn execute_worktree_remove_with_valid_confirmation_still_rejects_without_writing() {
+fn execute_worktree_remove_with_valid_confirmation_removes_target_without_undo_token() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("repo");
     init_repo_with_commit(&repo);
+    let branch = "feature/remove-valid-confirmation";
     let target = add_linked_worktree(
         &repo,
-        "feature/remove-valid-confirmation",
+        branch,
         &tmp.path().join("repo.worktrees/remove-valid-confirmation"),
     );
     let plan = json_output(preview_worktree_remove(&repo, &target));
@@ -476,6 +486,105 @@ fn execute_worktree_remove_with_valid_confirmation_still_rejects_without_writing
     let confirmation_file = tmp.path().join("confirmation.json");
     write_json(&plan_file, &plan);
     write_json(&confirmation_file, &confirmation);
+    let before_branch_oid = String::from_utf8(
+        run_git(
+            &repo,
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        )
+        .stdout,
+    )
+    .expect("branch oid")
+    .trim()
+    .to_string();
+
+    let json = json_output(execute_plan_with_confirmation_files(
+        &repo,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["action"], "worktree_remove");
+    assert_eq!(json["data"]["executed"], true);
+    assert!(
+        json["data"].get("undo_token").is_none(),
+        "worktree_remove must not claim automatic undo"
+    );
+    assert!(
+        !target.exists(),
+        "valid confirmation should remove the linked worktree"
+    );
+    assert!(
+        !worktree_list(&repo).contains(target.to_str().expect("target utf8")),
+        "removed target must disappear from git worktree list"
+    );
+    assert!(
+        run_git(
+            &repo,
+            &["show-ref", "--verify", &format!("refs/heads/{branch}")]
+        )
+        .status
+        .success(),
+        "remove execute must not delete the branch ref"
+    );
+    let after_branch_oid = String::from_utf8(
+        run_git(
+            &repo,
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        )
+        .stdout,
+    )
+    .expect("branch oid")
+    .trim()
+    .to_string();
+    assert_eq!(
+        after_branch_oid, before_branch_oid,
+        "remove execute must not move the branch ref"
+    );
+    let execution_dir = super_git_metadata_dir(&repo).join("executions");
+    let records = std::fs::read_dir(&execution_dir)
+        .expect("execution record dir")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read execution records");
+    assert_eq!(records.len(), 1, "remove execute should write one record");
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(records[0].path()).expect("read record"))
+            .expect("record json");
+    assert_eq!(record["status"], "completed");
+    assert_eq!(record["action"], "worktree_remove");
+    assert_eq!(record["automatic_undo_available"], false);
+
+    let result_file = tmp.path().join("remove-result.json");
+    write_json(&result_file, &json);
+    let undo_json = error_json(undo_token_file(&repo, &result_file));
+    assert!(undo_json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("undo_token_not_available")));
+}
+
+#[test]
+fn execute_worktree_remove_revalidates_target_before_deleting() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-stale-dirty",
+        &tmp.path().join("repo.worktrees/remove-stale-dirty"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let confirmation = confirmation_for_remove_plan(&plan);
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    std::fs::write(target.join("late-file.txt"), "created after preview\n")
+        .expect("dirty target after preview");
     let before_worktrees = worktree_list(&repo);
 
     let json = error_json(execute_plan_with_confirmation_files(
@@ -492,16 +601,9 @@ fn execute_worktree_remove_with_valid_confirmation_still_rejects_without_writing
         .any(|cause| cause
             .as_str()
             .unwrap_or_default()
-            .contains("execute_not_supported_yet")));
+            .contains("target_has_untracked_files")));
     assert_eq!(worktree_list(&repo), before_worktrees);
-    assert!(
-        target.exists(),
-        "valid confirmation must still not remove the target in C7-E"
-    );
-    assert!(
-        !super_git_metadata_dir(&repo).exists(),
-        "valid confirmation reject must not create super-git metadata"
-    );
+    assert!(target.exists(), "fresh target drift must block deletion");
 }
 
 #[test]

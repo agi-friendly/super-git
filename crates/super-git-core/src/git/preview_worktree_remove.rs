@@ -84,7 +84,7 @@ pub fn preview_worktree_remove(
         preconditions: preconditions(&blocked_reasons),
         execution: DestructivePreviewExecution {
             status,
-            execute_supported: false,
+            execute_supported: future_execute_eligibility == "needs_human_confirmation",
             future_execute_eligibility: future_execute_eligibility.to_string(),
             raw_git_allowed: false,
             suggested_super_git_command: None,
@@ -407,7 +407,7 @@ mod tests {
             }],
             execution: DestructivePreviewExecution {
                 status: "preview_only".to_string(),
-                execute_supported: false,
+                execute_supported: true,
                 future_execute_eligibility: "needs_human_confirmation".to_string(),
                 raw_git_allowed: false,
                 suggested_super_git_command: None,

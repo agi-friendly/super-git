@@ -221,7 +221,7 @@ If the path does not exactly match a worktree-list entry, no target-specific
 plan is emitted; the command fails with `{ ok: false, error }` instead.
 
 Clean linked worktrees return `execution.status: "preview_only"` with
-`execute_supported: false`. Blocked targets return `execution.status:
+`execute_supported: true`. Blocked targets return `execution.status:
 "blocked"` with structured hard-block reasons. In both cases the plan is
 read-only and includes high-risk metadata, explicit confirmation requirements,
 `undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
@@ -238,16 +238,17 @@ super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confir
 ```
 
 Current support is intentionally limited to internal allowlisted actions:
-`stage_changes` and executable `worktree_create` plans. `execute` rejects stale
-plans, tampered plans, unsupported actions, unsupported options, blocked
-worktree plans, and mismatched repository state.
+`stage_changes`, executable `worktree_create` plans, and confirmed
+`worktree_remove` plans. `execute` rejects stale plans, tampered plans,
+unsupported actions, unsupported options, blocked worktree plans, and
+mismatched repository state.
 
-`worktree_remove` plans are destructive previews only. `execute` can parse
-`super-git.plan.v0.3` remove plans and optional
-`super-git.confirmation.v0.1` artifacts, but it still rejects them before any
-write. Missing confirmation returns `confirmation_required`; valid confirmation
-currently reaches `execute_not_supported_yet`. Future delete support must still
-perform fresh target revalidation before any deletion.
+`worktree_remove` is destructive and not automatically undoable. It requires a
+separate `super-git.confirmation.v0.1` artifact, then re-scans the target
+immediately before deletion. Execute removes only the linked worktree with
+`git worktree remove <target>` without `--force`; it does not delete branch
+refs, remote refs, commits, or history. Successful remove results intentionally
+omit `undo_token`.
 
 `--plan -` and `--confirmation -` cannot be used together because they cannot
 both read independent JSON documents from the same stdin stream.

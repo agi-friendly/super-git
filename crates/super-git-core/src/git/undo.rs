@@ -48,7 +48,20 @@ fn parse_token(bytes: &[u8]) -> Result<ExecuteUndoToken> {
 
 fn token_from_data(value: &Value) -> Result<ExecuteUndoToken> {
     if let Some(token) = value.get("undo_token") {
+        if token.is_null() {
+            return invalid_token(
+                "undo_token_not_available",
+                "execute result does not include an automatic undo token",
+            );
+        }
         return parse_token_value(token);
+    }
+
+    if value.get("action").and_then(Value::as_str) == Some("worktree_remove") {
+        return invalid_token(
+            "undo_token_not_available",
+            "worktree_remove execute results are not automatically undoable",
+        );
     }
 
     if value.get("schema_version").and_then(Value::as_str) == Some(UNDO_TOKEN_SCHEMA_VERSION) {

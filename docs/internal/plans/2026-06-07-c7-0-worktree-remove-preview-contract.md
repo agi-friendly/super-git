@@ -481,7 +481,7 @@ Acceptance:
 
 - `preview worktree-remove --worktree <abs-path>` emits a structured plan.
 - Clean linked worktrees produce `execution.status: "preview_only"` and
-  `execute_supported: false`.
+  `execute_supported: true` after C7-F added confirmed remove execute support.
 - Blocked targets produce `execution.status: "blocked"` and structured
   blocked reasons.
 - Plans include risk, confirmation, undo-unavailable, and recovery-hint fields.

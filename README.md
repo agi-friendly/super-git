@@ -55,8 +55,8 @@ Implemented today:
     undo, and manual recovery hints without deleting anything
 - `super-git execute --plan <file|->`
   - re-validates the plan and state before writing
-  - executes only internal allowlisted actions: `stage_changes` and
-    executable `worktree_create` plans
+  - executes only internal allowlisted actions: `stage_changes`, executable
+    `worktree_create` plans, and confirmed `worktree_remove` plans
   - writes local provenance before reporting success
 - `super-git undo --token <file|->`
   - treats token input as untrusted
