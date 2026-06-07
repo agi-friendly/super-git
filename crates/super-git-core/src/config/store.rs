@@ -452,6 +452,7 @@ fn resolve_repository_target(
     repositories: &[SavedRepository],
     target: &str,
 ) -> Result<ResolvedRepositoryTarget> {
+    let mut matches = Vec::new();
     for (indexes, matched_by) in [
         (
             indexes_matching_id(repositories, target),
@@ -466,29 +467,50 @@ fn resolve_repository_target(
             RepositoryTargetMatch::Name,
         ),
     ] {
-        match indexes.len() {
-            0 => {}
-            1 => {
-                return Ok(ResolvedRepositoryTarget {
-                    index: indexes[0],
-                    matched_by,
-                });
-            }
-            _ => {
-                return Err(SuperGitError::AmbiguousRepositoryTarget {
-                    target: target.to_string(),
-                    matches: indexes
-                        .iter()
-                        .map(|index| repository_match_label(&repositories[*index]))
-                        .collect(),
-                });
-            }
+        for index in indexes {
+            matches.push((index, matched_by));
+        }
+    }
+
+    let unique_indexes = unique_match_indexes(&matches);
+    match unique_indexes.len() {
+        0 => {}
+        1 => {
+            let index = unique_indexes[0];
+            let matched_by = matches
+                .iter()
+                .find_map(|(candidate_index, matched_by)| {
+                    (*candidate_index == index).then_some(*matched_by)
+                })
+                .expect("unique index must have a match kind");
+
+            return Ok(ResolvedRepositoryTarget { index, matched_by });
+        }
+        _ => {
+            return Err(SuperGitError::AmbiguousRepositoryTarget {
+                target: target.to_string(),
+                matches: unique_indexes
+                    .iter()
+                    .map(|index| repository_match_label(&repositories[*index]))
+                    .collect(),
+            });
         }
     }
 
     Err(SuperGitError::RepositoryNotFound {
         target: target.to_string(),
     })
+}
+
+fn unique_match_indexes(matches: &[(usize, RepositoryTargetMatch)]) -> Vec<usize> {
+    let mut indexes = Vec::new();
+    for (index, _) in matches {
+        if !indexes.contains(index) {
+            indexes.push(*index);
+        }
+    }
+
+    indexes
 }
 
 fn indexes_matching_id(repositories: &[SavedRepository], target: &str) -> Vec<usize> {

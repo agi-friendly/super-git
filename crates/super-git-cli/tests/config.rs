@@ -25,6 +25,27 @@ fn error_json(output: std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("parse error json")
 }
 
+fn human_output(output: std::process::Output) -> String {
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("human stdout should be utf8")
+}
+
+fn assert_parse_error_envelope(output: std::process::Output) {
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["message"], "invalid command-line arguments");
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| !cause.as_str().unwrap_or_default().is_empty()));
+}
+
 fn path_string(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -234,6 +255,105 @@ fn config_validate_reports_default_config_valid() {
         !app_home.join("config.json").exists(),
         "config validate must not create config.json"
     );
+}
+
+#[test]
+fn nested_config_and_repo_parse_errors_use_json_envelope_without_writing_config() {
+    let cases: &[&[&str]] = &[
+        &["config"],
+        &["config", "nope"],
+        &["repo"],
+        &["repo", "nope"],
+        &["repo", "add"],
+        &["repo", "forget"],
+    ];
+
+    for args in cases {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let app_home = tmp.path().join("sg-home");
+
+        assert_parse_error_envelope(
+            super_git(tmp.path())
+                .args(*args)
+                .env("SUPER_GIT_HOME", &app_home)
+                .output()
+                .unwrap_or_else(|_| panic!("run super-git {args:?}")),
+        );
+        assert!(
+            !app_home.join("config.json").exists(),
+            "parse failure for {args:?} must not create config.json"
+        );
+    }
+}
+
+#[test]
+fn c5_config_commands_have_human_smoke_output() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+
+    let path = human_output(
+        super_git(tmp.path())
+            .args(["--human", "config", "path"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config path"),
+    );
+    assert!(path.contains("super-git config path"));
+    assert!(path.contains("Home:"));
+    assert!(path.contains("Source: env:SUPER_GIT_HOME"));
+    assert!(path.contains("Config:"));
+
+    let validate = human_output(
+        super_git(tmp.path())
+            .args(["--human", "config", "validate"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run config validate"),
+    );
+    assert!(validate.contains("super-git config validate"));
+    assert!(validate.contains("Status: valid"));
+    assert!(
+        !app_home.join("config.json").exists(),
+        "human read-only config commands must not create config.json"
+    );
+}
+
+#[test]
+fn c5_repo_commands_have_human_smoke_output() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+
+    let empty_list = human_output(
+        super_git(tmp.path())
+            .args(["--human", "repo", "list"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo list"),
+    );
+    assert!(empty_list.contains("No repositories registered yet."));
+
+    let save = human_output(
+        super_git(tmp.path())
+            .args(["--human", "repo", "save"])
+            .arg(&repo)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo save"),
+    );
+    assert!(save.contains("Saved repository family: repo"));
+
+    let list = human_output(
+        super_git(tmp.path())
+            .args(["--human", "repo", "list"])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo list"),
+    );
+    assert!(list.contains("Name"));
+    assert!(list.contains("worktree_family"));
 }
 
 #[test]
@@ -910,6 +1030,72 @@ fn repo_forget_rejects_ambiguous_name_without_rewriting_config() {
     assert_eq!(
         after, before,
         "ambiguous forget must not rewrite config.json"
+    );
+}
+
+#[test]
+fn repo_forget_rejects_cross_kind_ambiguous_target_without_rewriting_config() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let first = tmp.path().join("first");
+    let second = tmp.path().join("second");
+    std::fs::create_dir(&first).expect("create first repo");
+    std::fs::create_dir(&second).expect("create second repo");
+    init_repo_with_commit(&first);
+    init_repo_with_commit(&second);
+
+    let first_save = json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&first)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run first repo save"),
+    );
+    json_output(
+        super_git(tmp.path())
+            .args(["repo", "save"])
+            .arg(&second)
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run second repo save"),
+    );
+
+    let target = first_save["data"]["repository"]["id"]
+        .as_str()
+        .expect("first repository id")
+        .to_string();
+    let config_file = app_home.join("config.json");
+    let mut raw_config = read_config_file(&app_home);
+    raw_config["repositories"][1]["name"] = serde_json::Value::String(target.clone());
+    std::fs::write(
+        &config_file,
+        serde_json::to_string_pretty(&raw_config).expect("serialize config"),
+    )
+    .expect("write edited config");
+    let before = std::fs::read_to_string(&config_file).expect("read config file");
+
+    let forget = error_json(
+        super_git(tmp.path())
+            .args(["repo", "forget", &target])
+            .env("SUPER_GIT_HOME", &app_home)
+            .output()
+            .expect("run repo forget"),
+    );
+    let after = std::fs::read_to_string(config_file).expect("read config file");
+
+    assert_eq!(forget["ok"], false);
+    assert!(forget["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("ambiguous_repository_target")));
+    assert_eq!(
+        after, before,
+        "cross-kind ambiguous forget must not rewrite config.json"
     );
 }
 

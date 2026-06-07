@@ -227,7 +227,11 @@ Notes:
   input.
 - Existing `repo add` should remain as a compatibility alias or wrapper.
 - `repo forget` should remove an entry from the registry only. It must not
-  delete repository or worktree files.
+  delete repository or worktree files. Ambiguous selectors, including cross-kind
+  id/name matches, fail without rewriting the config file.
+- C5-G added nested parse-error envelope coverage and small `--human` smoke
+  coverage for config/repo commands so future CLI refactors keep both surfaces
+  intact.
 
 ## Safety Rules
 

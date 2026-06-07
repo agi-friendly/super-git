@@ -57,7 +57,8 @@ Implemented:
 - `{main_path}`, `{repo_name}`, and `{ref_slug}` template variables
 - `config validate` for templates and saved repository registry shape
 - `config set-worktree-template`
-- `repo forget`
+- `repo forget`, including registry-only safety and ambiguous selector checks
+- JSON parse-error coverage and human smoke coverage for C5 config/repo commands
 
 Next:
 
