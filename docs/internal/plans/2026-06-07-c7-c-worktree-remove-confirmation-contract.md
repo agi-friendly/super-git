@@ -155,16 +155,16 @@ reversibility.
 
 ### C7-D: Parse And Reject Confirmation-Gated Remove Plans
 
-Before deletion exists, `execute` should learn to parse
-`super-git.plan.v0.3` and reject `worktree_remove` plans with
-`confirmation_required` or `execute_not_supported_yet`.
+C7-D teaches `execute` to parse `super-git.plan.v0.3` and reject
+`worktree_remove` plans with `confirmation_required` before any delete behavior
+exists.
 
 Acceptance:
 
-- no Git writes
-- plan hash is recomputed before rejection
-- embedded or forged prompt text is ignored
-- tests prove a valid-looking remove plan still cannot delete anything
+- [x] no Git writes
+- [x] plan hash is recomputed before rejection
+- [x] embedded or forged prompt text is ignored
+- [x] tests prove a valid-looking remove plan still cannot delete anything
 
 ### C7-E: Confirmation Artifact Parsing
 

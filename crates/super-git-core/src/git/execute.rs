@@ -12,16 +12,19 @@ use crate::git::command::Git;
 use crate::git::execute_worktree;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
 use crate::git::preview::compute_plan_id;
+use crate::git::preview_worktree_remove;
 use crate::git::state;
 use crate::git::undo_registry;
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, Operation, PreviewPlan, PreviewPrecondition, UndoToken,
-    WorktreeCreatePlan, EXECUTE_SCHEMA_VERSION, PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
+    WorktreeCreatePlan, WorktreeRemovePlan, DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION,
+    EXECUTE_SCHEMA_VERSION, PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
     WORKTREE_PLAN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
 const ACTION_STAGE_CHANGES: &str = "stage_changes";
+const ACTION_WORKTREE_REMOVE: &str = "worktree_remove";
 
 pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteResult> {
     let plan = parse_plan(bytes)?;
@@ -30,12 +33,14 @@ pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteRe
         PlanToExecute::WorktreeCreate(plan) => {
             execute_worktree::execute_worktree_create_plan(*plan)
         }
+        PlanToExecute::WorktreeRemove(plan) => reject_worktree_remove_plan(*plan),
     }
 }
 
 enum PlanToExecute {
     StageChanges(Box<PreviewPlan>),
     WorktreeCreate(Box<WorktreeCreatePlan>),
+    WorktreeRemove(Box<WorktreeRemovePlan>),
 }
 
 fn parse_plan(bytes: &[u8]) -> Result<PlanToExecute> {
@@ -68,11 +73,55 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
         Some(WORKTREE_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeCreate(Box::new(
             serde_json::from_value(value)?,
         ))),
+        Some(DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeRemove(
+            Box::new(serde_json::from_value(value)?),
+        )),
         _ => invalid_plan(
             "unsupported_schema_version",
-            "execute supports only super-git.plan.v0.1 and super-git.plan.v0.2",
+            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, and super-git.plan.v0.3",
         ),
     }
+}
+
+fn reject_worktree_remove_plan(plan: WorktreeRemovePlan) -> Result<ExecuteResult> {
+    validate_worktree_remove_static_contract(&plan)?;
+    invalid_plan(
+        "confirmation_required",
+        "worktree_remove execute requires a separate confirmation artifact before delete support can be considered",
+    )
+}
+
+fn validate_worktree_remove_static_contract(plan: &WorktreeRemovePlan) -> Result<()> {
+    if plan.schema_version != DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION {
+        return invalid_plan(
+            "unsupported_schema_version",
+            "worktree_remove execute requires super-git.plan.v0.3",
+        );
+    }
+
+    let expected_plan_id = preview_worktree_remove::compute_worktree_remove_plan_id(plan)?;
+    ensure_match("plan_id", &plan.plan_id, &expected_plan_id)?;
+
+    if plan.action.kind != ACTION_WORKTREE_REMOVE {
+        return invalid_plan(
+            "unsupported_action",
+            "worktree_remove execute supports only worktree_remove plans",
+        );
+    }
+    if !plan.confirmation.required_before_execute {
+        return invalid_plan(
+            "confirmation_required",
+            "worktree_remove plans must require explicit confirmation before execute",
+        );
+    }
+    if plan.undo_strategy.kind != "not_available" {
+        return invalid_plan(
+            "unsupported_undo_strategy",
+            "worktree_remove execute cannot claim automatic undo support",
+        );
+    }
+
+    Ok(())
 }
 
 fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult> {

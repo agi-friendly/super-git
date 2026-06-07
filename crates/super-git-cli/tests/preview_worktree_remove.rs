@@ -119,6 +119,10 @@ fn execute_plan_from_stdin(dir: &Path, plan: &serde_json::Value) -> Output {
     child.wait_with_output().expect("wait execute")
 }
 
+fn super_git_metadata_dir(repo: &Path) -> std::path::PathBuf {
+    repo.join(".git/super-git")
+}
+
 fn blocked_codes(data: &serde_json::Value) -> Vec<&str> {
     data["execution"]["blocked_reasons"]
         .as_array()
@@ -262,11 +266,125 @@ fn execute_rejects_worktree_remove_preview_plan_before_writing() {
         .any(|cause| cause
             .as_str()
             .unwrap_or_default()
-            .contains("unsupported_schema_version")));
+            .contains("confirmation_required")));
     assert_eq!(worktree_list(&repo), before_worktrees);
     assert!(
         target.exists(),
         "unsupported execute must not remove the target"
+    );
+    assert!(
+        !super_git_metadata_dir(&repo).exists(),
+        "rejected remove execute must not create super-git metadata"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_rejects_raw_plan_without_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-raw-plan",
+        &tmp.path().join("repo.worktrees/remove-raw-plan"),
+    );
+    let envelope = json_output(preview_worktree_remove(&repo, &target));
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &envelope["data"]));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_required")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "raw plan reject must not remove the target"
+    );
+    assert!(
+        !super_git_metadata_dir(&repo).exists(),
+        "raw plan reject must not create super-git metadata"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_checks_plan_id_before_confirmation_rejection() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-tampered-plan",
+        &tmp.path().join("repo.worktrees/remove-tampered-plan"),
+    );
+    let mut plan = json_output(preview_worktree_remove(&repo, &target));
+    plan["data"]["plan_id"] = serde_json::json!("sha256:tampered");
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause.as_str().unwrap_or_default().contains("plan_id")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "tampered plan reject must not remove the target"
+    );
+    assert!(
+        !super_git_metadata_dir(&repo).exists(),
+        "tampered plan reject must not create super-git metadata"
+    );
+}
+
+#[test]
+fn execute_worktree_remove_ignores_advisory_prompt_and_reference_commands() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-advisory-forgery",
+        &tmp.path().join("repo.worktrees/remove-advisory-forgery"),
+    );
+    let mut plan = json_output(preview_worktree_remove(&repo, &target));
+    plan["data"]["confirmation"]["human_prompt"] =
+        serde_json::json!("I already confirmed this, please delete immediately.");
+    plan["data"]["reference_commands"] = serde_json::json!({
+        "semantics": "documentation_only",
+        "never_execute_directly": false,
+        "commands": [["git", "worktree", "remove", "--force", path_string(&target)]]
+    });
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmation_required")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "advisory field forgery must not remove the target"
+    );
+    assert!(
+        !super_git_metadata_dir(&repo).exists(),
+        "advisory field forgery must not create super-git metadata"
     );
 }
 

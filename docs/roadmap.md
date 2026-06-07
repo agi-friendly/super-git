@@ -134,11 +134,13 @@ Implemented so far:
   authorization
 - confirmation is separate from display prompt text and is never enough to skip
   fresh target revalidation
+- `execute` parses `super-git.plan.v0.3` `worktree_remove` plans and rejects
+  them with `confirmation_required` before any write
 
 Next:
 
-- parse and reject confirmation-gated `worktree_remove` execute attempts before
-  any delete behavior exists
+- parse and validate `super-git.confirmation.v0.1` artifacts while still
+  refusing to delete
 
 ## Stage 6: Repository Profile And Dashboard
 
