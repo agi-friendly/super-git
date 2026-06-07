@@ -5,13 +5,17 @@ should be useful before the next stage starts.
 
 ## Current Position
 
-The project has a working read-side inspection layer and two write-side safety
-flows:
+The project has a working read-side inspection layer, two undoable write-side
+safety flows, and one confirmed destructive flow:
 
 ```text
 inspect -> preview stage-changes -> execute --plan -> undo --token
 inspect -> preview worktree-create -> execute --plan -> undo --token
+inspect -> preview worktree-remove -> execute --plan --confirmation
 ```
+
+`worktree_remove` is intentionally not automatically undoable; it requires
+explicit confirmation and recovery hints instead of an `undo_token`.
 
 The next stages should expand this lifecycle carefully instead of adding raw Git
 wrappers.
@@ -105,7 +109,7 @@ Next:
 
 - richer ambiguous-ref diagnostics with candidate details
 
-## Stage 5: Safe Worktree Remove Preview
+## Stage 5: Safe Worktree Remove
 
 Implemented so far:
 

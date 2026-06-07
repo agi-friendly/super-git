@@ -192,9 +192,9 @@ saving:
   `{main_path}` or path separators.
 - `ref_slug_algorithm` currently supports only `path_safe_v1`.
 
-Config is preview input, not execute authority. Future worktree preview commands
-must resolve and freeze paths into plans; execute should not re-expand template
-strings as trusted instructions.
+Config is preview input, not execute authority. Worktree preview commands
+resolve and freeze paths into plans; execute does not re-expand template strings
+as trusted instructions.
 
 Shell hooks, copy patterns, and multiple profiles are out of scope until the
 core safety lifecycle has explicit preview and confirmation rules for them.
@@ -202,11 +202,15 @@ core safety lifecycle has explicit preview and confirmation rules for them.
 ## Worktrees
 
 Worktree management remains an important differentiator. The current foundation
-is read-first and safety-gated:
+is safety-gated:
 
 - `inspect.worktree_context` shows where the current repository sits in its
   worktree family.
 - `wt list` returns the full worktree list.
+- `worktree_create` supports preview, execute, and automatic undo when the
+  created linked worktree is still unchanged.
+- `worktree_remove` supports preview and confirmation-gated execute, but no
+  automatic undo.
 
 Create/remove workflows must start with preview plans and safety checks before
 they become executable. Worktree creation is a typed `worktree_create` plan,

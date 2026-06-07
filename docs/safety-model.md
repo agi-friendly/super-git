@@ -179,9 +179,9 @@ The first `worktree_remove` slice established the preview boundary:
 Worktree removal execute requires a separate `super-git.confirmation.v0.1`
 artifact. That artifact is explicit authorization, not execution permission by
 itself: execute still re-parses and re-hashes the plan, matches the confirmation
-to the plan and target identity, writes an intent record, then revalidates the
-full target state immediately before calling `git worktree remove` without
-`--force`.
+to the plan and target identity, revalidates the full target state immediately
+before deletion, writes an intent record, then calls `git worktree remove`
+without `--force`.
 
 Successful worktree removal results do not return an `undo_token`. The local
 execution record states `automatic_undo_available: false` so downstream agents

@@ -56,15 +56,22 @@ creating a file.
 
 ```json
 {
-  "schema_version": 1,
-  "settings": {
-    "worktree": {
-      "parent_template": "{main_path}.worktrees",
-      "name_template": "{repo_name}__{ref_slug}",
-      "ref_slug_algorithm": "path_safe_v1"
-    }
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
   },
-  "repositories": []
+  "config": {
+    "schema_version": 1,
+    "settings": {
+      "worktree": {
+        "parent_template": "{main_path}.worktrees",
+        "name_template": "{repo_name}__{ref_slug}",
+        "ref_slug_algorithm": "path_safe_v1"
+      }
+    },
+    "repositories": []
+  }
 }
 ```
 
@@ -87,6 +94,11 @@ not as a command failure:
 
 ```json
 {
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
+  },
   "valid": false,
   "issues": [
     {
@@ -118,6 +130,11 @@ Successful updates write the v1 config shape and return the updated config data:
 
 ```json
 {
+  "location": {
+    "home": "/tmp/super-git-home",
+    "source": "env:SUPER_GIT_HOME",
+    "config_file": "/tmp/super-git-home/config.json"
+  },
   "changed": true,
   "config": {
     "schema_version": 1,

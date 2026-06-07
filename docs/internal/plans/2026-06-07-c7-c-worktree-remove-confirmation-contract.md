@@ -5,14 +5,17 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Define the machine-readable confirmation record required before any
-future worktree removal execute support.
+> **Status:** C7-F implemented the confirmation-gated execute path described in
+> this contract. `worktree_remove` now executes only through
+> `super-git execute --plan <file|-> --confirmation <file|->`.
 
-**Architecture:** `worktree_remove` remains preview-only in C7-C. The checkpoint
-adds no delete behavior. It defines a separate confirmation artifact that future
-execute support must validate in addition to the preview plan and fresh target
-state. Confirmation is explicit authorization, not a substitute for
-revalidation.
+**Goal:** Define the machine-readable confirmation record used by worktree
+removal execute support.
+
+**Architecture:** C7-C introduced the confirmation contract before delete
+behavior existed. Current execute support validates a separate confirmation
+artifact in addition to the preview plan and fresh target state. Confirmation is
+explicit authorization, not a substitute for revalidation.
 
 **Tech Stack:** Rust workspace, JSON envelopes, serde-compatible schema design,
 existing `super-git.plan.v0.3` destructive preview plans, system `git`
@@ -20,7 +23,7 @@ revalidation in execute slices.
 
 ---
 
-## C7-C Scope
+## Original C7-C Scope
 
 C7-C is a docs-only contract checkpoint. It does not add:
 
@@ -31,11 +34,12 @@ C7-C is a docs-only contract checkpoint. It does not add:
 - automatic undo
 - confirmation generation commands
 
-C7-C only defines the confirmation model that a later execute slice must use.
+C7-C only defined the confirmation model that a later execute slice had to use.
+C7-F later implemented that confirmation-gated execute path.
 
 ## Decision
 
-Future worktree removal execute must require a separate confirmation artifact:
+Worktree removal execute requires a separate confirmation artifact:
 
 ```text
 super-git.confirmation.v0.1
@@ -45,14 +49,13 @@ The confirmation artifact is separate from the plan. A plan's
 `confirmation.human_prompt` is display text only; changing that prompt must
 never grant execution permission.
 
-Future execute support should have a command surface shaped like:
+The command surface is:
 
 ```bash
 super-git execute --plan <file|-> --confirmation <file|->
 ```
 
-The exact CLI spelling may still change before implementation, but the
-separation is not optional: destructive-action confirmation is not embedded
+The separation is not optional: destructive-action confirmation is not embedded
 inside the plan, and `reference_commands` remain documentation-only.
 
 ## Confirmation JSON
@@ -90,8 +93,8 @@ stale confirmation easier to reject before any fresh Git scan is considered.
 
 ## Required Static Validation
 
-Future execute support must reject the confirmation before touching Git when
-any of these are true:
+Execute support must reject the confirmation before touching Git when any of
+these are true:
 
 | Code | Rule |
 | --- | --- |
@@ -120,22 +123,24 @@ for humans and a machine-checkable contract for agents and UIs.
 
 A valid confirmation artifact is not enough to delete anything.
 
-After static confirmation validation, execute support must still:
+Execute removes a worktree only after:
 
 1. Re-parse and re-hash the plan.
 2. Confirm action kind is allowlisted.
-3. Re-scan the target worktree.
-4. Confirm repository family identity still matches.
-5. Confirm the target is still the same linked worktree.
-6. Confirm the target is not current, main, bare, detached, locked, or prunable.
-7. Confirm no in-progress Git operation exists.
-8. Confirm staged, unstaged, untracked, ignored, and conflicted counts are zero.
-9. Confirm no submodules are present.
-10. Write an execution-intent record before calling Git.
-11. Rebuild `git worktree remove <target>` from typed fields only.
-12. Call Git without shell interpretation and without `--force`.
-13. Post-verify that the target is gone from `git worktree list --porcelain`.
-14. Record that no automatic undo token is available.
+3. Parse and statically validate the separate confirmation artifact.
+4. Match confirmation to plan id, plan schema, action, and target identity.
+5. Re-scan the target worktree.
+6. Confirm repository family identity still matches.
+7. Confirm the target is still the same linked worktree.
+8. Confirm the target is not current, main, bare, detached, locked, or prunable.
+9. Confirm no in-progress Git operation exists.
+10. Confirm staged, unstaged, untracked, ignored, and conflicted counts are zero.
+11. Confirm no submodules are present.
+12. Write an execution-intent record before calling Git.
+13. Rebuild `git worktree remove <target>` from typed fields only.
+14. Call Git without shell interpretation and without `--force`.
+15. Post-verify that the target is gone from `git worktree list --porcelain`.
+16. Record that no automatic undo token is available.
 
 ## What Confirmation Is Not
 
@@ -148,16 +153,16 @@ The confirmation artifact is not:
 - an undo token
 - an archive or backup
 
-This is why future user-facing tools should present it as authorization, not
+This is why user-facing tools should present it as authorization, not
 reversibility.
 
-## Future Implementation Slices
+## Implementation Slices
 
 ### C7-D: Parse And Reject Confirmation-Gated Remove Plans
 
-C7-D teaches `execute` to parse `super-git.plan.v0.3` and reject
+C7-D taught `execute` to parse `super-git.plan.v0.3` and reject
 `worktree_remove` plans with `confirmation_required` before any delete behavior
-exists.
+existed.
 
 Acceptance:
 
@@ -168,7 +173,7 @@ Acceptance:
 
 ### C7-E: Confirmation Artifact Parsing
 
-C7-E adds typed confirmation parsing and static validation, but still does not
+C7-E added typed confirmation parsing and static validation, but still did not
 delete.
 
 Acceptance:

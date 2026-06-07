@@ -30,8 +30,9 @@ current product contract.
 - Write actions must enter through `inspect -> preview -> execute`; automatic
   `undo` exists only for action-specific contracts that can honestly prove
   reversibility.
-- Destructive non-undoable actions, such as removing an existing worktree, must
-  remain preview-only until explicit confirmation and recovery contracts exist.
+- Destructive non-undoable actions, such as removing an existing worktree, may
+  execute only after explicit confirmation, fresh revalidation, and a recovery
+  contract; they must never claim automatic undo.
 - `execute` must rebuild trusted Git commands from an internal allowlist.
 - `undo` must validate local provenance before changing the index or removing
   worktree state.

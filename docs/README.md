@@ -46,3 +46,7 @@ worktree-first desktop tool. The current direction is AI-first Git safety:
 ```text
 inspect -> preview -> execute -> undo
 ```
+
+Undo is action-specific. Destructive flows that cannot honestly prove
+reversibility use explicit confirmation and recovery hints instead of an
+automatic undo token.

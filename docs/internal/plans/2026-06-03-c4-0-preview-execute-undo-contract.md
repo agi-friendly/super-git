@@ -1,5 +1,9 @@
 # C4-0 Preview Execute Undo Contract Implementation Plan
 
+> **Status:** Historical contract checkpoint. C4 later implemented
+> `stage_changes` preview/execute/undo. Later write families may opt out of
+> automatic undo when reversibility cannot be honestly proven.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Define the write-side contract before implementing any Git mutation: `inspect -> preview -> execute -> undo`.

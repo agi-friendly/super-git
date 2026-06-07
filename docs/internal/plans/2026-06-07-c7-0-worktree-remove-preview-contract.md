@@ -1,5 +1,8 @@
 # C7-0 Worktree Remove Preview Contract
 
+> **Status:** Historical preview checkpoint. C7-F later implemented
+> confirmation-gated `worktree_remove` execute support without automatic undo.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
@@ -315,7 +318,7 @@ Preview output remains wrapped by the global JSON envelope:
       "worktree_git_dir": "/abs/repo/.git/worktrees/repo__feature",
       "git_common_dir": "/abs/repo/.git",
       "head": "abc123",
-      "branch": "refs/heads/feature",
+      "branch": "feature",
       "detached": false,
       "locked": false,
       "prunable": false,

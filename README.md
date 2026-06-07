@@ -9,6 +9,10 @@ explicit before any write action happens. The core product contract is:
 inspect -> preview -> execute -> undo
 ```
 
+Undo is action-specific, not promised for every write. Destructive flows must
+use explicit confirmation and recovery contracts when automatic undo cannot be
+honestly proven.
+
 The tool is designed for AI agents first, but the same properties make it useful
 for humans: clear state, structured output, dry-run planning, guarded execution,
 and undo provenance.
