@@ -7,11 +7,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::error::ErrorKind;
 use clap::Parser;
-use super_git_core::config::store::ConfigStore;
+use super_git_core::config::store::{default_app_home, ConfigStore};
+use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
 use super_git_core::git::{execute, preview, state, status, undo, worktree};
 
-use crate::args::{Cli, Commands, PreviewCommands, RepoCommands, WorktreeCommands};
+use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
 use crate::output::OutputMode;
 
 fn main() -> ExitCode {
@@ -72,6 +73,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
     match command {
         Commands::Doctor => run_doctor(mode),
         Commands::Repo { command } => run_repo(mode, command),
+        Commands::Config { command } => run_config(mode, command),
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
@@ -90,15 +92,65 @@ fn run_doctor(mode: OutputMode) -> Result<()> {
     output::print_doctor(mode, &git_version, store.path())
 }
 
+fn run_config(mode: OutputMode, command: ConfigCommands) -> Result<()> {
+    let app_home = default_app_home().context("could not resolve config path")?;
+    let store = ConfigStore::new(app_home.config_file.clone());
+
+    match command {
+        ConfigCommands::Path => output::print_config_path(mode, &app_home),
+        ConfigCommands::Show => {
+            let config = store.load().context("could not read config file")?;
+            output::print_config_show(mode, &app_home, &config)
+        }
+        ConfigCommands::Validate => {
+            let report = store.validate().context("could not validate config")?;
+            output::print_config_validate(mode, &app_home, &report)
+        }
+        ConfigCommands::SetWorktreeTemplate {
+            parent_template,
+            name_template,
+            ref_slug_algorithm,
+        } => {
+            let update = WorktreeTemplateUpdate {
+                parent_template,
+                name_template,
+                ref_slug_algorithm,
+            };
+            let result = store
+                .set_worktree_template(update)
+                .context("could not update worktree template config")?;
+            output::print_config_update(mode, &app_home, &result)
+        }
+    }
+}
+
 fn run_repo(mode: OutputMode, command: RepoCommands) -> Result<()> {
     let store = ConfigStore::from_default_path().context("could not resolve config path")?;
 
     match command {
         RepoCommands::Add { path } => {
             let result = store
-                .add_repository(&path)
+                .save_repository(&path)
                 .with_context(|| format!("could not add repository {}", path.display()))?;
-            output::print_repo_add(mode, &result.path, result.added)
+            output::print_repo_add(
+                mode,
+                &result.repository,
+                &result.requested_path,
+                result.added,
+            )
+        }
+        RepoCommands::Save { path } => {
+            let path = path_or_current_dir(path)?;
+            let result = store
+                .save_repository(&path)
+                .with_context(|| format!("could not save repository {}", path.display()))?;
+            output::print_repo_save(mode, &result.repository, result.added)
+        }
+        RepoCommands::Forget { target } => {
+            let result = store
+                .forget_repository(&target)
+                .with_context(|| format!("could not forget repository {target}"))?;
+            output::print_repo_forget(mode, &result)
         }
         RepoCommands::List => {
             let config = store.load().context("could not read config file")?;

@@ -34,6 +34,119 @@ super-git doctor
 
 Reports the system Git version, OS, architecture, and config path.
 
+## `config path` / `config show` / `config validate`
+
+Reports the resolved `super-git` app home and config file.
+
+```bash
+super-git config path
+super-git config show
+super-git config validate
+```
+
+`config path` returns the app home, resolution source, and `config.json` path.
+It does not create the config file.
+
+`config show` returns the same location plus the currently loaded v1 config. If
+no config file exists yet, the command returns the empty default config without
+creating a file.
+
+```json
+{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{ref_slug}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": []
+}
+```
+
+Existing v0 files shaped like `{ "repositories": [...] }` are migrated in memory.
+The next write saves the current v1 shape. Unknown future schema versions fail
+with a JSON error envelope instead of being partially interpreted.
+Legacy repository paths that no longer resolve to Git repositories are skipped
+during migration because they cannot be assigned a worktree-family identity.
+
+`config validate` validates the loaded config without writing it. If the config
+file is missing, it validates the default in-memory v1 config and does not create
+`config.json`. Validation covers both worktree template settings and saved
+repository registry shape. Registry entries must have absolute path fields,
+valid case-preserving `sha256:<git-common-dir>` identities, unique ids, and a
+`kind`/`main_worktree` combination that matches whether the family has a primary
+worktree.
+
+Invalid user-editable settings are reported as data, not as a command failure:
+
+```json
+{
+  "valid": false,
+  "issues": [
+    {
+      "field": "settings.worktree.name_template",
+      "code": "unknown_template_variable",
+      "message": "unknown template variable {branch}"
+    }
+  ]
+}
+```
+
+Set `SUPER_GIT_HOME` to isolate tests, CI, dogfooding, or subagent work from the
+real user config. Without it, `super-git` uses the OS-specific config location.
+
+## `config set-worktree-template`
+
+Updates worktree path template settings in the global config.
+
+```bash
+super-git config set-worktree-template \
+  --parent-template '{main_path}.worktrees' \
+  --name-template '{repo_name}__{ref_slug}' \
+  --ref-slug-algorithm path_safe_v1
+```
+
+At least one option is required. Omitted fields are preserved.
+
+Successful updates write the v1 config shape and return the updated config:
+
+```json
+{
+  "changed": true,
+  "config": {
+    "schema_version": 1,
+    "settings": {
+      "worktree": {
+        "parent_template": "{main_path}.worktrees",
+        "name_template": "{repo_name}__{ref_slug}",
+        "ref_slug_algorithm": "path_safe_v1"
+      }
+    },
+    "repositories": []
+  },
+  "validation": {
+    "valid": true,
+    "issues": []
+  }
+}
+```
+
+Validation rules:
+
+- Template variables use braces, such as `{ref_slug}`. Shell-style `$REF` or
+  `${REF}` syntax is rejected.
+- Supported variables are `{main_path}`, `{repo_name}`, and `{ref_slug}`.
+- `parent_template` must contain `{main_path}` exactly once and must not contain
+  `{ref_slug}` or a literal `..` path component.
+- `name_template` must contain `{ref_slug}` exactly once and must not contain
+  `{main_path}`, `/`, or `\`.
+- `ref_slug_algorithm` currently supports only `path_safe_v1`.
+
+Invalid updates fail with `{ "ok": false, "error": ... }` and do not rewrite the
+existing config file.
+
 ## `inspect [path]`
 
 Returns the AI-first repository safety snapshot.
@@ -118,13 +231,79 @@ super-git wt list /path/to/repo
 Use `inspect.worktree_context` for the current worktree's family summary, and
 `wt list` when the full list is needed.
 
-## `repo add <path>` / `repo list`
+## `repo save [path]` / `repo add <path>` / `repo list` / `repo forget`
 
-Manages the local repository registry.
+Manages the local repository registry. The canonical command is `repo save`.
+`repo add <path>` remains as a compatibility alias for `repo save <path>`.
+Its JSON response also keeps the legacy `data.path` field for older automation.
 
 ```bash
+super-git repo save
+super-git repo save /path/to/repo
 super-git repo add /path/to/repo
 super-git repo list
+super-git repo forget <id-or-name-or-path>
 ```
 
-The registry is stored in the OS-specific config path reported by `doctor`.
+The registry is stored under the resolved app home. `SUPER_GIT_HOME` overrides
+the OS-specific config location for tests, CI, dogfooding, and isolated agent
+work. Writes always persist the v1 config shape.
+
+Repository entries are worktree families, not individual linked worktrees.
+Saving from the main worktree and saving from a linked worktree deduplicate by
+Git common directory identity. The identity hash preserves path case so
+case-sensitive filesystems can keep `/Repo/.git` and `/repo/.git` distinct.
+
+```json
+{
+  "repository": {
+    "id": "sha256:<git-common-dir-identity>",
+    "name": "repo",
+    "kind": "worktree_family",
+    "main_worktree": "/path/to/repo",
+    "git_common_dir": "/path/to/repo/.git",
+    "saved_from": "/path/to/repo-feature"
+  },
+  "added": true
+}
+```
+
+For bare-primary worktree families, `kind` is `bare_worktree_family` and
+`main_worktree` is `null`.
+
+`repo forget` removes a saved registry entry only. It never deletes repository
+directories, linked worktrees, bare Git directories, `.git`, or working-tree
+files.
+
+Selectors:
+
+- full repository `id`
+- path-like selector such as `/path/to/repo`, `./repo`, a linked worktree path,
+  a repository subdirectory, stored `saved_from`, stored `main_worktree`, or
+  stored `git_common_dir`
+- unique repository `name`
+
+Plain words without path separators are treated as names. Use `./repo` or an
+absolute path when you intend a filesystem path. If a name matches multiple
+saved repository families, the command fails and leaves the config unchanged.
+
+Successful output includes explicit safety fields:
+
+```json
+{
+  "target": "repo",
+  "repository": {
+    "id": "sha256:<git-common-dir-identity>",
+    "name": "repo",
+    "kind": "worktree_family",
+    "main_worktree": "/path/to/repo",
+    "git_common_dir": "/path/to/repo/.git",
+    "saved_from": "/path/to/repo"
+  },
+  "removed": true,
+  "matched_by": "name",
+  "remaining_repositories": 0,
+  "registry_only": true,
+  "filesystem_deleted": false
+}
+```

@@ -9,6 +9,36 @@ pub enum SuperGitError {
     #[error("config directory is not available on this platform")]
     ConfigDirectoryUnavailable,
 
+    #[error("SUPER_GIT_HOME is set but empty")]
+    EmptySuperGitHome,
+
+    #[error("SUPER_GIT_HOME must be an absolute path: {0}")]
+    RelativeSuperGitHome(PathBuf),
+
+    #[error("invalid config schema version: {0}")]
+    InvalidConfigSchemaVersion(String),
+
+    #[error(
+        "unsupported_config_schema: unsupported config schema version: {version} (current: {current})"
+    )]
+    UnsupportedConfigSchemaVersion { version: u64, current: u32 },
+
+    #[error("config validation failed: {code} ({field}: {message})")]
+    ConfigValidationFailed {
+        field: String,
+        code: String,
+        message: String,
+    },
+
+    #[error("repository_not_found: no saved repository matches {target}")]
+    RepositoryNotFound { target: String },
+
+    #[error("ambiguous_repository_target: {target} matches multiple repositories: {matches:?}")]
+    AmbiguousRepositoryTarget {
+        target: String,
+        matches: Vec<String>,
+    },
+
     #[error("path does not exist: {0}")]
     PathDoesNotExist(PathBuf),
 

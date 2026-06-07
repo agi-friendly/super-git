@@ -11,6 +11,7 @@ Start with these files, in order:
 3. `docs/safety-model.md`
 4. `docs/architecture.md`
 5. `docs/roadmap.md`
+6. `docs/contributing/commit-messages.md`
 
 The archived notes under `docs/archive/original-notes/` are historical context.
 They are useful for understanding where ideas came from, but they are not the
@@ -65,6 +66,10 @@ docs: refresh public project documentation
 feat(preview): add stage-changes plan contract
 fix(undo): require local registry provenance
 ```
+
+Use `docs/contributing/commit-messages.md` when writing non-trivial commit
+messages. Commit bodies should preserve why the change exists, what was
+verified, and any intentionally deferred work.
 
 If a change alters the safety contract, update `docs/safety-model.md`,
 `docs/architecture.md`, and `docs/roadmap.md` in the same slice.

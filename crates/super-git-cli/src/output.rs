@@ -3,9 +3,13 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
+use super_git_core::config::store::{
+    AppConfig, AppHome, ConfigUpdateResult, ForgetRepositoryResult, SavedRepository,
+};
+use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
-    ExecuteResult, Operation, PreviewPlan, RepoState, Repository, RiskLevel, StatusOutput,
-    UndoResult, WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
+    ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
+    WorktreeInfo, WorktreeKind, INSPECT_SCHEMA_VERSION,
 };
 
 /// 출력 표현 방식. 기본은 AI/기계 친화적인 JSON이고,
@@ -96,24 +100,169 @@ pub fn print_doctor(mode: OutputMode, git_version: &str, config_path: &Path) -> 
     }
 }
 
-pub fn print_repo_add(mode: OutputMode, path: &Path, added: bool) -> Result<()> {
+pub fn print_config_path(mode: OutputMode, app_home: &AppHome) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(app_home),
+        OutputMode::Human => {
+            println!("super-git config path");
+            println!("Home: {}", app_home.home.display());
+            println!("Source: {}", app_home.source.as_str());
+            println!("Config: {}", app_home.config_file.display());
+            Ok(())
+        }
+    }
+}
+
+pub fn print_config_show(mode: OutputMode, app_home: &AppHome, config: &AppConfig) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({
-            "path": path,
-            "added": added,
+            "location": app_home,
+            "config": config,
         })),
         OutputMode::Human => {
-            if added {
-                println!("Added repository: {}", path.display());
-            } else {
-                println!("Already registered: {}", path.display());
+            println!("super-git config");
+            println!("Home: {}", app_home.home.display());
+            println!("Source: {}", app_home.source.as_str());
+            println!("Config: {}", app_home.config_file.display());
+            println!("Repositories: {}", config.repositories.len());
+            for (index, repo) in config.repositories.iter().enumerate() {
+                println!(
+                    "  {:<4} {} ({})",
+                    index + 1,
+                    repo.name,
+                    repo.git_common_dir.display()
+                );
             }
             Ok(())
         }
     }
 }
 
-pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<()> {
+pub fn print_config_validate(
+    mode: OutputMode,
+    app_home: &AppHome,
+    report: &ConfigValidationReport,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "location": app_home,
+            "valid": report.valid,
+            "issues": report.issues,
+        })),
+        OutputMode::Human => {
+            println!("super-git config validate");
+            println!("Config: {}", app_home.config_file.display());
+            if report.valid {
+                println!("Status: valid");
+            } else {
+                println!("Status: invalid");
+                for issue in &report.issues {
+                    println!("  {}: {} ({})", issue.field, issue.message, issue.code);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_config_update(
+    mode: OutputMode,
+    app_home: &AppHome,
+    result: &ConfigUpdateResult,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "location": app_home,
+            "config": result.config,
+            "changed": result.changed,
+            "validation": result.validation,
+        })),
+        OutputMode::Human => {
+            println!("super-git config set-worktree-template");
+            println!("Config: {}", app_home.config_file.display());
+            println!("Changed: {}", result.changed);
+            println!(
+                "Parent template: {}",
+                result.config.settings.worktree.parent_template
+            );
+            println!(
+                "Name template: {}",
+                result.config.settings.worktree.name_template
+            );
+            println!(
+                "Ref slug algorithm: {}",
+                result.config.settings.worktree.ref_slug_algorithm
+            );
+            Ok(())
+        }
+    }
+}
+
+pub fn print_repo_save(mode: OutputMode, repository: &SavedRepository, added: bool) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "repository": repository,
+            "added": added,
+        })),
+        OutputMode::Human => {
+            if added {
+                println!(
+                    "Saved repository family: {} ({})",
+                    repository.name, repository.id
+                );
+            } else {
+                println!(
+                    "Already saved repository family: {} ({})",
+                    repository.name, repository.id
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_repo_add(
+    mode: OutputMode,
+    repository: &SavedRepository,
+    requested_path: &Path,
+    added: bool,
+) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "path": requested_path,
+            "repository": repository,
+            "added": added,
+        })),
+        OutputMode::Human => print_repo_save(mode, repository, added),
+    }
+}
+
+pub fn print_repo_forget(mode: OutputMode, result: &ForgetRepositoryResult) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(json!({
+            "target": result.target,
+            "repository": result.repository,
+            "removed": result.removed,
+            "matched_by": result.matched_by,
+            "remaining_repositories": result.remaining_repositories,
+            "registry_only": result.registry_only,
+            "filesystem_deleted": result.filesystem_deleted,
+        })),
+        OutputMode::Human => {
+            println!(
+                "Forgot repository family: {} ({})",
+                result.repository.name, result.repository.id
+            );
+            println!("Matched by: {}", result.matched_by.as_str());
+            println!("Remaining repositories: {}", result.remaining_repositories);
+            println!("Registry only: yes");
+            println!("Filesystem deleted: no");
+            Ok(())
+        }
+    }
+}
+
+pub fn print_repo_list(mode: OutputMode, repositories: &[SavedRepository]) -> Result<()> {
     match mode {
         OutputMode::Json => emit_success(json!({ "repositories": repositories })),
         OutputMode::Human => {
@@ -122,9 +271,15 @@ pub fn print_repo_list(mode: OutputMode, repositories: &[Repository]) -> Result<
                 return Ok(());
             }
 
-            println!("{:<4} Path", "#");
+            println!("{:<4} {:<24} {:<22} Git common dir", "#", "Name", "Kind");
             for (index, repo) in repositories.iter().enumerate() {
-                println!("{:<4} {}", index + 1, repo.path.display());
+                println!(
+                    "{:<4} {:<24} {:<22} {}",
+                    index + 1,
+                    repo.name,
+                    repo.kind.as_str(),
+                    repo.git_common_dir.display()
+                );
             }
             Ok(())
         }

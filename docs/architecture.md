@@ -27,8 +27,14 @@ Output is JSON-first. Success uses `{ ok, data }`; failure uses `{ ok, error }`.
 Current commands:
 
 - `super-git doctor`
+- `super-git config path`
+- `super-git config show`
+- `super-git config validate`
+- `super-git config set-worktree-template [options]`
+- `super-git repo save [path]`
 - `super-git repo add <path>`
 - `super-git repo list`
+- `super-git repo forget <id-or-name-or-path>`
 - `super-git status [path]`
 - `super-git inspect [path]`
 - `super-git preview stage-changes`
@@ -92,8 +98,82 @@ contents.
 
 ## Config
 
-Registered repositories are stored in a JSON file under the OS-specific config
-directory. `super-git-core::config::store::ConfigStore` owns this storage.
+Registered repositories are stored in a JSON file under the resolved
+`super-git` app home. `super-git-core::config::store::ConfigStore` owns this
+storage.
+
+The app home now resolves from `SUPER_GIT_HOME` first, then from the
+OS-specific `ProjectDirs` config location. `super-git config path` reports the
+resolved home, source, and config file. `super-git config show` reports the same
+location plus the currently loaded config. `super-git config validate` reports
+validation issues without writing the file.
+
+`config.json` uses schema version 1:
+
+```json
+{
+  "schema_version": 1,
+  "settings": {
+    "worktree": {
+      "parent_template": "{main_path}.worktrees",
+      "name_template": "{repo_name}__{ref_slug}",
+      "ref_slug_algorithm": "path_safe_v1"
+    }
+  },
+  "repositories": [
+    {
+      "id": "sha256:<git-common-dir-identity>",
+      "name": "naon-dnl",
+      "kind": "worktree_family",
+      "main_worktree": "/path/to/naon-dnl",
+      "git_common_dir": "/path/to/naon-dnl/.git",
+      "saved_from": "/path/to/naon-dnl.worktrees/naon-dnl__feature"
+    }
+  ]
+}
+```
+
+Legacy v0 files without `schema_version` are migrated in memory. Legacy entries
+that no longer resolve to Git repositories are skipped because they cannot be
+assigned a worktree-family identity. Saving always writes the current v1 shape
+using the existing atomic write pattern. Unknown future schema versions fail
+instead of being partially interpreted.
+
+Saved repositories are stored as worktree families, not individual linked
+worktrees. `repo save [path]` uses Git's common directory as the family identity
+so saving the main worktree and a linked worktree deduplicates to one entry.
+The identity hash preserves path case so case-sensitive filesystems do not
+collapse different repository families that differ only by case.
+`repo add <path>` remains as a compatibility alias for `repo save <path>`.
+Bare-primary families are supported with `kind: "bare_worktree_family"` and
+`main_worktree: null`.
+
+`repo forget <id-or-name-or-path>` removes only the saved registry entry. It
+never deletes repository directories, linked worktrees, bare Git directories, or
+working-tree files. Selectors match full repository id, path-like selectors, or
+unique repository name. Ambiguous names fail without rewriting the config file.
+
+Worktree template settings can be edited with
+`config set-worktree-template`. Template variables use braces, not shell syntax.
+C5 supports `{main_path}`, `{repo_name}`, and `{ref_slug}` plus the
+`path_safe_v1` slug algorithm name. `config validate` also checks saved
+repository registry shape: ids must match the saved `git_common_dir`, path fields
+must be absolute, ids must be unique, and bare-primary entries must not claim a
+`main_worktree`. The template command validates field-specific rules before
+saving:
+
+- `parent_template` must contain `{main_path}` exactly once and must not contain
+  `{ref_slug}` or a literal `..` path component.
+- `name_template` must contain `{ref_slug}` exactly once and must not contain
+  `{main_path}` or path separators.
+- `ref_slug_algorithm` currently supports only `path_safe_v1`.
+
+Config is preview input, not execute authority. Future worktree preview commands
+must resolve and freeze paths into plans; execute should not re-expand template
+strings as trusted instructions.
+
+Shell hooks, copy patterns, and multiple profiles are out of scope until the
+core safety lifecycle has explicit preview and confirmation rules for them.
 
 ## Worktrees
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "super-git")]
@@ -24,6 +24,12 @@ pub enum Commands {
     Repo {
         #[command(subcommand)]
         command: RepoCommands,
+    },
+
+    /// Inspect super-git global configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
     },
 
     /// Show Git status for a repository path or the current directory.
@@ -61,11 +67,50 @@ pub enum Commands {
 
 #[derive(Debug, Subcommand)]
 pub enum RepoCommands {
-    /// Add a local Git repository to the config file.
+    /// Compatibility alias for `repo save <path>`.
     Add { path: PathBuf },
 
-    /// List registered repositories.
+    /// Save a Git worktree family to the repository registry.
+    Save { path: Option<PathBuf> },
+
+    /// Remove a saved repository family from the registry only.
+    Forget { target: String },
+
+    /// List saved repository families.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommands {
+    /// Show the resolved super-git app home and config file path.
+    Path,
+
+    /// Show the resolved config location and loaded config.
+    Show,
+
+    /// Validate the loaded config without writing it.
+    Validate,
+
+    /// Set worktree path/name template settings.
+    #[command(group(
+        ArgGroup::new("worktree_template")
+            .required(true)
+            .multiple(true)
+            .args(["parent_template", "name_template", "ref_slug_algorithm"])
+    ))]
+    SetWorktreeTemplate {
+        /// Template for the parent directory that contains linked worktrees.
+        #[arg(long)]
+        parent_template: Option<String>,
+
+        /// Template for the linked worktree directory name.
+        #[arg(long)]
+        name_template: Option<String>,
+
+        /// Slug algorithm used for ref names.
+        #[arg(long)]
+        ref_slug_algorithm: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

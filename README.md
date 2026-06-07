@@ -55,7 +55,9 @@ Implemented today:
   - restores the pre-execute index only when the current index still matches the
     execute result
   - never edits working-tree file contents
-- Supporting commands: `doctor`, `repo add`, `repo list`, `status`, `wt list`
+- Supporting commands: `doctor`, `config path`, `config show`,
+  `config validate`, `config set-worktree-template`, `repo save`, `repo add`,
+  `repo list`, `repo forget`, `status`, `wt list`
 
 ## Quick Start
 
@@ -100,6 +102,7 @@ cargo run -p super-git-cli -- --human inspect
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 - [ADR 0001: CLI First](docs/adr/0001-cli-first.md)
+- [Commit messages](docs/contributing/commit-messages.md)
 - [Archived original notes](docs/archive/original-notes/README.md)
 
 ## Development
