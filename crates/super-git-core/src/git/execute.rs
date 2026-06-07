@@ -9,13 +9,15 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
+use crate::git::execute_worktree;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
 use crate::git::preview::compute_plan_id;
 use crate::git::state;
 use crate::git::undo_registry;
 use crate::model::{
-    ExecuteResult, Operation, PreviewPlan, PreviewPrecondition, UndoToken, EXECUTE_SCHEMA_VERSION,
-    PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
+    ExecuteResult, ExecuteUndoToken, Operation, PreviewPlan, PreviewPrecondition, UndoToken,
+    WorktreeCreatePlan, EXECUTE_SCHEMA_VERSION, PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
+    WORKTREE_PLAN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -23,10 +25,20 @@ const ACTION_STAGE_CHANGES: &str = "stage_changes";
 
 pub fn execute_plan_bytes(current_path: &Path, bytes: &[u8]) -> Result<ExecuteResult> {
     let plan = parse_plan(bytes)?;
-    execute_plan(current_path, plan)
+    match plan {
+        PlanToExecute::StageChanges(plan) => execute_stage_changes_plan(current_path, *plan),
+        PlanToExecute::WorktreeCreate(plan) => {
+            execute_worktree::execute_worktree_create_plan(*plan)
+        }
+    }
 }
 
-fn parse_plan(bytes: &[u8]) -> Result<PreviewPlan> {
+enum PlanToExecute {
+    StageChanges(Box<PreviewPlan>),
+    WorktreeCreate(Box<WorktreeCreatePlan>),
+}
+
+fn parse_plan(bytes: &[u8]) -> Result<PlanToExecute> {
     let value: Value = serde_json::from_slice(bytes)?;
     if value.get("ok").is_some() {
         if value.get("ok") != Some(&Value::Bool(true)) {
@@ -48,18 +60,22 @@ fn parse_plan(bytes: &[u8]) -> Result<PreviewPlan> {
     parse_plan_value(value)
 }
 
-fn parse_plan_value(value: Value) -> Result<PreviewPlan> {
-    if value.get("schema_version").and_then(Value::as_str) != Some(PLAN_SCHEMA_VERSION) {
-        return invalid_plan(
+fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
+    match value.get("schema_version").and_then(Value::as_str) {
+        Some(PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::StageChanges(Box::new(
+            serde_json::from_value(value)?,
+        ))),
+        Some(WORKTREE_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeCreate(Box::new(
+            serde_json::from_value(value)?,
+        ))),
+        _ => invalid_plan(
             "unsupported_schema_version",
-            "execute supports only super-git.plan.v0.1",
-        );
+            "execute supports only super-git.plan.v0.1 and super-git.plan.v0.2",
+        ),
     }
-
-    Ok(serde_json::from_value(value)?)
 }
 
-fn execute_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult> {
+fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult> {
     validate_static_contract(&plan)?;
 
     let git = Git::default();
@@ -117,7 +133,7 @@ fn execute_plan(current_path: &Path, plan: PreviewPlan) -> Result<ExecuteResult>
         repository: state.root,
         executed: true,
         effects: vec!["Staged previewed paths in the current worktree index.".to_string()],
-        undo_token,
+        undo_token: ExecuteUndoToken::Index(Box::new(undo_token)),
     })
 }
 

@@ -198,9 +198,10 @@ not a raw `git worktree add` command string.
 
 `preview worktree-create` is read-only. It resolves a repository family, source
 ref, config-derived target path, family snapshot, branch occupancy, execution
-status, risk, and undo boundary into `super-git.plan.v0.2`. Until C6-C adds
-write-side support, unblocked plans report `execution.status: "preview_only"`;
-they are not executable yet. Blocked Git-state
+status, risk, and undo boundary into `super-git.plan.v0.2`. Unblocked plans
+report `execution.status: "executable"`, but execution still revalidates plan
+hash, repository family identity, source ref commit, family snapshot, branch
+occupancy, and target path safety immediately before writing. Blocked Git-state
 cases such as remote-tracking branch input, occupied local branches, and target
 collisions return useful `{ ok: true, data.execution.status: "blocked" }`
 plans. Repository selector failures still return `{ ok: false, error }` because

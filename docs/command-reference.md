@@ -200,9 +200,9 @@ local-branch policy exists. Occupied local branches and target path collisions
 also return blocked plans instead of letting Git fail later.
 
 `preview worktree-create` does not create directories, worktrees, config files,
-or Git worktree metadata. Unblocked plans currently use
-`execution.status: "preview_only"` because `execute` does not yet run
-`worktree_create` plans.
+or Git worktree metadata. Unblocked plans use
+`execution.status: "executable"` and must still pass `execute --plan`
+re-validation before any write occurs.
 
 ## `execute --plan <file|->`
 
@@ -213,9 +213,10 @@ super-git execute --plan /tmp/super-git-plan.json > /tmp/super-git-result.json
 super-git execute --plan - < /tmp/super-git-plan.json
 ```
 
-Current support is intentionally limited to the internal `stage_changes`
-allowlist. `execute` rejects stale plans, tampered plans, unsupported actions,
-unsupported options, and mismatched repository state.
+Current support is intentionally limited to internal allowlisted actions:
+`stage_changes` and executable `worktree_create` plans. `execute` rejects stale
+plans, tampered plans, unsupported actions, unsupported options, blocked
+worktree plans, and mismatched repository state.
 
 ## `undo --token <file|->`
 
@@ -229,6 +230,10 @@ super-git undo --token - < /tmp/super-git-result.json
 The token is treated as untrusted input. `undo` validates local registry
 provenance and index checksums before restoring the previous index snapshot.
 It does not modify working-tree file contents.
+
+`worktree_create` execute results include a worktree undo token and local
+execution record for the upcoming removal-undo slice. `undo` does not remove
+created worktrees yet.
 
 ## `status [path]`
 

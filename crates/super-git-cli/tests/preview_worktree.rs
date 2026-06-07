@@ -4,6 +4,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+use super_git_core::git::preview_worktree::compute_worktree_plan_id;
+use super_git_core::model::WorktreeCreatePlan;
+
 fn super_git(dir: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_super-git"));
     cmd.current_dir(dir);
@@ -106,7 +109,7 @@ fn error_json(output: Output) -> serde_json::Value {
 }
 
 #[test]
-fn preview_worktree_create_from_current_repo_emits_preview_only_plan_without_writes() {
+fn preview_worktree_create_from_current_repo_emits_executable_plan_without_writes() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");
     let repo = tmp.path().join("repo");
@@ -141,10 +144,10 @@ fn preview_worktree_create_from_current_repo_emits_preview_only_plan_without_wri
     assert_eq!(data["target"]["name"], "repo__works-eml-base");
     assert_eq!(data["target"]["exists"], false);
     assert_eq!(data["target"]["parent_creation"]["will_create"], true);
-    assert_eq!(data["execution"]["status"], "preview_only");
+    assert_eq!(data["execution"]["status"], "executable");
     assert_eq!(
         data["execution"]["suggested_super_git_command"],
-        serde_json::Value::Null
+        serde_json::json!(["super-git", "execute", "--plan", "<plan-file>"])
     );
     assert_eq!(data["execution"]["raw_git_allowed"], false);
     assert_eq!(
@@ -204,7 +207,7 @@ fn preview_worktree_create_accepts_saved_repository_name_selector() {
 
     assert_eq!(json["ok"], true);
     let data = &json["data"];
-    assert_eq!(data["execution"]["status"], "preview_only");
+    assert_eq!(data["execution"]["status"], "executable");
     assert_eq!(data["action"]["options"]["repo_selector"], "repo");
     assert_eq!(data["repository"]["selected_from"], canonical_string(&repo));
     assert_eq!(data["target"]["name"], "repo__feature-name-selector");
@@ -237,9 +240,9 @@ fn preview_worktree_create_accepts_saved_repository_id_and_path_selectors() {
     let by_id = preview_worktree(&outside, &app_home, Some(id), "feature/selectors");
     let by_path = preview_worktree(&outside, &app_home, Some(&repo_path), "feature/selectors");
 
-    assert_eq!(by_id["data"]["execution"]["status"], "preview_only");
+    assert_eq!(by_id["data"]["execution"]["status"], "executable");
     assert_eq!(by_id["data"]["action"]["options"]["repo_selector"], id);
-    assert_eq!(by_path["data"]["execution"]["status"], "preview_only");
+    assert_eq!(by_path["data"]["execution"]["status"], "executable");
     assert_eq!(
         by_path["data"]["action"]["options"]["repo_selector"],
         repo_path
@@ -266,7 +269,7 @@ fn preview_worktree_create_accepts_unsaved_path_selector_without_writing_config(
     );
 
     assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["execution"]["status"], "preview_only");
+    assert_eq!(json["data"]["execution"]["status"], "executable");
     assert_eq!(
         json["data"]["action"]["options"]["repo_selector"],
         repo_path
@@ -300,11 +303,11 @@ fn preview_worktree_create_supports_tag_and_commit_as_detached_head_plans() {
     assert_eq!(tag["data"]["source_ref"]["supported_for_execute"], true);
     assert_eq!(tag["data"]["ref_policy"]["mode"], "detached_head");
     assert_eq!(tag["data"]["ref_policy"]["will_detach_head"], true);
-    assert_eq!(tag["data"]["execution"]["status"], "preview_only");
+    assert_eq!(tag["data"]["execution"]["status"], "executable");
     assert_eq!(commit["data"]["source_ref"]["kind"], "commit");
     assert_eq!(commit["data"]["source_ref"]["supported_for_execute"], true);
     assert_eq!(commit["data"]["ref_policy"]["mode"], "detached_head");
-    assert_eq!(commit["data"]["execution"]["status"], "preview_only");
+    assert_eq!(commit["data"]["execution"]["status"], "executable");
 }
 
 #[test]
@@ -446,8 +449,38 @@ fn preview_worktree_create_rejects_invalid_config_before_plan() {
             .contains("missing_required_variable")));
 }
 
+fn execute_worktree_plan(dir: &Path, app_home: &Path, plan: &serde_json::Value) -> Output {
+    let mut command = super_git(dir);
+    command
+        .args(["execute", "--plan", "-"])
+        .env("SUPER_GIT_HOME", app_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("spawn execute");
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin
+            .write_all(
+                serde_json::to_string(plan)
+                    .expect("serialize plan")
+                    .as_bytes(),
+            )
+            .expect("write plan to stdin");
+    }
+    child.wait_with_output().expect("wait execute")
+}
+
+fn rehash_worktree_plan(envelope: &mut serde_json::Value) {
+    let mut plan: WorktreeCreatePlan =
+        serde_json::from_value(envelope["data"].clone()).expect("parse worktree plan");
+    plan.plan_id = compute_worktree_plan_id(&plan).expect("worktree plan id");
+    envelope["data"] = serde_json::to_value(plan).expect("serialize worktree plan");
+}
+
 #[test]
-fn execute_rejects_worktree_create_v0_2_plan_until_c6_c() {
+fn execute_worktree_create_creates_linked_worktree_and_returns_undo_token() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let app_home = tmp.path().join("sg-home");
     let repo = tmp.path().join("repo");
@@ -455,29 +488,75 @@ fn execute_rejects_worktree_create_v0_2_plan_until_c6_c() {
     init_repo_with_commit(&repo);
     git(&repo, &["branch", "feature/execute-boundary"]);
     let plan = preview_worktree(&repo, &app_home, None, "feature/execute-boundary");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
 
-    let output = {
-        let mut command = super_git(&repo);
-        command
-            .args(["execute", "--plan", "-"])
-            .env("SUPER_GIT_HOME", &app_home)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().expect("spawn execute");
-        {
-            use std::io::Write;
-            let stdin = child.stdin.as_mut().expect("stdin");
-            stdin
-                .write_all(
-                    serde_json::to_string(&plan)
-                        .expect("serialize plan")
-                        .as_bytes(),
-                )
-                .expect("write plan to stdin");
-        }
-        child.wait_with_output().expect("wait execute")
-    };
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = json_output(output);
+
+    assert_eq!(json["data"]["action"], "worktree_create");
+    assert_eq!(
+        json["data"]["undo_token"]["kind"],
+        "remove_created_worktree_if_clean"
+    );
+    assert_eq!(
+        json["data"]["undo_token"]["target_path"],
+        path_string(&target)
+    );
+    assert!(
+        std::path::PathBuf::from(
+            json["data"]["undo_token"]["execution_record_path"]
+                .as_str()
+                .expect("execution record path")
+        )
+        .exists(),
+        "execute must write local provenance before returning a token"
+    );
+    assert!(target.join(".git").exists(), "target worktree should exist");
+    let branch = run_git(&target, &["branch", "--show-current"]);
+    assert!(
+        branch.status.success(),
+        "new worktree branch should be readable"
+    );
+    assert_eq!(
+        String::from_utf8(branch.stdout)
+            .expect("branch utf8")
+            .trim(),
+        "feature/execute-boundary"
+    );
+    assert!(worktree_list(&repo).contains(&path_string(&target)));
+}
+
+#[test]
+fn execute_worktree_create_revalidates_branch_occupancy_before_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    let occupied = tmp.path().join("occupied-feature");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/stale-occupancy"]);
+    let plan = preview_worktree(&repo, &app_home, None, "feature/stale-occupancy");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            occupied.to_str().unwrap(),
+            "feature/stale-occupancy",
+        ],
+    );
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
     let json = error_json(output);
 
     assert_eq!(json["ok"], false);
@@ -488,7 +567,178 @@ fn execute_rejects_worktree_create_v0_2_plan_until_c6_c() {
         .any(|cause| cause
             .as_str()
             .unwrap_or_default()
-            .contains("unsupported_schema_version")));
+            .contains("family_snapshot.fingerprint")));
+    assert!(
+        !target.exists(),
+        "execute must fail before creating a stale target"
+    );
+}
+
+#[test]
+fn execute_worktree_create_revalidates_source_ref_before_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/source-moved"]);
+    let plan = preview_worktree(&repo, &app_home, None, "feature/source-moved");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+    let new_commit = run_git(
+        &repo,
+        &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "move"],
+    );
+    assert!(new_commit.status.success(), "commit-tree should succeed");
+    let new_commit = String::from_utf8(new_commit.stdout)
+        .expect("commit-tree utf8")
+        .trim()
+        .to_string();
+    git(
+        &repo,
+        &["update-ref", "refs/heads/feature/source-moved", &new_commit],
+    );
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("source_ref.resolved_commit")));
+    assert!(!target.exists(), "execute must fail before creating target");
+}
+
+#[test]
+fn execute_worktree_create_rechecks_target_collision_without_deleting_it() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/stale-target"]);
+    let plan = preview_worktree(&repo, &app_home, None, "feature/stale-target");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+    std::fs::create_dir_all(&target).expect("create stale target collision");
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_path_available")));
+    assert!(target.exists(), "execute must not delete colliding paths");
+}
+
+#[test]
+fn execute_worktree_create_rejects_tampered_plan_id_before_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/tampered"]);
+    let mut plan = preview_worktree(&repo, &app_home, None, "feature/tampered");
+    let target = std::path::PathBuf::from(
+        plan["data"]["target"]["path"]
+            .as_str()
+            .expect("target path"),
+    );
+    plan["data"]["plan_id"] = serde_json::json!("sha256:tampered");
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause.as_str().unwrap_or_default().contains("plan_id")));
+    assert!(!target.exists(), "execute must fail before creating target");
+}
+
+#[test]
+fn execute_worktree_create_rejects_blocked_plan_before_writing() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let origin = tmp.path().join("origin.git");
+    let repo = tmp.path().join("repo");
+    git(
+        tmp.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            repo.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(repo.join("README.md"), "hello\n").expect("write file");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "initial"]);
+    git(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
+    let plan = preview_worktree(&repo, &app_home, None, "origin/main");
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = error_json(output);
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes array")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("not_executable")));
+}
+
+#[test]
+fn execute_worktree_create_ignores_advisory_reference_commands() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let app_home = tmp.path().join("sg-home");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    init_repo_with_commit(&repo);
+    git(&repo, &["branch", "feature/advisory"]);
+    let mut plan = preview_worktree(&repo, &app_home, None, "feature/advisory");
+    plan["data"]["reference_commands"] = serde_json::json!({
+        "semantics": "documentation_only",
+        "never_execute_directly": true,
+        "commands": [["sh", "-c", "touch pwned"], ["git", "reset", "--hard"]]
+    });
+    rehash_worktree_plan(&mut plan);
+
+    let output = execute_worktree_plan(&repo, &app_home, &plan);
+    let json = json_output(output);
+
+    assert_eq!(json["data"]["action"], "worktree_create");
+    assert!(
+        !repo.join("pwned").exists(),
+        "execute must rebuild trusted git args, not run reference_commands"
+    );
 }
 
 fn blocked_codes(data: &serde_json::Value) -> Vec<&str> {

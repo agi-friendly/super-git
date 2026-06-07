@@ -82,23 +82,24 @@ Implemented so far:
 - remote-tracking branch input is recognized and blocked
 - branch occupancy hard blocks when a branch is already checked out elsewhere
 - explicit `execution.status` and structured blocked reasons
-- unblocked plans report `preview_only` until C6-C implements execute support
+- unblocked plans report `executable`
 - clear risk and reversibility metadata
 - target path resolved from config and frozen in the plan
 - no `--force`, `--guess-remote`, `--target`, copy patterns, or shell hooks in
   the first implementation
-- `execute` rejects `super-git.plan.v0.2` until validated worktree execution is
-  implemented
+- `execute` revalidates executable `super-git.plan.v0.2` worktree-create plans
+  before creating one linked worktree
+- worktree-create execution writes a local execution record and returns a
+  worktree undo token for the next undo slice
 
 Next:
 
 - ambiguous ref handling beyond exact local branch/tag/remote/commit lookup
 - full `locked` and `prunable` worktree snapshot parsing
-- execute validated worktree creation plans
+- undo unchanged worktree creation
 
 ## Stage 5: Worktree Create/Remove Execute
 
-- execute validated worktree creation plans
 - execute validated worktree removal plans
 - protect dirty worktrees and untracked files
 - require clear confirmation rules for destructive removal

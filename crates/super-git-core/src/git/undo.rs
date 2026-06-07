@@ -10,9 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::git::command::Git;
 use crate::git::state;
 use crate::git::undo_registry;
-use crate::model::{
-    ExecuteResult, UndoResult, UndoToken, UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
-};
+use crate::model::{UndoResult, UndoToken, UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION};
 use crate::{Result, SuperGitError};
 
 const ACTION_STAGE_CHANGES: &str = "stage_changes";
@@ -46,15 +44,27 @@ fn parse_token(bytes: &[u8]) -> Result<UndoToken> {
 
 fn token_from_data(value: &Value) -> Result<UndoToken> {
     if let Some(token) = value.get("undo_token") {
-        return Ok(serde_json::from_value(token.clone())?);
+        return parse_index_token_value(token);
     }
 
     if value.get("schema_version").and_then(Value::as_str) == Some(UNDO_TOKEN_SCHEMA_VERSION) {
-        return Ok(serde_json::from_value(value.clone())?);
+        return parse_index_token_value(value);
     }
 
-    let result: ExecuteResult = serde_json::from_value(value.clone())?;
-    Ok(result.undo_token)
+    parse_index_token_value(value)
+}
+
+fn parse_index_token_value(value: &Value) -> Result<UndoToken> {
+    if let Some(kind) = value.get("kind").and_then(Value::as_str) {
+        if kind != "restore_index_snapshot" {
+            return invalid_token(
+                "unsupported_undo_kind",
+                "undo currently supports only restore_index_snapshot",
+            );
+        }
+    }
+
+    Ok(serde_json::from_value(value.clone())?)
 }
 
 fn undo_token(current_path: &Path, token: UndoToken) -> Result<UndoResult> {

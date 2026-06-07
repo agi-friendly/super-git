@@ -33,6 +33,7 @@ pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.1";
 pub const UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.undo.v0.1";
 pub const UNDO_REGISTRY_SCHEMA_VERSION: &str = "super-git.undo-registry.v0.1";
 pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
+pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -537,7 +538,23 @@ pub struct ExecuteResult {
     pub repository: PathBuf,
     pub executed: bool,
     pub effects: Vec<String>,
-    pub undo_token: UndoToken,
+    pub undo_token: ExecuteUndoToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExecuteUndoToken {
+    Index(Box<UndoToken>),
+    Worktree(Box<WorktreeUndoToken>),
+}
+
+impl ExecuteUndoToken {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Index(token) => &token.kind,
+            Self::Worktree(token) => &token.kind,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -553,6 +570,43 @@ pub struct UndoToken {
     pub pre_index_existed: bool,
     pub pre_index_sha256: String,
     pub post_index_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeUndoToken {
+    pub schema_version: String,
+    pub kind: String,
+    pub repository: PathBuf,
+    pub action: String,
+    pub plan_id: String,
+    pub target_path: PathBuf,
+    pub target_head: String,
+    pub target_branch: Option<String>,
+    pub git_common_dir: PathBuf,
+    pub family_id: String,
+    pub source_ref: WorktreeSourceRef,
+    pub ref_policy: WorktreeRefPolicy,
+    pub created_parent: Option<PathBuf>,
+    pub execution_record_path: PathBuf,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeExecutionRecord {
+    pub schema_version: String,
+    pub status: String,
+    pub action: String,
+    pub plan_id: String,
+    pub repository: WorktreeCreateRepository,
+    pub target_path: PathBuf,
+    pub source_ref: WorktreeSourceRef,
+    pub expected_head: String,
+    pub expected_branch: Option<String>,
+    pub created_parent: Option<PathBuf>,
+    pub undo_token: Option<WorktreeUndoToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

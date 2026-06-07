@@ -49,9 +49,10 @@ Implemented today:
   - recognizes blocked cases such as occupied branches, remote-tracking refs,
     and target collisions without writing
 - `super-git execute --plan <file|->`
-  - re-validates the plan and state before staging
-  - executes only the internal `stage_changes` allowlist
-  - writes a local undo registry record before reporting success
+  - re-validates the plan and state before writing
+  - executes only internal allowlisted actions: `stage_changes` and
+    executable `worktree_create` plans
+  - writes local provenance before reporting success
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - validates repository, snapshot checksums, current index checksum, and local
@@ -59,6 +60,8 @@ Implemented today:
   - restores the pre-execute index only when the current index still matches the
     execute result
   - never edits working-tree file contents
+  - worktree-create undo tokens are produced for C6-D, but removal undo is not
+    implemented yet
 - Supporting commands: `doctor`, `config path`, `config show`,
   `config validate`, `config set-worktree-template`, `repo save`, `repo add`,
   `repo list`, `repo forget`, `status`, `wt list`

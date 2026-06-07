@@ -1,5 +1,6 @@
 pub mod command;
 pub mod execute;
+pub mod execute_worktree;
 pub mod fingerprint;
 pub mod preview;
 pub mod preview_worktree;

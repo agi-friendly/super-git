@@ -57,7 +57,7 @@ pub fn preview_worktree_create(
     collect_target_blocks(&target, &mut blocked_reasons);
 
     let execution_status = if blocked_reasons.is_empty() {
-        "preview_only"
+        "executable"
     } else {
         "blocked"
     };
@@ -332,7 +332,7 @@ fn target_from_resolved(resolved: worktree_plan::ResolvedWorktreeTarget) -> Work
     }
 }
 
-fn family_snapshot(worktrees: &[WorktreeInfo]) -> Result<WorktreeFamilySnapshot> {
+pub(crate) fn family_snapshot(worktrees: &[WorktreeInfo]) -> Result<WorktreeFamilySnapshot> {
     let snapshot_worktrees = worktrees
         .iter()
         .enumerate()

@@ -437,7 +437,7 @@ and production code. The v0.2 domain separator is:
 super-git-plan-v0.2\n
 ```
 
-## Execute Contract For Future C6-C
+## Execute Contract For C6-C
 
 `execute --plan` for `worktree_create` must:
 
@@ -455,7 +455,7 @@ super-git-plan-v0.2\n
 12. Run Git without shell interpretation.
 13. Post-verify that the new worktree exists at the target path.
 14. Post-verify that the new worktree HEAD/ref matches the plan.
-15. Write a local undo registry record and undo token.
+15. Write a local execution record containing the worktree undo token.
 
 If Git fails after creating partial state, execute must return a structured
 failure with cleanup hints. It must not pretend the action simply failed with no

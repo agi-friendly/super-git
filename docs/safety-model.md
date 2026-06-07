@@ -75,14 +75,21 @@ For the current `stage_changes` action, undo is index-only:
 
 ## Current Write Boundary
 
-Only one write action exists today:
+Two Git write actions exist today:
 
 ```text
 stage_changes
+worktree_create
 ```
 
-It stages the unstaged/untracked pathset captured by `preview`, but only after
-`execute` confirms that the pathset and fingerprint still match.
+`stage_changes` stages the unstaged/untracked pathset captured by `preview`,
+but only after `execute` confirms that the pathset and fingerprint still match.
+
+`worktree_create` creates one linked worktree from an executable
+`super-git.plan.v0.2`, but only after `execute` revalidates plan hash, source
+ref, repository family identity, family snapshot, branch occupancy, target path
+safety, and post-create HEAD/ref state. It writes a local execution record
+before Git may mutate worktree metadata.
 
 Future actions must earn their way into the allowlist with tests and docs.
 
@@ -103,12 +110,15 @@ Worktree creation is the next Git write family, but it is not a raw
 branch that is already checked out in another worktree. Target paths are
 resolved from config during preview and frozen into `super-git.plan.v0.2`;
 execute must not re-expand config templates as trusted authority. `execute`
-still rejects `worktree_create` plans until the write-side validation slice is
-implemented.
+supports executable `worktree_create` plans only after revalidating the plan
+hash, source ref, repository family, branch occupancy, target path, and
+post-create HEAD/ref state. Reference commands remain documentation-only.
 
 Worktree create undo is intentionally narrow: remove the clean linked worktree
 created by `super-git` when local provenance and state checks still match. It
-does not delete branch refs, remote refs, commits, or user-created files.
+does not delete branch refs, remote refs, commits, or user-created files. C6-C
+produces worktree undo tokens and execution records; removal undo itself is the
+next slice.
 
 ## Risk Vocabulary
 
