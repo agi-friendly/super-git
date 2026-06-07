@@ -17,13 +17,16 @@ use crate::{Result, SuperGitError};
 
 const ACTION_WORKTREE_REMOVE: &str = "worktree_remove";
 
-pub fn execute_worktree_remove_plan(plan: WorktreeRemovePlan) -> Result<ExecuteResult> {
+pub fn execute_worktree_remove_plan(
+    current_path: &Path,
+    plan: WorktreeRemovePlan,
+) -> Result<ExecuteResult> {
     validate_execution_contract(&plan)?;
 
     let git = Git::default();
     let execution_context = execution_context(&plan);
     let fresh = worktree_remove::scan_worktree_remove_target(
-        execution_context,
+        current_path,
         &plan.target.worktree_list_path,
     )?;
     validate_fresh_scan(&plan, &fresh)?;

@@ -47,7 +47,7 @@ pub fn execute_plan_bytes_with_confirmation(
             execute_worktree::execute_worktree_create_plan(*plan)
         }
         PlanToExecute::WorktreeRemove(plan) => {
-            execute_worktree_remove_plan(*plan, confirmation_bytes)
+            execute_worktree_remove_plan(current_path, *plan, confirmation_bytes)
         }
     }
 }
@@ -99,6 +99,7 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
 }
 
 fn execute_worktree_remove_plan(
+    current_path: &Path,
     plan: WorktreeRemovePlan,
     confirmation_bytes: Option<&[u8]>,
 ) -> Result<ExecuteResult> {
@@ -112,7 +113,7 @@ fn execute_worktree_remove_plan(
 
     let confirmation = parse_worktree_remove_confirmation(confirmation_bytes)?;
     validate_worktree_remove_confirmation(&plan, &confirmation)?;
-    execute_worktree_remove::execute_worktree_remove_plan(plan)
+    execute_worktree_remove::execute_worktree_remove_plan(current_path, plan)
 }
 
 fn validate_worktree_remove_static_contract(plan: &WorktreeRemovePlan) -> Result<()> {

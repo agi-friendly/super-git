@@ -568,6 +568,48 @@ fn execute_worktree_remove_with_valid_confirmation_removes_target_without_undo_t
 }
 
 #[test]
+fn execute_worktree_remove_rejects_current_target_execute_without_deleting() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    init_repo_with_commit(&repo);
+    let target = add_linked_worktree(
+        &repo,
+        "feature/remove-current-execute",
+        &tmp.path().join("repo.worktrees/remove-current-execute"),
+    );
+    let plan = json_output(preview_worktree_remove(&repo, &target));
+    let confirmation = confirmation_for_remove_plan(&plan);
+    let plan_file = tmp.path().join("plan.json");
+    let confirmation_file = tmp.path().join("confirmation.json");
+    write_json(&plan_file, &plan);
+    write_json(&confirmation_file, &confirmation);
+    let target_subdir = target.join("nested");
+    std::fs::create_dir(&target_subdir).expect("create empty target subdir");
+    let before_worktrees = worktree_list(&repo);
+
+    let json = error_json(execute_plan_with_confirmation_files(
+        &target_subdir,
+        &plan_file,
+        &confirmation_file,
+    ));
+
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]["causes"]
+        .as_array()
+        .expect("causes")
+        .iter()
+        .any(|cause| cause
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_is_current_worktree")));
+    assert_eq!(worktree_list(&repo), before_worktrees);
+    assert!(
+        target.exists(),
+        "executing from the target worktree must not remove it"
+    );
+}
+
+#[test]
 fn execute_worktree_remove_revalidates_target_before_deleting() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("repo");
