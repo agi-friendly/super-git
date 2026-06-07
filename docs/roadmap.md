@@ -68,10 +68,18 @@ Next:
 
 ## Stage 4: Safe Worktree Create Preview
 
+Implemented so far:
+
+- `path_safe_v1` ref slug rendering
+- config-derived target path resolver
+- target parent creation policy
+- target path safety flags for existing paths, Git dir nesting, existing
+  worktree nesting, case-insensitive name collisions, and reserved names
+
+Next:
+
 - contract checkpoint for `worktree_create` preview
 - internal worktree-family snapshot based on Git porcelain data
-- `{ref_slug}` rendering with `path_safe_v1`
-- target path validation from saved config templates
 - source ref classification for local branch, tag, commit, remote-tracking
   branch, unknown ref, and ambiguous ref
 - branch occupancy hard blocks when a branch is already checked out elsewhere

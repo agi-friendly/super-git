@@ -8,3 +8,4 @@ pub mod status;
 pub mod undo;
 pub mod undo_registry;
 pub mod worktree;
+pub mod worktree_plan;
