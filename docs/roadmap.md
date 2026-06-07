@@ -130,10 +130,15 @@ Implemented so far:
   confirmation/execute contract exists
 - `undo_strategy.kind: "not_available"` plus recovery hints instead of
   pretending removal is reversible
+- `super-git.confirmation.v0.1` contract for future destructive execute
+  authorization
+- confirmation is separate from display prompt text and is never enough to skip
+  fresh target revalidation
 
 Next:
 
-- clear human confirmation model before any future execute support
+- parse and reject confirmation-gated `worktree_remove` execute attempts before
+  any delete behavior exists
 
 ## Stage 6: Repository Profile And Dashboard
 

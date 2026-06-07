@@ -241,6 +241,10 @@ Current support is intentionally limited to internal allowlisted actions:
 plans, tampered plans, unsupported actions, unsupported options, blocked
 worktree plans, and mismatched repository state.
 
+`worktree_remove` plans are destructive previews only. Future execute support
+must require a separate `super-git.confirmation.v0.1` artifact and fresh target
+revalidation before any deletion.
+
 ## `undo --token <file|->`
 
 Undoes a supported write using the result from `execute`.

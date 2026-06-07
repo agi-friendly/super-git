@@ -494,6 +494,9 @@ confirmation record. The preview-side confirmation/recovery fields are already
 part of `super-git.plan.v0.3`, but execute still needs an explicit,
 machine-readable acknowledgement that cannot be forged by changing prompt text.
 
+The C7-C checkpoint records that contract in
+`docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`.
+
 Acceptance:
 
 - Confirmation is explicit and machine-readable.

@@ -238,6 +238,10 @@ linked-worktree path, read-only target scanning, no `--force`, no
 branch/history deletion, no automatic undo, and human confirmation required
 before any future execute support. The detailed checkpoint is recorded in
 `docs/internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md`.
+The execute-side confirmation model is recorded separately in
+`docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`:
+future removal execute must require a typed `super-git.confirmation.v0.1`
+artifact and still revalidate the full target state before deleting anything.
 
 ## Plugins And Guides
 
