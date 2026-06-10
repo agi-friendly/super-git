@@ -719,7 +719,12 @@ fn count_range_commits(git: &Git, worktree_root: &Path, base: &str, tip: &str) -
 }
 
 fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
-    let output = git.run_in(worktree_root, ["status", "--porcelain=v1"])?;
+    // Pin the untracked mode so the drift comparison is independent of
+    // status.showUntrackedFiles config.
+    let output = git.run_in(
+        worktree_root,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
     Ok(output.stdout)
 }
 

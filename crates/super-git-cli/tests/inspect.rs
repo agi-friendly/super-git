@@ -752,3 +752,20 @@ fn inspect_ignores_ambient_git_config_fsmonitor_injection() {
         "ambient GIT_CONFIG core.fsmonitor injection must not run a command"
     );
 }
+
+#[test]
+fn inspect_reports_untracked_despite_show_untracked_files_no() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    // A repo (or user) config of status.showUntrackedFiles=no hides untracked
+    // files from plain `git status`; inspect pins --untracked-files=all so it
+    // still sees them and does not report a clean tree.
+    git(dir, &["config", "status.showUntrackedFiles", "no"]);
+    std::fs::write(dir.join("untracked.txt"), "u\n").expect("write untracked");
+
+    let json = inspect_json(dir);
+
+    assert_eq!(json["data"]["working_tree"]["untracked"], 1);
+    assert_eq!(json["data"]["working_tree"]["clean"], false);
+}

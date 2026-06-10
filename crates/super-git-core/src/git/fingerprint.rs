@@ -21,10 +21,12 @@ pub fn read_state_fingerprint(
         repository: repository.to_path_buf(),
         head_commit,
         operation,
+        // --untracked-files=all pins the mode so status.showUntrackedFiles=no
+        // cannot make the fingerprint blind to untracked changes.
         status_porcelain_v1_z_sha256: hash_git_output(
             git,
             path,
-            ["status", "--porcelain=v1", "-z"],
+            ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
         )?,
         // --no-ext-diff/--no-textconv keep the fingerprint bound to the actual
         // content. Otherwise a repo with `diff.external` (e.g. difftastic) or a
