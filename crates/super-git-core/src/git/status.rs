@@ -54,11 +54,14 @@ pub(crate) fn classify_porcelain_z(stdout: &[u8]) -> PorcelainCounts {
         }
         let (x, y) = (record[0] as char, record[1] as char);
         // record[2] is the separator space; the rest is the raw path.
-        let path = String::from_utf8_lossy(&record[3..]).into_owned();
         match &record[..2] {
             b"!!" => counts.ignored += 1,
             b"??" => counts.untracked += 1,
-            _ if is_conflict(x, y) => counts.conflicts.push(path),
+            // Only conflict paths are retained, so allocate the String here
+            // rather than for every status record on a dirty tree.
+            _ if is_conflict(x, y) => counts
+                .conflicts
+                .push(String::from_utf8_lossy(&record[3..]).into_owned()),
             _ => {
                 if is_change(x) {
                     counts.staged += 1;
