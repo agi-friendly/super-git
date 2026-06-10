@@ -797,14 +797,7 @@ fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {
 }
 
 fn read_working_tree(git: &Git, root: &Path) -> Result<HistoryEditWorkingTree> {
-    // -z keeps conflict paths raw and parses newline paths; --untracked-files=all
-    // pins the mode independent of status.showUntrackedFiles. Shared parser is in
-    // git/status.rs.
-    let output = git.run_bytes_in(
-        root,
-        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-    )?;
-    let counts = status::classify_porcelain_z(&output.stdout);
+    let counts = status::read_porcelain_counts(git, root, false)?;
     Ok(HistoryEditWorkingTree {
         staged: counts.staged,
         unstaged: counts.unstaged,

@@ -80,6 +80,23 @@ pub(crate) fn classify_porcelain_z(stdout: &[u8]) -> PorcelainCounts {
     counts
 }
 
+/// Run the pinned working-tree status read and classify it. This is the single
+/// source of the porcelain flags: -z (raw paths), --untracked-files=all (mode
+/// independent of status.showUntrackedFiles), and optionally --ignored. Every
+/// working-tree read goes through here so they stay consistent.
+pub(crate) fn read_porcelain_counts(
+    git: &Git,
+    path: &Path,
+    include_ignored: bool,
+) -> Result<PorcelainCounts> {
+    let mut args = vec!["status", "--porcelain=v1", "--untracked-files=all", "-z"];
+    if include_ignored {
+        args.push("--ignored");
+    }
+    let output = git.run_bytes_in(path, args)?;
+    Ok(classify_porcelain_z(&output.stdout))
+}
+
 /// Unmerged (conflict) status codes: DD/AA, or either column being `U`.
 pub(crate) fn is_conflict(x: char, y: char) -> bool {
     x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')

@@ -210,19 +210,7 @@ fn can_scan_target_details(target: &crate::model::WorktreeInfo) -> bool {
 }
 
 fn read_working_tree_with_ignored(git: &Git, path: &Path) -> Result<WorktreeRemoveWorkingTree> {
-    // -z keeps paths raw and parses newline-containing paths; shared parser is
-    // in git/status.rs.
-    let output = git.run_bytes_in(
-        path,
-        [
-            "status",
-            "--porcelain=v1",
-            "--ignored",
-            "--untracked-files=all",
-            "-z",
-        ],
-    )?;
-    let counts = status::classify_porcelain_z(&output.stdout);
+    let counts = status::read_porcelain_counts(git, path, true)?;
     Ok(WorktreeRemoveWorkingTree {
         clean: counts.staged == 0
             && counts.unstaged == 0
