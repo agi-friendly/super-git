@@ -1,14 +1,14 @@
 use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::config::store::SavedRepository;
 use crate::git::command::Git;
-use crate::git::{preview_worktree, worktree, worktree_plan};
+use crate::git::{execute, preview_worktree, worktree, worktree_plan};
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, WorktreeCreatePlan, WorktreeExecutionRecord, WorktreeInfo,
     WorktreeUndoToken, EXECUTE_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
@@ -585,29 +585,10 @@ fn write_record_create_new(path: &Path, record: &WorktreeExecutionRecord) -> Res
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(record)?;
-    let mut file = create_new_or_already_attempted(path)?;
+    let mut file = execute::create_new_or_already_attempted(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
-}
-
-/// Open a fresh execution record, mapping AlreadyExists to a contract error so a
-/// leftover record from a prior incomplete attempt does not make a still-valid
-/// plan fail with a raw "File exists" io error.
-fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(file) => Ok(file),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            Err(SuperGitError::ExecutePlanInvalid {
-                code: "execution_already_attempted".to_string(),
-                message: format!(
-                    "an execution record already exists at {}; inspect or remove it before retrying",
-                    path.display()
-                ),
-            })
-        }
-        Err(err) => Err(err.into()),
-    }
 }
 
 fn write_record_replace(path: &Path, record: &WorktreeExecutionRecord) -> Result<()> {

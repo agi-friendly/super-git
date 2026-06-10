@@ -620,6 +620,28 @@ fn git_path(git: &Git, root: &Path, path: &str) -> Result<PathBuf> {
     )
 }
 
+/// Open a fresh execution record, mapping AlreadyExists to a contract error.
+/// The record path is a deterministic function of (plan_id, target), so an
+/// existing record means a prior attempt of the same plan did not complete; a
+/// raw "File exists" io error would otherwise make a still-valid plan
+/// permanently unexecutable. Shared by the worktree-create, worktree-remove,
+/// and history-edit record writers.
+pub(crate) fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => Ok(file),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            Err(SuperGitError::ExecutePlanInvalid {
+                code: "execution_already_attempted".to_string(),
+                message: format!(
+                    "an execution record already exists at {}; inspect or remove it before retrying",
+                    path.display()
+                ),
+            })
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 fn hash_index(path: &Path) -> Result<String> {
     Ok(sha256_hex(&read_index_state(path)?.bytes))
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use serde_json::Value;
 
 use crate::git::command::Git;
+use crate::git::execute;
 use crate::git::preview_history_edit::{compute_history_edit_plan_id, preview_history_edit};
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, HistoryEditConfirmation, HistoryEditExecutionRecord,
@@ -747,29 +748,10 @@ fn write_record_create_new(path: &Path, record: &HistoryEditExecutionRecord) -> 
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(record)?;
-    let mut file = create_new_or_already_attempted(path)?;
+    let mut file = execute::create_new_or_already_attempted(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
-}
-
-/// Open a fresh execution record, mapping AlreadyExists to a contract error so a
-/// leftover record from a prior incomplete attempt does not make a still-valid
-/// plan fail with a raw "File exists" io error.
-fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(file) => Ok(file),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            Err(SuperGitError::ExecutePlanInvalid {
-                code: "execution_already_attempted".to_string(),
-                message: format!(
-                    "an execution record already exists at {}; inspect or remove it before retrying",
-                    path.display()
-                ),
-            })
-        }
-        Err(err) => Err(err.into()),
-    }
 }
 
 fn write_record_replace(path: &Path, record: &HistoryEditExecutionRecord) -> Result<()> {
@@ -825,8 +807,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use super::{create_new_or_already_attempted, rollback};
+    use super::rollback;
     use crate::git::command::Git;
+    use crate::git::execute::create_new_or_already_attempted;
     use crate::SuperGitError;
 
     #[test]
