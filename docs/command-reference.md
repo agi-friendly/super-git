@@ -244,6 +244,39 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 `undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
 `reference_commands`.
 
+## `preview history-edit`
+
+Builds a read-only `super-git.plan.v0.4` plan for editing commit history on the
+branch checked out in the current worktree. The first op set is `pick`,
+`reword`, `squash`, and `fixup`, which preserve every tree object, so the
+planned edit can never produce a content conflict.
+
+```bash
+super-git preview history-edit --base <ref>
+super-git preview history-edit --base <ref> --instructions <file|->
+```
+
+`--base` names the last commit that stays untouched; the editable range is
+`base..HEAD`. Without `--instructions`, the command returns a read-only survey
+(`execution.status: "survey"`) whose `range.commits` array is the exact
+template an instruction list must follow, including per-commit `published` and
+`signed` flags an agent should not recompute itself.
+
+With a valid instruction list, an unpublished range reports
+`execution.status: "executable"`. A range containing commits reachable from a
+local remote-tracking ref reports `execution.status: "preview_only"` with
+`requires_confirmation_artifact: true`, because rewriting published history
+needs the separate `super-git.confirmation.v0.1` artifact. Any hard block (for
+example a detached HEAD, an in-progress operation, a merge commit in range, or
+an instruction list that does not cover the range) returns
+`execution.status: "blocked"` with structured, repairable reason codes.
+
+Staged and unstaged changes are allowed with a `working_tree_dirty` warning
+because the mechanism never touches the working tree or the index. Only
+malformed or wrong-schema instruction input fails with `{ ok: false, error }`;
+content problems become blocked plans instead. Preview performs no writes;
+`reference_commands` are documentation only.
+
 ## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.

@@ -140,6 +140,18 @@ pub enum PreviewCommands {
         #[arg(long)]
         worktree: PathBuf,
     },
+
+    /// Preview editing commit history on the current branch (reword/squash/fixup).
+    HistoryEdit {
+        /// Last commit that stays untouched. The editable range is base..HEAD.
+        #[arg(long)]
+        base: String,
+
+        /// Declarative instruction list file. Use '-' to read from stdin.
+        /// Omit it to get a read-only survey of the editable range.
+        #[arg(long)]
+        instructions: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

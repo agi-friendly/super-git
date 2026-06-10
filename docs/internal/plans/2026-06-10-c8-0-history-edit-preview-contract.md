@@ -403,8 +403,7 @@ Preview output remains wrapped by the global JSON envelope:
     "repository": {
       "family_id": "sha256:<git-common-dir-identity>",
       "git_common_dir": "/abs/repo/.git",
-      "main_worktree": "/abs/repo",
-      "selected_from": "/abs/repo"
+      "worktree_root": "/abs/repo"
     },
     "branch": {
       "ref": "refs/heads/feature/login",
@@ -485,8 +484,9 @@ Preview output remains wrapped by the global JSON envelope:
       { "code": "no_conflicted_paths", "status": "passed" },
       { "code": "base_is_ancestor_of_head", "status": "passed" },
       { "code": "range_linear_without_merges", "status": "passed" },
-      { "code": "instructions_match_range", "status": "passed" },
-      { "code": "committer_identity_configured", "status": "passed" }
+      { "code": "commit_signing_disabled", "status": "passed" },
+      { "code": "committer_identity_configured", "status": "passed" },
+      { "code": "instructions_match_range", "status": "passed" }
     ],
     "execution": {
       "status": "executable",
@@ -501,6 +501,7 @@ Preview output remains wrapped by the global JSON envelope:
       "reversibility": "reversible_if_unchanged",
       "requires_human_confirmation": false
     },
+    "warnings": [],
     "effects": [
       "Rewrite 3 commits on refs/heads/feature/login into 2 commits.",
       "Change 1 commit message and fold 1 fixup commit.",
@@ -732,18 +733,18 @@ Acceptance:
 
 Acceptance:
 
-- [ ] `preview history-edit --base <ref> --instructions <file|->` emits a
+- [x] `preview history-edit --base <ref> --instructions <file|->` emits a
       `super-git.plan.v0.4` plan with all fields in this contract.
-- [ ] `preview history-edit --base <ref>` without instructions emits a survey
+- [x] `preview history-edit --base <ref>` without instructions emits a survey
       plan with full range data, `status: "survey"`,
       `execute_supported: false`, and null instructions/result summary.
-- [ ] Unpublished ranges with valid instructions report `executable`.
-- [ ] Published ranges report `preview_only` with
+- [x] Unpublished ranges with valid instructions report `executable`.
+- [x] Published ranges report `preview_only` with
       `requires_confirmation_artifact: true`.
-- [ ] Every hard block in this contract produces `status: "blocked"` with
+- [x] Every hard block in this contract produces `status: "blocked"` with
       structured reasons and details.
-- [ ] Plan hash inputs and exclusions match this contract.
-- [ ] Preview performs no writes.
+- [x] Plan hash inputs and exclusions match this contract.
+- [x] Preview performs no writes.
 
 ### C8-C: Execute unpublished history edit plans
 

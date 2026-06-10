@@ -8,8 +8,9 @@ use super_git_core::config::store::{
 };
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
-    ExecuteResult, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
+    ExecuteResult, HistoryEditPlan, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput,
+    UndoResult, WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan,
+    INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -520,6 +521,54 @@ pub fn print_worktree_remove_plan(mode: OutputMode, plan: &WorktreeRemovePlan) -
                 }
             }
             println!("Automatic undo: not available");
+            println!("Undo strategy: {}", plan.undo_strategy.kind);
+            println!("Writes now: no");
+            Ok(())
+        }
+    }
+}
+
+pub fn print_history_edit_plan(mode: OutputMode, plan: &HistoryEditPlan) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(plan),
+        OutputMode::Human => {
+            println!("Preview: {}", plan.action.kind);
+            println!("Plan: {}", plan.plan_id);
+            println!("Repository: {}", plan.repository.worktree_root.display());
+            match &plan.branch {
+                Some(branch) => println!("Branch: {} @ {}", branch.ref_name, branch.tip_commit),
+                None => println!("Branch: detached HEAD"),
+            }
+            println!("Base: {}", plan.range.base_commit);
+            println!("Commits in range: {}", plan.range.commit_count);
+            println!("Execution: {}", plan.execution.status);
+            if let Some(summary) = &plan.result_summary {
+                println!(
+                    "Result: {} -> {} commits ({} reworded, {} folded)",
+                    summary.commits_before,
+                    summary.commits_after,
+                    summary.messages_changed,
+                    summary.commits_folded
+                );
+            }
+            if !plan.execution.blocked_reasons.is_empty() {
+                println!("Blocked reasons:");
+                for reason in &plan.execution.blocked_reasons {
+                    println!("  - {} ({})", reason.code, reason.severity);
+                }
+            }
+            for warning in &plan.warnings {
+                println!("Warning: {}", warning.code);
+            }
+            println!(
+                "Execute supported: {}",
+                yes_no(plan.execution.execute_supported)
+            );
+            println!(
+                "Confirmation required: {}",
+                yes_no(plan.execution.requires_confirmation_artifact)
+            );
+            println!("Risk: {} / {}", plan.risk.severity, plan.risk.reversibility);
             println!("Undo strategy: {}", plan.undo_strategy.kind);
             println!("Writes now: no");
             Ok(())

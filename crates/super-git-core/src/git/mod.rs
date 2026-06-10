@@ -5,6 +5,7 @@ pub mod execute_worktree_remove;
 pub mod fingerprint;
 pub mod history_edit;
 pub mod preview;
+pub mod preview_history_edit;
 pub mod preview_worktree;
 pub mod preview_worktree_remove;
 pub mod repository;

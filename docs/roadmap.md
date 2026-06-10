@@ -178,6 +178,8 @@ Implemented so far:
   (`docs/internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md`)
 - C8-A read-only range resolver, published scan, and instruction validation
   with structured block codes in `super-git-core`
+- C8-B `preview history-edit` command emitting `super-git.plan.v0.4` with
+  survey/executable/preview_only/blocked execution states and a stable plan id
 
 Planned shape:
 
