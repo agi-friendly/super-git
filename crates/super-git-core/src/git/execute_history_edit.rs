@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -747,10 +747,29 @@ fn write_record_create_new(path: &Path, record: &HistoryEditExecutionRecord) -> 
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(record)?;
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut file = create_new_or_already_attempted(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
+}
+
+/// Open a fresh execution record, mapping AlreadyExists to a contract error so a
+/// leftover record from a prior incomplete attempt does not make a still-valid
+/// plan fail with a raw "File exists" io error.
+fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => Ok(file),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            Err(SuperGitError::ExecutePlanInvalid {
+                code: "execution_already_attempted".to_string(),
+                message: format!(
+                    "an execution record already exists at {}; inspect or remove it before retrying",
+                    path.display()
+                ),
+            })
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn write_record_replace(path: &Path, record: &HistoryEditExecutionRecord) -> Result<()> {
@@ -806,9 +825,26 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use super::rollback;
+    use super::{create_new_or_already_attempted, rollback};
     use crate::git::command::Git;
     use crate::SuperGitError;
+
+    #[test]
+    fn create_new_record_maps_already_exists_to_contract_error() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("intent.json");
+        // Simulate a leftover record from a prior incomplete attempt.
+        std::fs::write(&path, "{}").expect("write record");
+
+        let err = create_new_or_already_attempted(&path).expect_err("must reject existing record");
+
+        match err {
+            SuperGitError::ExecutePlanInvalid { code, .. } => {
+                assert_eq!(code, "execution_already_attempted");
+            }
+            other => panic!("expected ExecutePlanInvalid, got {other:?}"),
+        }
+    }
 
     fn run_git(dir: &Path, args: &[&str]) -> std::process::Output {
         Command::new("git")
