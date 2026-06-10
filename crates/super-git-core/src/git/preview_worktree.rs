@@ -92,6 +92,7 @@ pub fn preview_worktree_create(
         limitations: vec![
             "Undo removes only the worktree created by super-git.".to_string(),
             "Undo refuses if the created worktree is dirty, locked, moved, or no longer matches the execute record.".to_string(),
+            "Undo re-checks cleanliness immediately before removal, but an ignored file created in the small window before `git worktree remove` runs may still be deleted.".to_string(),
             "Undo does not delete branch refs or commits.".to_string(),
         ],
     };

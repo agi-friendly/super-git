@@ -107,6 +107,7 @@ pub fn preview_worktree_remove(
         effects: effects_for(future_execute_eligibility, &target_path),
         limitations: vec![
             "Preview cannot detect editors, terminals, development servers, or file watchers using the target path.".to_string(),
+            "`git worktree remove` deletes ignored files; an ignored file created between the final clean check and the removal may be lost.".to_string(),
         ],
         reference_commands: WorktreeReferenceCommands {
             semantics: "documentation_only".to_string(),

@@ -30,6 +30,11 @@ pub fn undo_worktree_token(current_path: &Path, token: WorktreeUndoToken) -> Res
     validate_target_is_clean(&token)?;
 
     let branch_before = read_branch_ref(&git, &token)?;
+    // Re-check cleanliness immediately before the destructive remove. `git
+    // worktree remove` deletes ignored files without refusing, so this shrinks
+    // (but cannot fully close) the window in which an ignored file created after
+    // the first scan would be lost.
+    validate_target_is_clean(&token)?;
     git.run_write_in(&token.repository, trusted_remove_args(&token))?;
     verify_removed(&token)?;
     verify_branch_preserved(&git, &token, branch_before.as_deref())?;
