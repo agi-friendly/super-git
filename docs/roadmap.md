@@ -176,6 +176,8 @@ Implemented so far:
 
 - C8-0 contract checkpoint for plan-based history edit
   (`docs/internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md`)
+- C8-A read-only range resolver, published scan, and instruction validation
+  with structured block codes in `super-git-core`
 
 Planned shape:
 

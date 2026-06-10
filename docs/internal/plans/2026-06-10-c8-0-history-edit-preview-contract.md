@@ -192,6 +192,10 @@ Input rules:
   message from real context instead of guessing.
 - `fixup` folds like `squash` but keeps the preceding item's message and
   discards its own.
+- When a fold group carries several message-bearing ops, the last one wins;
+  the result stays deterministic without an editor to merge messages.
+- `pick` and `fixup` must not carry `message`. A message there would be
+  silently ignored, and silent intent loss is worse for agents than a block.
 - The first item must be `pick` or `reword`; a fold needs a predecessor.
 - Messages must be non-empty after trimming and are normalized to end with
   exactly one trailing newline; otherwise they are stored verbatim.
@@ -251,6 +255,7 @@ Policy:
 | `instruction_fold_without_predecessor` | The first item is `squash` or `fixup`. |
 | `instruction_message_missing` | `reword` or `squash` without a message. |
 | `instruction_message_empty` | A message is empty after trimming. |
+| `instruction_message_unexpected` | `pick` or `fixup` carries a message that would be silently ignored. |
 | `instructions_no_effective_change` | All items are `pick`; the edit would be a no-op. |
 
 Staged, unstaged, untracked, and ignored files are intentionally allowed. C7
@@ -705,14 +710,14 @@ become unreachable garbage that normal Git maintenance collects later.
 
 Acceptance:
 
-- [ ] Branch, base, ancestor, linearity, cap, and merge checks match this
+- [x] Branch, base, ancestor, linearity, cap, and merge checks match this
       contract.
-- [ ] Published scan is computed from local remote-tracking refs only.
-- [ ] Instruction parsing enforces completeness, order, fold, and message
+- [x] Published scan is computed from local remote-tracking refs only.
+- [x] Instruction parsing enforces completeness, order, fold, and message
       rules with structured reason codes.
-- [ ] Fold computation produces the expected result summary, including the
+- [x] Fold computation produces the expected result summary, including the
       unchanged-prefix optimization boundary.
-- [ ] The resolver performs no writes.
+- [x] The resolver performs no writes.
 
 ### C8-B: `preview history-edit`
 
