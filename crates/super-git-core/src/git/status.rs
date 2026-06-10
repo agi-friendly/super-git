@@ -5,7 +5,19 @@ use crate::model::StatusOutput;
 use crate::Result;
 
 pub fn read_status(path: &Path) -> Result<StatusOutput> {
-    let output = Git::default().run_in(path, ["status", "--porcelain=v1", "--branch"])?;
+    // Pin --untracked-files=all so `super-git status` reports the same untracked
+    // set as inspect/fingerprint/history-edit (which all force it). Otherwise a
+    // repo-level status.showUntrackedFiles=no makes status hide untracked files
+    // that inspect still reports -- an inconsistency an agent cannot reconcile.
+    let output = Git::default().run_in(
+        path,
+        [
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=all",
+        ],
+    )?;
     Ok(parse_status_porcelain(&output.stdout))
 }
 
@@ -34,7 +46,10 @@ pub(crate) fn classify_porcelain_z(stdout: &[u8]) -> PorcelainCounts {
     let mut counts = PorcelainCounts::default();
     let mut records = stdout.split(|byte| *byte == 0).filter(|r| !r.is_empty());
     while let Some(record) = records.next() {
-        if record.len() < 3 {
+        // A real record is `XY<space><path>` with a non-empty path, i.e. >= 4
+        // bytes (matching the old line-based `line.len() < 4` guard). Skipping at
+        // < 4 avoids treating a malformed empty-path record as a real entry.
+        if record.len() < 4 {
             continue;
         }
         let (x, y) = (record[0] as char, record[1] as char);
