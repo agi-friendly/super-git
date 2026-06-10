@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::git::command::Git;
+use crate::git::status;
 use crate::git::worktree;
 use crate::model::{
     HeadInfo, InspectRiskHint, InspectSummary, InspectWarning, NextAction, NextGuardrails,
@@ -262,63 +263,21 @@ fn worktree_code(kind: WorktreeKind) -> &'static str {
 
 /// 워킹 트리 변경을 요약한다. 상세 목록은 status 명령에 맡기고 카운트+충돌 목록만 만든다.
 fn read_working_tree(git: &Git, path: &Path) -> Result<WorkingTree> {
-    let output = git.run_in(path, ["status", "--porcelain=v1"])?;
-    Ok(classify_working_tree(&output.stdout))
-}
-
-/// `git status --porcelain=v1` 출력을 staged/unstaged/untracked 카운트와 충돌 목록으로 분류한다.
-fn classify_working_tree(output: &str) -> WorkingTree {
-    let mut staged = 0;
-    let mut unstaged = 0;
-    let mut untracked = 0;
-    let mut conflicts = Vec::new();
-
-    for line in output.lines() {
-        // 각 라인은 "XY <path>" 형태다(X=index, Y=worktree). 너무 짧으면 건너뛴다.
-        if line.len() < 4 {
-            continue;
-        }
-        let code = &line[..2];
-        let path = line[3..].to_string();
-        let bytes = code.as_bytes();
-        let (x, y) = (bytes[0] as char, bytes[1] as char);
-
-        if code == "??" {
-            untracked += 1;
-        } else if is_conflict(x, y) {
-            conflicts.push(path);
-        } else {
-            if is_change(x) {
-                staged += 1;
-            }
-            if is_change(y) {
-                unstaged += 1;
-            }
-        }
-    }
-
-    let conflict_count = conflicts.len() as u32;
-    let clean = staged == 0 && unstaged == 0 && untracked == 0 && conflict_count == 0;
-
-    WorkingTree {
-        clean,
-        staged,
-        unstaged,
-        untracked,
-        conflict_count,
-        conflicts,
-    }
-}
-
-/// unmerged(충돌) 상태 코드인지 판별한다.
-/// DD/AA, 그리고 X나 Y가 U인 모든 조합(AU/UD/UA/DU/UU)이 충돌이다.
-fn is_conflict(x: char, y: char) -> bool {
-    x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')
-}
-
-/// 변경을 나타내는 상태 문자인지 판별한다(공백=무변경, ?=미추적 제외).
-fn is_change(code: char) -> bool {
-    code != ' ' && code != '?'
+    // -z keeps conflict paths raw (no core.quotePath C-quoting) and parses
+    // paths containing newlines; the shared parser is in git/status.rs.
+    let output = git.run_bytes_in(path, ["status", "--porcelain=v1", "-z"])?;
+    let counts = status::classify_porcelain_z(&output.stdout);
+    Ok(WorkingTree {
+        clean: counts.staged == 0
+            && counts.unstaged == 0
+            && counts.untracked == 0
+            && counts.conflict_count() == 0,
+        staged: counts.staged,
+        unstaged: counts.unstaged,
+        untracked: counts.untracked,
+        conflict_count: counts.conflict_count(),
+        conflicts: counts.conflicts,
+    })
 }
 
 /// 현재 상태로부터 다음 행동 guardrail을 만든다.
@@ -819,43 +778,8 @@ mod tests {
             .any(|w| w.code == "upstream_comparison_failed"));
     }
 
-    #[test]
-    fn classify_working_tree_clean_when_empty() {
-        let wt = classify_working_tree("");
-        assert!(wt.clean);
-        assert_eq!(wt.staged, 0);
-        assert_eq!(wt.unstaged, 0);
-        assert_eq!(wt.untracked, 0);
-        assert_eq!(wt.conflict_count, 0);
-        assert!(wt.conflicts.is_empty());
-    }
-
-    #[test]
-    fn classify_working_tree_counts_changes() {
-        // "M  a" staged, " M b" unstaged, "MM c" both, "?? d" untracked
-        let output = "M  a.txt\n M b.txt\nMM c.txt\n?? d.txt\n";
-        let wt = classify_working_tree(output);
-        assert!(!wt.clean);
-        assert_eq!(wt.staged, 2); // a.txt, c.txt
-        assert_eq!(wt.unstaged, 2); // b.txt, c.txt
-        assert_eq!(wt.untracked, 1); // d.txt
-        assert_eq!(wt.conflict_count, 0);
-    }
-
-    #[test]
-    fn classify_working_tree_collects_conflicts() {
-        let output = "UU both_mod.txt\nAA both_add.txt\nDU del_by_us.txt\n";
-        let wt = classify_working_tree(output);
-        assert_eq!(wt.conflict_count, 3);
-        assert_eq!(
-            wt.conflicts,
-            vec!["both_mod.txt", "both_add.txt", "del_by_us.txt"]
-        );
-        // 충돌은 staged/unstaged 카운트에서 제외된다.
-        assert_eq!(wt.staged, 0);
-        assert_eq!(wt.unstaged, 0);
-        assert!(!wt.clean);
-    }
+    // Working-tree classification moved to git/status.rs (classify_porcelain_z),
+    // which is unit-tested there with -z input including unicode/rename cases.
 
     fn clean_wt() -> WorkingTree {
         WorkingTree {

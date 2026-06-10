@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::config::store::repository_id;
 use crate::git::command::Git;
-use crate::git::state;
+use crate::git::{state, status};
 use crate::model::Operation;
 use crate::{Result, SuperGitError};
 
@@ -789,48 +789,17 @@ fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {
 }
 
 fn read_working_tree(git: &Git, root: &Path) -> Result<HistoryEditWorkingTree> {
-    let output = git.run_in(root, ["status", "--porcelain=v1"])?;
-    let mut staged = 0;
-    let mut unstaged = 0;
-    let mut untracked = 0;
-    let mut conflicts = Vec::new();
-
-    for line in output.stdout.lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let code = &line[..2];
-        let bytes = code.as_bytes();
-        let (x, y) = (bytes[0] as char, bytes[1] as char);
-        if code == "??" {
-            untracked += 1;
-        } else if is_conflict(x, y) {
-            conflicts.push(line[3..].to_string());
-        } else {
-            if is_change(x) {
-                staged += 1;
-            }
-            if is_change(y) {
-                unstaged += 1;
-            }
-        }
-    }
-
+    // -z keeps conflict paths raw and parses newline-containing paths; shared
+    // parser is in git/status.rs.
+    let output = git.run_bytes_in(root, ["status", "--porcelain=v1", "-z"])?;
+    let counts = status::classify_porcelain_z(&output.stdout);
     Ok(HistoryEditWorkingTree {
-        staged,
-        unstaged,
-        untracked,
-        conflict_count: conflicts.len() as u32,
-        conflicts,
+        staged: counts.staged,
+        unstaged: counts.unstaged,
+        untracked: counts.untracked,
+        conflict_count: counts.conflict_count(),
+        conflicts: counts.conflicts,
     })
-}
-
-fn is_conflict(x: char, y: char) -> bool {
-    x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')
-}
-
-fn is_change(code: char) -> bool {
-    code != ' ' && code != '?'
 }
 
 #[cfg(test)]
