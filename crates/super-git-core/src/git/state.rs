@@ -589,8 +589,7 @@ fn repo_root(git: &Git, path: &Path) -> Result<PathBuf> {
 
 /// worktree/submodule에서도 정확한 git 디렉토리를 얻기 위해 git에게 직접 물어본다.
 fn absolute_git_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(path, ["rev-parse", "--absolute-git-dir"])?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, ["rev-parse", "--absolute-git-dir"])
 }
 
 /// 현재 worktree가 family에서 어떤 위치인지 요약한다.

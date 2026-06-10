@@ -1,9 +1,25 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use crate::{Result, SuperGitError};
+
+/// Decode a single path printed by git, trimming one trailing newline. On unix
+/// the bytes become an OsString verbatim (non-UTF-8 names survive); elsewhere
+/// (git emits UTF-8 on Windows) a lossy string is used.
+fn decode_git_path(stdout: &[u8]) -> PathBuf {
+    let trimmed = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(OsString::from_vec(trimmed.to_vec()))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(trimmed).into_owned())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Git {
@@ -101,6 +117,19 @@ impl Git {
         shown_args.extend(display_args(&args));
 
         self.output_or_error(shown_args, output)
+    }
+
+    /// Read a single path printed by git (e.g. `rev-parse --show-toplevel`).
+    /// On unix the path is built from raw bytes so a non-UTF-8 filename is
+    /// preserved exactly, instead of being mangled into U+FFFD by lossy string
+    /// conversion (which would yield a path that does not exist on disk).
+    pub fn run_path_in<I, S>(&self, path: &Path, args: I) -> Result<PathBuf>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = self.run_bytes_in(path, args)?;
+        Ok(decode_git_path(&output.stdout))
     }
 
     /// Write-side run with extra environment variables and a stdin payload.
@@ -279,4 +308,25 @@ fn display_args(args: &[OsString]) -> Vec<String> {
     args.iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::decode_git_path;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn decode_git_path_preserves_non_utf8_bytes() {
+        // "/repo/caf<0xe9>" (latin-1 e-acute) with a trailing newline: the byte
+        // is invalid UTF-8 and lossy conversion would replace it with U+FFFD,
+        // producing a path that does not exist on disk.
+        let path = decode_git_path(b"/repo/caf\xe9\n");
+        assert_eq!(path.as_os_str().as_bytes(), b"/repo/caf\xe9");
+    }
+
+    #[test]
+    fn decode_git_path_trims_single_trailing_newline() {
+        let path = decode_git_path(b"/abs/repo\n");
+        assert_eq!(path.as_os_str().as_bytes(), b"/abs/repo");
+    }
 }

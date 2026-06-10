@@ -645,16 +645,14 @@ fn validate_base_input(base_input: &str) -> Result<()> {
 }
 
 fn worktree_root(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(path, ["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, ["rev-parse", "--show-toplevel"])
 }
 
 fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(
+    git.run_path_in(
         path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    )
 }
 
 fn rev_parse_commit(git: &Git, path: &Path, spec: &str) -> Option<String> {

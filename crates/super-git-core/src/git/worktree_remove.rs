@@ -188,16 +188,14 @@ fn list_worktrees_for_scan(
 }
 
 fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(
+    git.run_path_in(
         path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    )
 }
 
 fn worktree_root(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(path, ["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, ["rev-parse", "--show-toplevel"])
 }
 
 fn read_path_from_git<const N: usize>(git: &Git, path: &Path, args: [&str; N]) -> Option<PathBuf> {
