@@ -578,15 +578,13 @@ fn collect_scan_blocks(
         );
     }
     // Execute preserves author identity via GIT_AUTHOR_NAME/EMAIL; git rejects an
-    // empty author name ("empty ident name not allowed") at commit-tree time. A
-    // commit with an empty author would otherwise reach an "executable" plan that
-    // can never succeed, so block it honestly up front.
+    // empty author NAME ("empty ident name not allowed") at commit-tree time, but
+    // accepts an empty author email ("Name <>"). Block only the empty-name case,
+    // which would otherwise reach an "executable" plan that can never succeed.
     let unreadable_author_commits: Vec<&str> = range
         .commits
         .iter()
-        .filter(|commit| {
-            commit.author_name.trim().is_empty() || commit.author_email.trim().is_empty()
-        })
+        .filter(|commit| commit.author_name.trim().is_empty())
         .map(|commit| commit.commit.as_str())
         .collect();
     if !unreadable_author_commits.is_empty() {
@@ -1203,6 +1201,54 @@ mod tests {
         );
         assert!(block_codes(&scan).contains(&"author_identity_unreadable"));
         assert_eq!(scan.execution_status, "blocked");
+    }
+
+    #[test]
+    fn scan_allows_commit_with_empty_author_email() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let (repo, oids) = repo_with_feature_range(temp_dir.path());
+        let tree = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+        // git accepts an empty author email ("Name <>") -- only an empty NAME is
+        // rejected at commit-tree time. Such a commit must stay rewritable, not
+        // be over-blocked as author_identity_unreadable.
+        let raw = format!(
+            "tree {tree}\nparent {parent}\nauthor Author Name <> 1700000000 +0000\ncommitter test <test@example.com> 1700000000 +0000\n\nempty email\n",
+            parent = oids[2],
+        );
+        let mut hash_object = Command::new("git")
+            .current_dir(&repo)
+            .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn hash-object");
+        hash_object
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(raw.as_bytes())
+            .expect("write raw commit");
+        let output = hash_object.wait_with_output().expect("hash-object output");
+        assert!(output.status.success());
+        let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        git(&repo, &["update-ref", "refs/heads/feature/login", &oid]);
+
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+
+        let entry = scan
+            .range
+            .commits
+            .iter()
+            .find(|commit| commit.commit == oid)
+            .expect("empty-email commit in range");
+        assert!(
+            entry.author_email.trim().is_empty(),
+            "email parsed as empty"
+        );
+        assert!(!entry.author_name.trim().is_empty(), "name is present");
+        assert!(!block_codes(&scan).contains(&"author_identity_unreadable"));
     }
 
     #[test]
