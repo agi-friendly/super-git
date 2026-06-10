@@ -474,6 +474,10 @@ fn trusted_git_args(plan: &WorktreeCreatePlan) -> Result<Vec<OsString>> {
     if matches!(plan.source_ref.kind.as_str(), "tag" | "commit") {
         args.push(OsString::from("--detach"));
     }
+    // Everything after --end-of-options is positional, so a branch short name
+    // like "--force" (creatable via update-ref) cannot inject an option into
+    // `git worktree add`.
+    args.push(OsString::from("--end-of-options"));
     args.push(plan.target.path.as_os_str().to_os_string());
     args.push(OsString::from(checkout_arg(plan)?));
     Ok(args)
