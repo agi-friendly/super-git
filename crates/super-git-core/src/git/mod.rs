@@ -13,6 +13,7 @@ pub mod repository;
 pub mod state;
 pub mod status;
 pub mod undo;
+pub mod undo_history_edit;
 pub mod undo_registry;
 pub mod undo_worktree;
 pub mod worktree;

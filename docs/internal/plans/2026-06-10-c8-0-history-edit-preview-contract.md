@@ -779,12 +779,12 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Undo validates provenance, tip identity, old-tip reachability, and
+- [x] Undo validates provenance, tip identity, old-tip reachability, and
       operation state before moving the ref.
-- [ ] A branch tip that advanced after execute refuses with
+- [x] A branch tip that advanced after execute refuses with
       `branch_advanced_since_execute`.
-- [ ] Undo moves the ref via compare-and-swap and post-verifies the old tip.
-- [ ] Undo never touches working-tree files, the index, or other refs.
+- [x] Undo moves the ref via compare-and-swap and post-verifies the old tip.
+- [x] Undo never touches working-tree files, the index, or other refs.
 
 ### C8-E: Confirmation-gated execute for published ranges
 

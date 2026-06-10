@@ -337,6 +337,15 @@ worktree. It uses `git worktree remove` without `--force`, does not delete
 branch refs or history, and removes a parent directory created by `super-git`
 only when that parent is empty.
 
+For `history_edit` results, `undo` validates the local execution record's
+provenance (its embedded token must match), that the branch still points at the
+post-execute tip (otherwise it refuses with `branch_advanced_since_execute`),
+that the pre-execute tip is still reachable locally, and that no Git operation is
+in progress. It then moves the branch ref back to the pre-execute tip by
+compare-and-swap and verifies that no other ref changed. It never edits
+working-tree files, the index, or branch history; the rewritten commits simply
+become unreachable objects that normal Git maintenance collects later.
+
 ## `status [path]`
 
 Shows detailed Git status for a repository path or the current directory.

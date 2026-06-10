@@ -183,6 +183,8 @@ Implemented so far:
 - C8-C execute for unpublished plans: plumbing-rebuilt commits, compare-and-swap
   branch move, tree-identity post-verify with rollback, author preservation, and
   a branch-tip-snapshot undo token
+- C8-D undo: provenance-checked branch-tip restore by compare-and-swap, refusing
+  an advanced tip and verifying no other ref moved
 
 Planned shape:
 
