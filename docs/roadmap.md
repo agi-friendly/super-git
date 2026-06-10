@@ -20,6 +20,13 @@ explicit confirmation and recovery hints instead of an `undo_token`.
 The next stages should expand this lifecycle carefully instead of adding raw Git
 wrappers.
 
+Direction note (2026-06-10): capability stages come before observation
+surfaces. Reading Git state is already easy for agents; editing history,
+predicting conflicts, and driving the lifecycle without juggling plan files are
+not. The repository profile and dashboard move after the capability stages so
+future dashboards can be designed around real super-git tools instead of
+generic Git summaries.
+
 ## Stage 1: CLI Skeleton And Inspect (implemented)
 
 - Rust workspace
@@ -151,7 +158,95 @@ Next:
 - extend worktree remove coverage with additional stale-state fixtures before
   expanding into remove cleanup workflows
 
-## Stage 6: Repository Profile And Dashboard
+## Stage 6: History Edit (Plan-Based Interactive Rebase)
+
+Why this is next:
+
+- `git rebase -i` depends on an interactive editor, which most agent harnesses
+  cannot open. Agents fall back to fragile `GIT_SEQUENCE_EDITOR` scripting, and
+  that is a top history-loss failure mode for weaker models.
+- History editing is where IDE users gain the most over plain CLI users:
+  rewording intermediate commits, squashing, dropping, and reordering. Agents
+  deserve the same leverage through a structured contract.
+- Unlike worktree removal, history edit has an honestly provable undo: rebase
+  moves a branch pointer without deleting objects, so a pre-execute branch
+  snapshot can restore the previous tip.
+
+Implemented so far:
+
+- C8-0 contract checkpoint for plan-based history edit
+  (`docs/internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md`)
+- C8-A read-only range resolver, published scan, and instruction validation
+  with structured block codes in `super-git-core`
+- C8-B `preview history-edit` command emitting `super-git.plan.v0.4` with
+  survey/executable/preview_only/blocked execution states and a stable plan id
+- C8-C execute for unpublished plans: plumbing-rebuilt commits, compare-and-swap
+  branch move, tree-identity post-verify with rollback, author preservation, and
+  a branch-tip-snapshot undo token
+- C8-D undo: provenance-checked branch-tip restore by compare-and-swap, refusing
+  an advanced tip and verifying no other ref moved
+- C8-E confirmation-gated execute for published ranges: a matching
+  `super-git.confirmation.v0.1` artifact with the deterministic phrase plus fresh
+  revalidation; the local undo token still applies but cannot un-publish
+
+Planned shape:
+
+- `preview history-edit` over a commit range, returning per-commit subject,
+  full message, author, upstream/pushed status, and edit constraints as JSON
+- calling preview without instructions returns a read-only survey that
+  doubles as the instruction-list template, so weaker agents never
+  reconstruct history from `git log` parsing by hand
+- a declarative instruction list inside the plan: `pick`, `reword`, `squash`,
+  `fixup`, `drop`, and reordering, instead of todo-file strings
+- the first op set never changes any tree, so `execute` rebuilds the commit
+  chain with Git plumbing and moves the branch ref atomically; interactive
+  rebase machinery is never invoked, and plan-provided text is never executed
+  directly
+- hard blocks first: in-progress operations, conflicted paths, and merge
+  commits in range; staged and unstaged changes are allowed with a warning
+  because the mechanism never touches files
+- rewriting commits already on an upstream requires the destructive
+  confirmation contract from Stage 5 instead of a silent allow
+- undo token restores the pre-execute branch tip after provenance checks
+
+Slicing direction:
+
+- start with `reword` plus `squash`/`fixup`, which cannot produce content
+  conflicts
+- `drop` and reordering land after conflict prediction exists (Stage 7)
+- commit `split` is intentionally deferred
+
+## Stage 7: Merge And Rebase Conflict Prediction
+
+- `git merge-tree`-based dry-run prediction for merge and rebase previews
+- per-file predicted conflicts with both contributing commits
+- prediction feeds Stage 6 `drop`/reorder steps and standalone merge or rebase
+  previews; a safe `drop` for wip commits is the highest-demand consumer and
+  should land early
+- `inspect` gains the branch-relationship context prediction needs, such as
+  merge-base and shared-upstream hints
+- safe branch refresh from
+  `docs/internal/idea/2026-06-07-safe-branch-refresh.md` belongs to this
+  family: fast-forward-only branch updates through existing or temporary
+  worktrees
+- no automatic conflict resolution; prediction and guidance only
+
+## Stage 8: Graduated Execution For Agents
+
+- one-shot execution for low-risk reversible actions, running the same
+  preview -> validate -> execute pipeline in a single invocation
+- two-phase plan and confirmation flows stay mandatory for destructive or
+  history-rewriting actions
+- plan piping via stdin/stdout documented as the default chaining pattern, so
+  weaker agents do not juggle temp files
+- error payloads include machine-actionable next-step candidates, mirroring
+  `inspect.next` guardrails
+
+## Stage 9: Repository Profile And Dashboard
+
+Deliberately placed after the capability stages: the dashboard should be
+imagined from super-git's own contracts, such as history edit, conflict
+prediction, and graduated execution, not from generic Git summaries.
 
 - lightweight repository profile for scale/history hints
 - repository size, commit count, initial commit, last commit, and remotes where
@@ -161,14 +256,14 @@ Next:
 - registered repository summaries
 - stable JSON for future UI surfaces
 
-## Stage 7: Guides For Agents
+## Stage 10: Guides For Agents
 
 - `super-git guide list`
 - conflict/rebase/worktree/super-git usage guides
 - documentation-oriented output for weaker or older coding models
 - no fake execution magic: guides teach how to use the existing safety contract
 
-## Stage 8: Desktop Prototype
+## Stage 11: Desktop Prototype
 
 - thin desktop UI over the core/CLI contracts
 - repository list
@@ -176,7 +271,7 @@ Next:
 - status/worktree views
 - preview/execute/undo flow visualization
 
-## Stage 9+: Integrations And Advanced Git
+## Stage 12+: Integrations And Advanced Git
 
 - Windows Explorer integration
 - macOS Finder integration
@@ -184,5 +279,4 @@ Next:
 - plugin or extension system
 - conflict helper
 - patch create/apply workflow
-- interactive rebase helper
 - reflog and branch browser

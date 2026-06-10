@@ -9,11 +9,12 @@ use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
 use crate::git::state;
+use crate::git::undo_history_edit;
 use crate::git::undo_registry;
 use crate::git::undo_worktree;
 use crate::model::{
-    ExecuteUndoToken, UndoResult, UndoToken, WorktreeUndoToken, UNDO_RESULT_SCHEMA_VERSION,
-    UNDO_TOKEN_SCHEMA_VERSION,
+    ExecuteUndoToken, HistoryEditUndoToken, UndoResult, UndoToken, WorktreeUndoToken,
+    UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -79,9 +80,12 @@ fn parse_token_value(value: &Value) -> Result<ExecuteUndoToken> {
         Some("remove_created_worktree_if_clean") => Ok(ExecuteUndoToken::Worktree(Box::new(
             serde_json::from_value::<WorktreeUndoToken>(value.clone())?,
         ))),
+        Some("restore_branch_tip_snapshot") => Ok(ExecuteUndoToken::HistoryEdit(Box::new(
+            serde_json::from_value::<HistoryEditUndoToken>(value.clone())?,
+        ))),
         Some(_) => invalid_token(
             "unsupported_undo_kind",
-            "undo supports restore_index_snapshot and remove_created_worktree_if_clean",
+            "undo supports restore_index_snapshot, remove_created_worktree_if_clean, and restore_branch_tip_snapshot",
         ),
         None => Ok(ExecuteUndoToken::Index(Box::new(serde_json::from_value(
             value.clone(),
@@ -94,6 +98,9 @@ fn undo_token(current_path: &Path, token: ExecuteUndoToken) -> Result<UndoResult
         ExecuteUndoToken::Index(token) => undo_index_token(current_path, *token),
         ExecuteUndoToken::Worktree(token) => {
             undo_worktree::undo_worktree_token(current_path, *token)
+        }
+        ExecuteUndoToken::HistoryEdit(token) => {
+            undo_history_edit::undo_history_edit_token(current_path, *token)
         }
     }
 }

@@ -30,9 +30,17 @@ Implementation plans and design checkpoints live under:
 - [Worktree create preview contract](internal/plans/2026-06-07-c6-0-worktree-create-preview-contract.md)
 - [Worktree remove preview contract](internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md)
 - [Worktree remove confirmation contract](internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md)
+- [History edit preview contract](internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md)
 
 These files are useful for project history and implementation context, but the
 public-facing contract should be reflected in the main docs listed above.
+
+## Reviews
+
+Point-in-time review reports (snapshots, not active contracts) live under:
+
+- [internal/reviews](internal/reviews/)
+- [2026-06-10 full project review](internal/reviews/2026-06-10-full-project-review.md)
 
 ## Archive
 

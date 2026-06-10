@@ -29,6 +29,8 @@ pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.2";
 pub const DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.3";
+pub const HISTORY_EDIT_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.4";
+pub const HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION: &str = "super-git.instructions.v0.1";
 pub const CONFIRMATION_SCHEMA_VERSION: &str = "super-git.confirmation.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
 pub const EXECUTE_SCHEMA_VERSION: &str = "super-git.execute.v0.2";
@@ -38,6 +40,9 @@ pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
 pub const WORKTREE_REMOVE_EXECUTION_RECORD_SCHEMA_VERSION: &str =
     "super-git.worktree-remove-execution.v0.1";
+pub const HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.history-edit-undo.v0.1";
+pub const HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION: &str =
+    "super-git.history-edit-execution.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -645,6 +650,199 @@ pub struct WorktreeRemoveAcknowledgement {
     pub phrase: Option<String>,
 }
 
+/// `super-git.confirmation.v0.1` 아티팩트의 history_edit 변형.
+/// published 히스토리 재작성 실행 권한을 명시적으로 증명한다.
+/// target은 worktree_remove와 달리 분기 ref/tip 신원을 담는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditConfirmation {
+    pub schema_version: String,
+    pub kind: Option<String>,
+    pub action: Option<String>,
+    pub plan_schema_version: Option<String>,
+    pub plan_id: Option<String>,
+    pub target: Option<HistoryEditConfirmationTarget>,
+    pub acknowledged_reason_codes: Option<Vec<String>>,
+    pub acknowledged_undo_strategy: Option<String>,
+    pub acknowledgement: Option<WorktreeRemoveAcknowledgement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditConfirmationTarget {
+    pub branch_ref: Option<String>,
+    pub git_common_dir: Option<PathBuf>,
+    pub tip_commit: Option<String>,
+}
+
+/// `super-git.plan.v0.4` 히스토리 편집 계획.
+/// 첫 op 세트(pick/reword/squash/fixup)는 트리를 보존하므로 분기 ref만 이동한다.
+/// instructions/result_summary는 survey 모드에서 null로 명시된다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlan {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub action: HistoryEditAction,
+    pub repository: HistoryEditPlanRepository,
+    pub branch: Option<HistoryEditPlanBranch>,
+    pub range: HistoryEditPlanRange,
+    pub published_scan: HistoryEditPublishedScan,
+    pub instructions: Option<HistoryEditPlanInstructions>,
+    pub result_summary: Option<HistoryEditResultSummaryView>,
+    pub preconditions: Vec<HistoryEditPrecondition>,
+    pub execution: HistoryEditExecution,
+    pub risk: ActionRisk,
+    /// published 범위를 실행하려면 별도 confirmation 아티팩트가 필요할 때만 채운다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<PreviewConfirmation>,
+    pub warnings: Vec<HistoryEditPlanWarning>,
+    pub effects: Vec<String>,
+    pub limitations: Vec<String>,
+    pub reference_commands: WorktreeReferenceCommands,
+    pub undo_strategy: HistoryEditUndoStrategy,
+    pub undo_preview: HistoryEditUndoPreview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditAction {
+    pub kind: String,
+    pub options: HistoryEditOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditOptions {
+    pub base: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanRepository {
+    pub family_id: String,
+    pub git_common_dir: PathBuf,
+    pub worktree_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanBranch {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    pub short_name: String,
+    pub tip_commit: String,
+    pub checked_out_at: PathBuf,
+    pub upstream: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanRange {
+    pub base_input: String,
+    pub base_commit: String,
+    pub base_is_ancestor_of_head: bool,
+    pub order: String,
+    pub commit_count: usize,
+    pub commits: Vec<HistoryEditPlanCommit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanCommit {
+    pub commit: String,
+    pub subject: String,
+    pub message: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub published: bool,
+    pub signed: bool,
+    pub is_merge: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPublishedScan {
+    pub basis: String,
+    pub published_commits: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanInstructions {
+    pub schema_version: String,
+    pub order: String,
+    pub items: Vec<HistoryEditPlanInstructionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanInstructionItem {
+    pub commit: String,
+    pub op: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditResultSummaryView {
+    pub commits_before: u32,
+    pub commits_after: u32,
+    pub messages_changed: u32,
+    pub commits_folded: u32,
+    pub final_tree_unchanged: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPrecondition {
+    pub code: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditExecution {
+    pub status: String,
+    pub execute_supported: bool,
+    pub requires_confirmation_artifact: bool,
+    pub raw_git_allowed: bool,
+    pub suggested_super_git_command: Option<Vec<String>>,
+    pub blocked_reasons: Vec<HistoryEditBlockedReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditBlockedReason {
+    pub code: String,
+    pub severity: String,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPlanWarning {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditUndoStrategy {
+    pub kind: String,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditUndoPreview {
+    pub kind: String,
+    pub available_after_execute: bool,
+    pub limitations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateFingerprint {
@@ -705,6 +903,7 @@ pub struct ExecuteResult {
 pub enum ExecuteUndoToken {
     Index(Box<UndoToken>),
     Worktree(Box<WorktreeUndoToken>),
+    HistoryEdit(Box<HistoryEditUndoToken>),
 }
 
 impl ExecuteUndoToken {
@@ -712,6 +911,7 @@ impl ExecuteUndoToken {
         match self {
             Self::Index(token) => &token.kind,
             Self::Worktree(token) => &token.kind,
+            Self::HistoryEdit(token) => &token.kind,
         }
     }
 }
@@ -750,6 +950,43 @@ pub struct WorktreeUndoToken {
     pub execution_record_path: PathBuf,
     pub deletes_branch: bool,
     pub deletes_history: bool,
+}
+
+/// 히스토리 편집 undo 토큰. 분기 ref를 이전 tip으로 되돌리는 것만 보장한다.
+/// 워킹 트리/인덱스/다른 ref는 절대 건드리지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditUndoToken {
+    pub schema_version: String,
+    pub kind: String,
+    pub repository: PathBuf,
+    pub action: String,
+    pub plan_id: String,
+    pub branch_ref: String,
+    pub previous_tip: String,
+    pub new_tip: String,
+    pub git_common_dir: PathBuf,
+    pub family_id: String,
+    pub execution_record_path: PathBuf,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditExecutionRecord {
+    pub schema_version: String,
+    pub status: String,
+    pub action: String,
+    pub plan_id: String,
+    pub repository: HistoryEditPlanRepository,
+    pub branch_ref: String,
+    pub previous_tip: String,
+    pub new_tip: String,
+    pub final_tree: String,
+    pub commits_before: u32,
+    pub commits_after: u32,
+    pub undo_token: Option<HistoryEditUndoToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

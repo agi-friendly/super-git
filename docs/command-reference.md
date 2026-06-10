@@ -244,6 +244,39 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 `undo_strategy.kind: "not_available"`, recovery hints, and documentation-only
 `reference_commands`.
 
+## `preview history-edit`
+
+Builds a read-only `super-git.plan.v0.4` plan for editing commit history on the
+branch checked out in the current worktree. The first op set is `pick`,
+`reword`, `squash`, and `fixup`, which preserve every tree object, so the
+planned edit can never produce a content conflict.
+
+```bash
+super-git preview history-edit --base <ref>
+super-git preview history-edit --base <ref> --instructions <file|->
+```
+
+`--base` names the last commit that stays untouched; the editable range is
+`base..HEAD`. Without `--instructions`, the command returns a read-only survey
+(`execution.status: "survey"`) whose `range.commits` array is the exact
+template an instruction list must follow, including per-commit `published` and
+`signed` flags an agent should not recompute itself.
+
+With a valid instruction list, an unpublished range reports
+`execution.status: "executable"`. A range containing commits reachable from a
+local remote-tracking ref reports `execution.status: "preview_only"` with
+`requires_confirmation_artifact: true`, because rewriting published history
+needs the separate `super-git.confirmation.v0.1` artifact. Any hard block (for
+example a detached HEAD, an in-progress operation, a merge commit in range, or
+an instruction list that does not cover the range) returns
+`execution.status: "blocked"` with structured, repairable reason codes.
+
+Staged and unstaged changes are allowed with a `working_tree_dirty` warning
+because the mechanism never touches the working tree or the index. Only
+malformed or wrong-schema instruction input fails with `{ ok: false, error }`;
+content problems become blocked plans instead. Preview performs no writes;
+`reference_commands` are documentation only.
+
 ## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.
@@ -255,10 +288,29 @@ super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confir
 ```
 
 Current support is intentionally limited to internal allowlisted actions:
-`stage_changes`, executable `worktree_create` plans, and confirmed
-`worktree_remove` plans. `execute` rejects stale plans, tampered plans,
-unsupported actions, unsupported options, blocked worktree plans, and
-mismatched repository state.
+`stage_changes`, executable `worktree_create` plans, confirmed
+`worktree_remove` plans, and `history_edit` plans (executable, or `preview_only`
+with a confirmation artifact). `execute` rejects stale plans, tampered plans,
+unsupported actions, unsupported options, blocked worktree plans, and mismatched
+repository state.
+
+For `history_edit`, execute re-derives the plan from fresh state and requires an
+identical plan id before writing, then rebuilds the commit chain with Git
+plumbing (`commit-tree`), moves the branch ref by compare-and-swap, and
+post-verifies that the final tree is unchanged. Leading unchanged picks keep
+their original object ids; author identity is preserved on every rewritten
+commit; the working tree and index are never touched. Successful results carry a
+`restore_branch_tip_snapshot` undo token.
+
+Unpublished ranges (`execution.status: "executable"`) execute directly and must
+not carry a confirmation artifact. Published ranges
+(`execution.status: "preview_only"`) require a separate
+`super-git.confirmation.v0.1` artifact whose target, reason codes, undo
+strategy, and CLI phrase
+(`rewrite published history on <branch.ref> at <branch.tip_commit>`) match the
+plan; the confirmation is authorization only and never replaces fresh
+revalidation. The undo token still restores the local branch tip but cannot
+un-publish anything already pushed.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;
@@ -293,6 +345,15 @@ target working tree including ignored files before removing the linked
 worktree. It uses `git worktree remove` without `--force`, does not delete
 branch refs or history, and removes a parent directory created by `super-git`
 only when that parent is empty.
+
+For `history_edit` results, `undo` validates the local execution record's
+provenance (its embedded token must match), that the branch still points at the
+post-execute tip (otherwise it refuses with `branch_advanced_since_execute`),
+that the pre-execute tip is still reachable locally, and that no Git operation is
+in progress. It then moves the branch ref back to the pre-execute tip by
+compare-and-swap and verifies that no other ref changed. It never edits
+working-tree files, the index, or branch history; the rewritten commits simply
+become unreachable objects that normal Git maintenance collects later.
 
 ## `status [path]`
 

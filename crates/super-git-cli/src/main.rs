@@ -11,7 +11,8 @@ use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
 use super_git_core::git::{
-    execute, preview, preview_worktree, preview_worktree_remove, state, status, undo, worktree,
+    execute, preview, preview_history_edit, preview_worktree, preview_worktree_remove, state,
+    status, undo, worktree,
 };
 
 use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
@@ -202,6 +203,21 @@ fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
                 .context("could not preview worktree_remove")?;
 
             output::print_worktree_remove_plan(mode, &plan)
+        }
+        PreviewCommands::HistoryEdit { base, instructions } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let instructions_bytes = instructions
+                .as_ref()
+                .map(|path| read_json_arg(path, "instructions"))
+                .transpose()?;
+            let plan = preview_history_edit::preview_history_edit(
+                &path,
+                &base,
+                instructions_bytes.as_deref(),
+            )
+            .context("could not preview history_edit")?;
+
+            output::print_history_edit_plan(mode, &plan)
         }
     }
 }

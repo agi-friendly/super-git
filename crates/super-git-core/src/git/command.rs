@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use crate::{Result, SuperGitError};
 
@@ -99,6 +100,43 @@ impl Git {
         let mut shown_args = vec!["-C".to_string(), path.display().to_string()];
         shown_args.extend(display_args(&args));
 
+        self.output_or_error(shown_args, output)
+    }
+
+    /// Write-side run with extra environment variables and a stdin payload.
+    /// Used by history edit's `commit-tree`, which needs `GIT_AUTHOR_*` to
+    /// preserve each rewritten commit's author and reads the message from stdin.
+    pub fn run_write_in_with_env_stdin<I, S>(
+        &self,
+        path: &Path,
+        args: I,
+        envs: &[(&str, &str)],
+        stdin_bytes: &[u8],
+    ) -> Result<GitOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        let mut command = self.write_command();
+        command.arg("-C").arg(path).args(&args);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .expect("stdin was requested as piped")
+            .write_all(stdin_bytes)?;
+        let output = child.wait_with_output()?;
+
+        let mut shown_args = vec!["-C".to_string(), path.display().to_string()];
+        shown_args.extend(display_args(&args));
         self.output_or_error(shown_args, output)
     }
 
