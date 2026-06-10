@@ -48,10 +48,9 @@ pub fn undo_history_edit_token(
         return mismatch("operation", "none", operation_name(operation));
     }
 
-    let refs_before = read_refs(&git, &worktree_root)?;
-
     // Compare-and-swap from new_tip back to previous_tip: a concurrent move
-    // makes update-ref refuse, so undo never clobbers an unexpected tip.
+    // makes update-ref refuse, so undo never clobbers an unexpected tip. Because
+    // the call names exactly one ref, no other ref can change by our hand.
     git.run_write_in(
         &worktree_root,
         [
@@ -67,7 +66,7 @@ pub fn undo_history_edit_token(
         actual: format!("update-ref refused: {err}"),
     })?;
 
-    post_verify(&git, &worktree_root, &token, &refs_before)?;
+    post_verify(&git, &worktree_root, &token)?;
 
     Ok(UndoResult {
         schema_version: UNDO_RESULT_SCHEMA_VERSION.to_string(),
@@ -264,70 +263,17 @@ fn validate_execution_record_path(token: &HistoryEditUndoToken) -> Result<()> {
     Ok(())
 }
 
-fn post_verify(
-    git: &Git,
-    worktree_root: &Path,
-    token: &HistoryEditUndoToken,
-    refs_before: &[(String, String)],
-) -> Result<()> {
+fn post_verify(git: &Git, worktree_root: &Path, token: &HistoryEditUndoToken) -> Result<()> {
+    // The compare-and-swap update-ref names exactly one ref, so the only thing
+    // worth confirming is that the branch landed on previous_tip. Diffing the
+    // whole ref set would add no safety (we cannot move another ref) while
+    // turning an unrelated concurrent ref change, such as a background fetch
+    // updating a remote-tracking ref, into a spurious undo failure.
     let tip = read_ref_oid(git, worktree_root, &token.branch_ref)?;
     if tip != token.previous_tip {
         return mismatch("post_verify.branch_tip", &token.previous_tip, &tip);
     }
-    // The branch is the only ref that may change; everything else must be
-    // byte-identical, so undo cannot silently move tags or remotes.
-    let refs_after = read_refs(git, worktree_root)?;
-    if let Some(changed) = only_branch_changed(refs_before, &refs_after, &token.branch_ref) {
-        return mismatch(
-            "post_verify.unexpected_ref_change",
-            &token.branch_ref,
-            &changed,
-        );
-    }
     Ok(())
-}
-
-/// Returns the name of an unexpectedly changed ref, or None when the branch is
-/// the only difference between the two ref sets.
-fn only_branch_changed(
-    before: &[(String, String)],
-    after: &[(String, String)],
-    branch_ref: &str,
-) -> Option<String> {
-    let find = |refs: &[(String, String)], name: &str| {
-        refs.iter()
-            .find(|(refname, _)| refname == name)
-            .map(|(_, oid)| oid.clone())
-    };
-    let names: std::collections::BTreeSet<&str> = before
-        .iter()
-        .chain(after.iter())
-        .map(|(refname, _)| refname.as_str())
-        .collect();
-    for name in names {
-        if name == branch_ref {
-            continue;
-        }
-        if find(before, name) != find(after, name) {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-fn read_refs(git: &Git, worktree_root: &Path) -> Result<Vec<(String, String)>> {
-    let output = git.run_in(
-        worktree_root,
-        ["for-each-ref", "--format=%(objectname) %(refname)"],
-    )?;
-    Ok(output
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            line.split_once(' ')
-                .map(|(oid, refname)| (refname.to_string(), oid.to_string()))
-        })
-        .collect())
 }
 
 fn read_ref_oid(git: &Git, worktree_root: &Path, reference: &str) -> Result<String> {
