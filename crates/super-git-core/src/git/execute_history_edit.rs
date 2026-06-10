@@ -23,11 +23,17 @@ pub fn execute_history_edit_plan(
     plan: HistoryEditPlan,
 ) -> Result<ExecuteResult> {
     validate_static_contract(&plan)?;
-    validate_fresh_binding(current_path, &plan)?;
+    // The whole write path runs off `fresh`, not the caller-supplied `plan`.
+    // Author identity and picked-commit messages are excluded from plan_id (the
+    // contract treats them as derivable from the bound object ids), so trusting
+    // the plan's copy would let a tampered plan forge them while passing every
+    // check. `fresh` re-reads those fields from the live repository, and its
+    // bound fields are proven identical to the plan by the plan_id match.
+    let fresh = validate_fresh_binding(current_path, &plan)?;
 
     let git = Git::default();
-    let worktree_root = plan.repository.worktree_root.clone();
-    let branch = plan
+    let worktree_root = fresh.repository.worktree_root.clone();
+    let branch = fresh
         .branch
         .as_ref()
         .expect("executable plan has a branch (validated above)");
@@ -44,27 +50,27 @@ pub fn execute_history_edit_plan(
     let old_tree = read_tree_oid(&git, &worktree_root, &previous_tip)?;
     let status_before = read_status_signature(&git, &worktree_root)?;
 
-    let groups = build_groups(&plan)?;
-    let new_tip = rebuild_commits(&git, &worktree_root, &plan.range.base_commit, &groups)?;
+    let groups = build_groups(&fresh)?;
+    let new_tip = rebuild_commits(&git, &worktree_root, &fresh.range.base_commit, &groups)?;
     if new_tip == previous_tip {
         // The supported op set always changes at least one commit, so an
         // unchanged tip means the rebuild logic is wrong; never move the ref.
         return mismatch("rebuilt_tip", "different_from_previous_tip", &new_tip);
     }
 
-    let record_path = execution_record_path(&plan, &branch_ref);
+    let record_path = execution_record_path(&fresh, &branch_ref);
     let commits_after = groups.len() as u32;
     let intent = HistoryEditExecutionRecord {
         schema_version: HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION.to_string(),
         status: "intent".to_string(),
         action: ACTION_HISTORY_EDIT.to_string(),
-        plan_id: plan.plan_id.clone(),
-        repository: plan.repository.clone(),
+        plan_id: fresh.plan_id.clone(),
+        repository: fresh.repository.clone(),
         branch_ref: branch_ref.clone(),
         previous_tip: previous_tip.clone(),
         new_tip: new_tip.clone(),
         final_tree: old_tree.clone(),
-        commits_before: plan.range.commit_count as u32,
+        commits_before: fresh.range.commit_count as u32,
         commits_after,
         undo_token: None,
     };
@@ -83,7 +89,7 @@ pub fn execute_history_edit_plan(
     if let Err(err) = post_verify(
         &git,
         &worktree_root,
-        &plan,
+        &fresh,
         &new_tip,
         &old_tree,
         commits_after,
@@ -99,7 +105,7 @@ pub fn execute_history_edit_plan(
     }
 
     let status_after = read_status_signature(&git, &worktree_root)?;
-    let mut effects = success_effects(&plan, &branch_ref, &new_tip);
+    let mut effects = success_effects(&fresh, &branch_ref, &new_tip);
     if status_after != status_before {
         effects.push(
             "Note: working-tree status changed during execute (external edit); the branch edit still applied.".to_string(),
@@ -111,12 +117,12 @@ pub fn execute_history_edit_plan(
         kind: "restore_branch_tip_snapshot".to_string(),
         repository: worktree_root.clone(),
         action: ACTION_HISTORY_EDIT.to_string(),
-        plan_id: plan.plan_id.clone(),
+        plan_id: fresh.plan_id.clone(),
         branch_ref: branch_ref.clone(),
         previous_tip: previous_tip.clone(),
         new_tip: new_tip.clone(),
-        git_common_dir: plan.repository.git_common_dir.clone(),
-        family_id: plan.repository.family_id.clone(),
+        git_common_dir: fresh.repository.git_common_dir.clone(),
+        family_id: fresh.repository.family_id.clone(),
         execution_record_path: record_path.clone(),
         deletes_branch: false,
         deletes_history: false,
@@ -130,7 +136,7 @@ pub fn execute_history_edit_plan(
 
     Ok(ExecuteResult {
         schema_version: EXECUTE_SCHEMA_VERSION.to_string(),
-        plan_id: plan.plan_id,
+        plan_id: fresh.plan_id,
         action: ACTION_HISTORY_EDIT.to_string(),
         repository: worktree_root,
         executed: true,
@@ -217,8 +223,10 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
 
 /// Re-derive the plan from fresh repository state and require an identical plan
 /// id. This binds branch tip, range commits, published status, and instructions
-/// in one check: any drift since preview changes the id and aborts.
-fn validate_fresh_binding(current_path: &Path, plan: &HistoryEditPlan) -> Result<()> {
+/// in one check: any drift since preview changes the id and aborts. The fresh
+/// plan is returned so the write path runs off authentic, live-read fields
+/// rather than the caller-supplied plan's (forgeable) advisory copies.
+fn validate_fresh_binding(current_path: &Path, plan: &HistoryEditPlan) -> Result<HistoryEditPlan> {
     let instructions_bytes = reconstruct_instructions_bytes(plan)?;
     let fresh = preview_history_edit(
         current_path,
@@ -232,7 +240,8 @@ fn validate_fresh_binding(current_path: &Path, plan: &HistoryEditPlan) -> Result
             &fresh.execution.status,
         );
     }
-    ensure_match("plan_id", &plan.plan_id, &fresh.plan_id)
+    ensure_match("plan_id", &plan.plan_id, &fresh.plan_id)?;
+    Ok(fresh)
 }
 
 fn reconstruct_instructions_bytes(plan: &HistoryEditPlan) -> Result<Vec<u8>> {

@@ -376,6 +376,45 @@ fn survey_plan_cannot_be_executed() {
 }
 
 #[test]
+fn tampered_advisory_fields_are_ignored_in_favor_of_authentic_repo_values() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"fix: real"}},{{"commit":"{}","op":"fixup"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let mut plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    // Author and the picked commit's original message are excluded from plan_id
+    // (derivable from the bound object id), so a tampered plan keeps a valid id.
+    // Execute must ignore these forged copies and use the authentic repo values.
+    plan["data"]["range"]["commits"][0]["author_email"] = serde_json::json!("attacker@evil.com");
+    plan["data"]["range"]["commits"][0]["author_name"] = serde_json::json!("Attacker");
+    plan["data"]["range"]["commits"][0]["message"] = serde_json::json!("forged subject\n");
+
+    let json = json_output(execute_plan_from_stdin(&repo, &plan));
+    assert_eq!(
+        json["ok"], true,
+        "tampered advisory fields must still validate"
+    );
+
+    // The picked (first) commit keeps its real author and real message.
+    let first_subject = git_stdout(&repo, &["log", "--reverse", "--format=%s", "main..HEAD"])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        first_subject, "feat(login): add form",
+        "forged pick message must be ignored"
+    );
+    let authors = git_stdout(&repo, &["log", "--format=%ae", "main..HEAD"]);
+    assert!(
+        authors.lines().all(|line| line == "jane@example.com"),
+        "forged author must be ignored, got: {authors}"
+    );
+}
+
+#[test]
 fn execute_writes_completed_execution_record_with_undo_token() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());
