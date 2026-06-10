@@ -9,6 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
+use crate::git::execute_history_edit;
 use crate::git::execute_worktree;
 use crate::git::execute_worktree_remove;
 use crate::git::fingerprint::{read_state_fingerprint, resolved_stage_changes_paths};
@@ -17,10 +18,11 @@ use crate::git::preview_worktree_remove;
 use crate::git::state;
 use crate::git::undo_registry;
 use crate::model::{
-    ExecuteResult, ExecuteUndoToken, Operation, PreviewPlan, PreviewPrecondition, UndoToken,
-    WorktreeCreatePlan, WorktreeRemoveConfirmation, WorktreeRemovePlan,
+    ExecuteResult, ExecuteUndoToken, HistoryEditPlan, Operation, PreviewPlan, PreviewPrecondition,
+    UndoToken, WorktreeCreatePlan, WorktreeRemoveConfirmation, WorktreeRemovePlan,
     CONFIRMATION_SCHEMA_VERSION, DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION, EXECUTE_SCHEMA_VERSION,
-    PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION, WORKTREE_PLAN_SCHEMA_VERSION,
+    HISTORY_EDIT_PLAN_SCHEMA_VERSION, PLAN_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
+    WORKTREE_PLAN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -49,6 +51,10 @@ pub fn execute_plan_bytes_with_confirmation(
         PlanToExecute::WorktreeRemove(plan) => {
             execute_worktree_remove_plan(current_path, *plan, confirmation_bytes)
         }
+        PlanToExecute::HistoryEdit(plan) => {
+            reject_unexpected_confirmation(confirmation_bytes)?;
+            execute_history_edit::execute_history_edit_plan(current_path, *plan)
+        }
     }
 }
 
@@ -56,6 +62,7 @@ enum PlanToExecute {
     StageChanges(Box<PreviewPlan>),
     WorktreeCreate(Box<WorktreeCreatePlan>),
     WorktreeRemove(Box<WorktreeRemovePlan>),
+    HistoryEdit(Box<HistoryEditPlan>),
 }
 
 fn parse_plan(bytes: &[u8]) -> Result<PlanToExecute> {
@@ -91,9 +98,12 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
         Some(DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::WorktreeRemove(
             Box::new(serde_json::from_value(value)?),
         )),
+        Some(HISTORY_EDIT_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::HistoryEdit(Box::new(
+            serde_json::from_value(value)?,
+        ))),
         _ => invalid_plan(
             "unsupported_schema_version",
-            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, and super-git.plan.v0.3",
+            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, super-git.plan.v0.3, and super-git.plan.v0.4",
         ),
     }
 }

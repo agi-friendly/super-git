@@ -40,6 +40,9 @@ pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
 pub const WORKTREE_REMOVE_EXECUTION_RECORD_SCHEMA_VERSION: &str =
     "super-git.worktree-remove-execution.v0.1";
+pub const HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.history-edit-undo.v0.1";
+pub const HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION: &str =
+    "super-git.history-edit-execution.v0.1";
 
 pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "stage_changes",
@@ -875,6 +878,7 @@ pub struct ExecuteResult {
 pub enum ExecuteUndoToken {
     Index(Box<UndoToken>),
     Worktree(Box<WorktreeUndoToken>),
+    HistoryEdit(Box<HistoryEditUndoToken>),
 }
 
 impl ExecuteUndoToken {
@@ -882,6 +886,7 @@ impl ExecuteUndoToken {
         match self {
             Self::Index(token) => &token.kind,
             Self::Worktree(token) => &token.kind,
+            Self::HistoryEdit(token) => &token.kind,
         }
     }
 }
@@ -920,6 +925,43 @@ pub struct WorktreeUndoToken {
     pub execution_record_path: PathBuf,
     pub deletes_branch: bool,
     pub deletes_history: bool,
+}
+
+/// 히스토리 편집 undo 토큰. 분기 ref를 이전 tip으로 되돌리는 것만 보장한다.
+/// 워킹 트리/인덱스/다른 ref는 절대 건드리지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditUndoToken {
+    pub schema_version: String,
+    pub kind: String,
+    pub repository: PathBuf,
+    pub action: String,
+    pub plan_id: String,
+    pub branch_ref: String,
+    pub previous_tip: String,
+    pub new_tip: String,
+    pub git_common_dir: PathBuf,
+    pub family_id: String,
+    pub execution_record_path: PathBuf,
+    pub deletes_branch: bool,
+    pub deletes_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditExecutionRecord {
+    pub schema_version: String,
+    pub status: String,
+    pub action: String,
+    pub plan_id: String,
+    pub repository: HistoryEditPlanRepository,
+    pub branch_ref: String,
+    pub previous_tip: String,
+    pub new_tip: String,
+    pub final_tree: String,
+    pub commits_before: u32,
+    pub commits_after: u32,
+    pub undo_token: Option<HistoryEditUndoToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

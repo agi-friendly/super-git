@@ -180,6 +180,9 @@ Implemented so far:
   with structured block codes in `super-git-core`
 - C8-B `preview history-edit` command emitting `super-git.plan.v0.4` with
   survey/executable/preview_only/blocked execution states and a stable plan id
+- C8-C execute for unpublished plans: plumbing-rebuilt commits, compare-and-swap
+  branch move, tree-identity post-verify with rollback, author preservation, and
+  a branch-tip-snapshot undo token
 
 Planned shape:
 

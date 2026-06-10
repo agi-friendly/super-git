@@ -95,6 +95,12 @@ fn undo_token(current_path: &Path, token: ExecuteUndoToken) -> Result<UndoResult
         ExecuteUndoToken::Worktree(token) => {
             undo_worktree::undo_worktree_token(current_path, *token)
         }
+        // history_edit undo (restore_branch_tip_snapshot) lands in C8-D. Until
+        // then, a history_edit result is parsed but cannot be undone.
+        ExecuteUndoToken::HistoryEdit(_) => invalid_token(
+            "undo_not_yet_supported",
+            "history_edit undo (restore_branch_tip_snapshot) is not implemented yet",
+        ),
     }
 }
 

@@ -757,16 +757,16 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Execute revalidates everything in the execute contract before writing.
-- [ ] Survey and blocked plans are rejected before any write.
-- [ ] Commits are rebuilt with plumbing; `git rebase` is never invoked.
-- [ ] The branch ref moves only through compare-and-swap.
-- [ ] Tree-identity, commit-count, and status-unchanged post-verification is
+- [x] Execute revalidates everything in the execute contract before writing.
+- [x] Survey and blocked plans are rejected before any write.
+- [x] Commits are rebuilt with plumbing; `git rebase` is never invoked.
+- [x] The branch ref moves only through compare-and-swap.
+- [x] Tree-identity, commit-count, and status-unchanged post-verification is
       enforced, including the rollback path.
-- [ ] Author fields are preserved on rewritten commits.
-- [ ] A published range without confirmation is rejected with
+- [x] Author fields are preserved on rewritten commits.
+- [x] A published range without confirmation is rejected with
       `confirmation_required` before any write.
-- [ ] Successful execute returns an undo token and writes a local execution
+- [x] Successful execute returns an undo token and writes a local execution
       record.
 
 ### C8-D: Undo history edit

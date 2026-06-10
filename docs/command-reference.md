@@ -288,10 +288,20 @@ super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confir
 ```
 
 Current support is intentionally limited to internal allowlisted actions:
-`stage_changes`, executable `worktree_create` plans, and confirmed
-`worktree_remove` plans. `execute` rejects stale plans, tampered plans,
-unsupported actions, unsupported options, blocked worktree plans, and
-mismatched repository state.
+`stage_changes`, executable `worktree_create` plans, confirmed
+`worktree_remove` plans, and executable (unpublished) `history_edit` plans.
+`execute` rejects stale plans, tampered plans, unsupported actions, unsupported
+options, blocked worktree plans, and mismatched repository state.
+
+For `history_edit`, execute re-derives the plan from fresh state and requires an
+identical plan id before writing, then rebuilds the commit chain with Git
+plumbing (`commit-tree`), moves the branch ref by compare-and-swap, and
+post-verifies that the final tree is unchanged. Leading unchanged picks keep
+their original object ids; author identity is preserved on every rewritten
+commit; the working tree and index are never touched. Published ranges
+(`execution.status: "preview_only"`) are rejected with `confirmation_required`
+until confirmation-gated execute lands. Successful results carry a
+`restore_branch_tip_snapshot` undo token.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;

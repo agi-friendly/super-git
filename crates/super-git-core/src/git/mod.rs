@@ -1,5 +1,6 @@
 pub mod command;
 pub mod execute;
+pub mod execute_history_edit;
 pub mod execute_worktree;
 pub mod execute_worktree_remove;
 pub mod fingerprint;
