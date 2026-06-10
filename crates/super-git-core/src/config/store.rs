@@ -729,15 +729,29 @@ fn normalized_identity(path: &Path) -> String {
 }
 
 fn repository_name(main_worktree: Option<&PathBuf>, git_common_dir: &Path) -> String {
-    let source = main_worktree
-        .map(PathBuf::as_path)
-        .unwrap_or(git_common_dir);
-    let name = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("repository");
+    match main_worktree {
+        // A real (non-bare) checkout: use its directory name verbatim, so a
+        // directory literally named "service.git" stays "service.git" rather
+        // than being stripped to "service".
+        Some(main) => non_empty_name(main.file_name().and_then(|name| name.to_str())),
+        // Bare-primary family: strip a trailing ".git" from e.g. "repo.git".
+        None => {
+            let name = git_common_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("repository");
+            non_empty_name(Some(name.strip_suffix(".git").unwrap_or(name)))
+        }
+    }
+}
 
-    name.strip_suffix(".git").unwrap_or(name).to_string()
+/// Guard against an empty derived name (e.g. a directory literally named ".git"
+/// strips to ""), which validate_repository_name would otherwise reject.
+fn non_empty_name(name: Option<&str>) -> String {
+    match name {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "repository".to_string(),
+    }
 }
 
 fn config_parent_dir(path: &Path) -> Option<&Path> {
@@ -1036,5 +1050,29 @@ mod tests {
             repository_id(Path::new("/repo/Repo/.git")),
             repository_id(Path::new("/repo/repo/.git"))
         );
+    }
+
+    #[test]
+    fn repository_name_keeps_dot_git_for_non_bare_checkout() {
+        // A normal checkout in a directory literally named "service.git" keeps
+        // the suffix; only bare-primary names are stripped.
+        let name = repository_name(
+            Some(&PathBuf::from("/work/service.git")),
+            Path::new("/work/service.git/.git"),
+        );
+        assert_eq!(name, "service.git");
+    }
+
+    #[test]
+    fn repository_name_strips_dot_git_for_bare_primary() {
+        let name = repository_name(None, Path::new("/srv/repo.git"));
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn repository_name_falls_back_when_derived_name_is_empty() {
+        // A git_common_dir literally named ".git" strips to "".
+        let name = repository_name(None, Path::new("/x/.git"));
+        assert_eq!(name, "repository");
     }
 }

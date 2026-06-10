@@ -128,7 +128,16 @@ fn undo_index_token(current_path: &Path, token: UndoToken) -> Result<UndoResult>
     };
 
     let lock = create_index_lock(&index_lock_path)?;
-    let current_index_hash = hash_index(&index_path)?;
+    // Any error after the lock is created must remove it, or a stale index.lock
+    // blocks every future git write in the repository.
+    let current_index_hash = match hash_index(&index_path) {
+        Ok(hash) => hash,
+        Err(err) => {
+            drop(lock);
+            let _ = fs::remove_file(&index_lock_path);
+            return Err(err);
+        }
+    };
     if token.post_index_sha256 != current_index_hash {
         drop(lock);
         let _ = fs::remove_file(&index_lock_path);
@@ -138,14 +147,18 @@ fn undo_index_token(current_path: &Path, token: UndoToken) -> Result<UndoResult>
             actual: current_index_hash,
         });
     }
-    if let Some(snapshot) = snapshot {
-        restore_index(lock, &index_path, &index_lock_path, &snapshot)?;
+    let restore = if let Some(snapshot) = snapshot {
+        restore_index(lock, &index_path, &index_lock_path, &snapshot)
     } else if index_path.exists() {
-        remove_index(lock, &index_path, &index_lock_path)?;
+        remove_index(lock, &index_path, &index_lock_path)
     } else {
         drop(lock);
-        fs::remove_file(&index_lock_path)?;
+        fs::remove_file(&index_lock_path).map_err(Into::into)
+    };
+    if restore.is_err() {
+        let _ = fs::remove_file(&index_lock_path);
     }
+    restore?;
 
     Ok(UndoResult {
         schema_version: UNDO_RESULT_SCHEMA_VERSION.to_string(),

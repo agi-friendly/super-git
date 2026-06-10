@@ -43,11 +43,13 @@ pub fn preview_worktree_create(
     let source_ref = classify_source_ref(&selected_from, &ref_name)?;
     let ref_policy = ref_policy(&source_ref);
     let target_ref_name = target_ref_name(&source_ref, &ref_name);
+    let case_insensitive_fs = read_case_insensitive_fs(&selected_from);
     let target = worktree_plan::resolve_worktree_target(
         &repository,
         &config.settings.worktree,
         &target_ref_name,
         &worktrees,
+        case_insensitive_fs,
     )
     .map(target_from_resolved)?;
 
@@ -92,6 +94,7 @@ pub fn preview_worktree_create(
         limitations: vec![
             "Undo removes only the worktree created by super-git.".to_string(),
             "Undo refuses if the created worktree is dirty, locked, moved, or no longer matches the execute record.".to_string(),
+            "Undo re-checks cleanliness immediately before removal, but an ignored file created in the small window before `git worktree remove` runs may still be deleted.".to_string(),
             "Undo does not delete branch refs or commits.".to_string(),
         ],
     };
@@ -180,6 +183,18 @@ fn selected_from_path(repository: &SavedRepository) -> PathBuf {
         .main_worktree
         .clone()
         .unwrap_or_else(|| repository.saved_from.clone())
+}
+
+/// Whether git considers this repository's filesystem case-insensitive. git
+/// records this in core.ignorecase at init time, so the case-collision check
+/// is only meaningful when it is true (default false -> no over-blocking on
+/// case-sensitive filesystems).
+fn read_case_insensitive_fs(path: &Path) -> bool {
+    Git::default()
+        .try_run_in(path, ["config", "--type=bool", "--get", "core.ignorecase"])
+        .ok()
+        .filter(|output| output.success)
+        .is_some_and(|output| output.stdout.trim() == "true")
 }
 
 fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {

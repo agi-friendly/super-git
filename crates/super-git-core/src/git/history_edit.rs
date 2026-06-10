@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::config::store::repository_id;
 use crate::git::command::Git;
-use crate::git::state;
+use crate::git::{state, status};
 use crate::model::Operation;
 use crate::{Result, SuperGitError};
 
@@ -491,7 +491,9 @@ fn resolve_range_commit<'a>(
     input: &str,
 ) -> Option<&'a HistoryEditCommit> {
     let needle = input.to_ascii_lowercase();
-    if needle.len() < 4 || needle.len() > 40 || !needle.bytes().all(|b| b.is_ascii_hexdigit()) {
+    // Accept up to 64 hex chars so full SHA-256 object ids resolve, matching the
+    // undo side; SHA-1 (40) and abbreviations stay valid.
+    if needle.len() < 4 || needle.len() > 64 || !needle.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut matches = range_commits
@@ -575,6 +577,25 @@ fn collect_scan_blocks(
             Some(json!({ "commits": merge_commits })),
         );
     }
+    // Execute preserves author identity via GIT_AUTHOR_NAME/EMAIL; git rejects an
+    // empty author name ("empty ident name not allowed") at commit-tree time. A
+    // commit with an empty author would otherwise reach an "executable" plan that
+    // can never succeed, so block it honestly up front.
+    let unreadable_author_commits: Vec<&str> = range
+        .commits
+        .iter()
+        .filter(|commit| {
+            commit.author_name.trim().is_empty() || commit.author_email.trim().is_empty()
+        })
+        .map(|commit| commit.commit.as_str())
+        .collect();
+    if !unreadable_author_commits.is_empty() {
+        push_block(
+            &mut blocks,
+            "author_identity_unreadable",
+            Some(json!({ "commits": unreadable_author_commits })),
+        );
+    }
     if commit_signing_enabled {
         push_block(&mut blocks, "commit_signing_enabled", None);
     }
@@ -624,16 +645,14 @@ fn validate_base_input(base_input: &str) -> Result<()> {
 }
 
 fn worktree_root(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(path, ["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, ["rev-parse", "--show-toplevel"])
 }
 
 fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(
+    git.run_path_in(
         path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    )
 }
 
 fn rev_parse_commit(git: &Git, path: &Path, spec: &str) -> Option<String> {
@@ -787,48 +806,21 @@ fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {
 }
 
 fn read_working_tree(git: &Git, root: &Path) -> Result<HistoryEditWorkingTree> {
-    let output = git.run_in(root, ["status", "--porcelain=v1"])?;
-    let mut staged = 0;
-    let mut unstaged = 0;
-    let mut untracked = 0;
-    let mut conflicts = Vec::new();
-
-    for line in output.stdout.lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let code = &line[..2];
-        let bytes = code.as_bytes();
-        let (x, y) = (bytes[0] as char, bytes[1] as char);
-        if code == "??" {
-            untracked += 1;
-        } else if is_conflict(x, y) {
-            conflicts.push(line[3..].to_string());
-        } else {
-            if is_change(x) {
-                staged += 1;
-            }
-            if is_change(y) {
-                unstaged += 1;
-            }
-        }
-    }
-
+    // -z keeps conflict paths raw and parses newline paths; --untracked-files=all
+    // pins the mode independent of status.showUntrackedFiles. Shared parser is in
+    // git/status.rs.
+    let output = git.run_bytes_in(
+        root,
+        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+    )?;
+    let counts = status::classify_porcelain_z(&output.stdout);
     Ok(HistoryEditWorkingTree {
-        staged,
-        unstaged,
-        untracked,
-        conflict_count: conflicts.len() as u32,
-        conflicts,
+        staged: counts.staged,
+        unstaged: counts.unstaged,
+        untracked: counts.untracked,
+        conflict_count: counts.conflict_count(),
+        conflicts: counts.conflicts,
     })
-}
-
-fn is_conflict(x: char, y: char) -> bool {
-    x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')
-}
-
-fn is_change(code: char) -> bool {
-    code != ' ' && code != '?'
 }
 
 #[cfg(test)]
@@ -1173,6 +1165,54 @@ mod tests {
     }
 
     #[test]
+    fn scan_blocks_commit_with_empty_author_identity() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let (repo, oids) = repo_with_feature_range(temp_dir.path());
+        let tree = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+        // Raw commit whose author name is empty ("author  <email>"). commit-tree
+        // would reject it with "empty ident name not allowed", so the plan must
+        // be blocked rather than executable.
+        let raw = format!(
+            "tree {tree}\nparent {parent}\nauthor  <orphan@example.com> 1700000000 +0000\ncommitter test <test@example.com> 1700000000 +0000\n\nempty author\n",
+            parent = oids[2],
+        );
+        let mut hash_object = Command::new("git")
+            .current_dir(&repo)
+            .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn hash-object");
+        hash_object
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(raw.as_bytes())
+            .expect("write raw commit");
+        let output = hash_object.wait_with_output().expect("hash-object output");
+        assert!(output.status.success());
+        let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        git(&repo, &["update-ref", "refs/heads/feature/login", &oid]);
+
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+
+        let empty = scan
+            .range
+            .commits
+            .iter()
+            .find(|commit| commit.commit == oid)
+            .expect("empty-author commit in range");
+        assert!(
+            empty.author_name.trim().is_empty(),
+            "author name parsed as empty"
+        );
+        assert!(block_codes(&scan).contains(&"author_identity_unreadable"));
+        assert_eq!(scan.execution_status, "blocked");
+    }
+
+    #[test]
     fn scan_rejects_unresolvable_or_option_like_base() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let (repo, _) = repo_with_feature_range(temp_dir.path());
@@ -1384,5 +1424,49 @@ mod tests {
         assert!(codes.contains(&"instruction_op_unsupported"));
         assert!(codes.contains(&"instruction_message_unexpected"));
         assert!(validation.program.is_none());
+    }
+
+    #[test]
+    fn resolve_accepts_full_sha256_object_ids() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        // SHA-256 repository: object ids are 64 hex chars, which the scan emits
+        // and an agent echoes straight back into the instruction list.
+        git(
+            &repo,
+            &["init", "-q", "-b", "main", "--object-format=sha256"],
+        );
+        git(&repo, &["config", "user.name", "test"]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        commit_file(&repo, "README.md", "hello\n", "initial");
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        commit_file(&repo, "a.txt", "a\n", "feat: a");
+        commit_file(&repo, "b.txt", "b\n", "fix: b");
+        let oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(oids[0].len(), 64, "sha256 object id is 64 hex chars");
+
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+        let document = parse_instructions(&instructions_json(&format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"reworded"}}]"#,
+            oids[0], oids[1]
+        )))
+        .expect("parse");
+
+        let validation = validate_instructions(&scan.range.commits, &document);
+
+        assert!(
+            validation.blocks.is_empty(),
+            "full sha256 ids must resolve: {:?}",
+            validation.blocks
+        );
+        assert!(
+            validation.program.is_some(),
+            "a valid sha256 instruction list yields a program"
+        );
     }
 }

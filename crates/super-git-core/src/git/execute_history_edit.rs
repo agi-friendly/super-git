@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -75,7 +75,9 @@ pub fn execute_history_edit_plan(
         return mismatch("branch.tip_commit", &previous_tip, &live_tip);
     }
     let old_tree = read_tree_oid(&git, &worktree_root, &previous_tip)?;
-    let status_before = read_status_signature(&git, &worktree_root)?;
+    // Status reads are best-effort: a failure reading status after the ref has
+    // moved must not turn a completed, verified rewrite into a reported failure.
+    let status_before = read_status_signature(&git, &worktree_root).ok();
 
     let groups = build_groups(&fresh)?;
     let new_tip = rebuild_commits(&git, &worktree_root, &fresh.range.base_commit, &groups)?;
@@ -127,16 +129,20 @@ pub fn execute_history_edit_plan(
             &branch_ref,
             &previous_tip,
             &new_tip,
+            &record_path,
             err,
         ));
     }
 
-    let status_after = read_status_signature(&git, &worktree_root)?;
+    let status_after = read_status_signature(&git, &worktree_root).ok();
     let mut effects = success_effects(&fresh, &branch_ref, &new_tip);
-    if status_after != status_before {
-        effects.push(
-            "Note: working-tree status changed during execute (external edit); the branch edit still applied.".to_string(),
-        );
+    // The drift note only fires when both reads succeed and disagree.
+    if let (Some(before), Some(after)) = (&status_before, &status_after) {
+        if before != after {
+            effects.push(
+                "Note: working-tree status changed during execute (external edit); the branch edit still applied.".to_string(),
+            );
+        }
     }
 
     let undo_token = HistoryEditUndoToken {
@@ -159,7 +165,20 @@ pub fn execute_history_edit_plan(
         undo_token: Some(undo_token.clone()),
         ..intent
     };
-    write_record_replace(&record_path, &completed)?;
+    // A failure here means the ref already moved but no completed record (and so
+    // no safe undo path) exists. Roll the ref back rather than leave an
+    // un-undoable rewrite that misreports as a generic error.
+    if let Err(err) = write_record_replace(&record_path, &completed) {
+        return Err(rollback(
+            &git,
+            &worktree_root,
+            &branch_ref,
+            &previous_tip,
+            &new_tip,
+            &record_path,
+            err,
+        ));
+    }
 
     Ok(ExecuteResult {
         schema_version: EXECUTE_SCHEMA_VERSION.to_string(),
@@ -366,7 +385,7 @@ fn validate_confirmation(
     };
     if acknowledgement.method.as_deref() != Some("cli_typed_phrase") {
         return invalid_plan(
-            "confirmation_acknowledgement_missing",
+            "confirmation_method_unsupported",
             "history_edit confirmation acknowledgement method must be cli_typed_phrase",
         );
     }
@@ -629,16 +648,25 @@ fn post_verify(
     Ok(())
 }
 
+/// Restore the branch to its pre-edit tip after a failure that happened once the
+/// ref had already moved. On a successful rollback the intent record is removed
+/// so the still-valid plan can be re-executed; on a failed rollback the record
+/// is kept as the provenance anchor and `ExecuteRollbackFailed` surfaces both
+/// errors so the caller knows the ref is still at `new_tip`.
 fn rollback(
     git: &Git,
     worktree_root: &Path,
     branch_ref: &str,
     previous_tip: &str,
     new_tip: &str,
+    record_path: &Path,
     original: SuperGitError,
 ) -> SuperGitError {
     match compare_and_swap_ref(git, worktree_root, branch_ref, previous_tip, new_tip) {
-        Ok(()) => original,
+        Ok(()) => {
+            let _ = fs::remove_file(record_path);
+            original
+        }
         Err(rollback_err) => SuperGitError::ExecuteRollbackFailed {
             original_error: original.to_string(),
             rollback_error: rollback_err.to_string(),
@@ -691,7 +719,12 @@ fn count_range_commits(git: &Git, worktree_root: &Path, base: &str, tip: &str) -
 }
 
 fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
-    let output = git.run_in(worktree_root, ["status", "--porcelain=v1"])?;
+    // Pin the untracked mode so the drift comparison is independent of
+    // status.showUntrackedFiles config.
+    let output = git.run_in(
+        worktree_root,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
     Ok(output.stdout)
 }
 
@@ -714,10 +747,29 @@ fn write_record_create_new(path: &Path, record: &HistoryEditExecutionRecord) -> 
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(record)?;
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut file = create_new_or_already_attempted(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
+}
+
+/// Open a fresh execution record, mapping AlreadyExists to a contract error so a
+/// leftover record from a prior incomplete attempt does not make a still-valid
+/// plan fail with a raw "File exists" io error.
+fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => Ok(file),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            Err(SuperGitError::ExecutePlanInvalid {
+                code: "execution_already_attempted".to_string(),
+                message: format!(
+                    "an execution record already exists at {}; inspect or remove it before retrying",
+                    path.display()
+                ),
+            })
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn write_record_replace(path: &Path, record: &HistoryEditExecutionRecord) -> Result<()> {
@@ -766,4 +818,149 @@ fn mismatch<T>(field: &str, expected: &str, actual: &str) -> Result<T> {
 
 fn format_hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use super::{create_new_or_already_attempted, rollback};
+    use crate::git::command::Git;
+    use crate::SuperGitError;
+
+    #[test]
+    fn create_new_record_maps_already_exists_to_contract_error() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("intent.json");
+        // Simulate a leftover record from a prior incomplete attempt.
+        std::fs::write(&path, "{}").expect("write record");
+
+        let err = create_new_or_already_attempted(&path).expect_err("must reject existing record");
+
+        match err {
+            SuperGitError::ExecutePlanInvalid { code, .. } => {
+                assert_eq!(code, "execution_already_attempted");
+            }
+            other => panic!("expected ExecutePlanInvalid, got {other:?}"),
+        }
+    }
+
+    fn run_git(dir: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .expect("run git")
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(run_git(dir, args).status.success(), "git {args:?} failed");
+    }
+
+    fn rev(dir: &Path, reference: &str) -> String {
+        String::from_utf8(run_git(dir, &["rev-parse", reference]).stdout)
+            .expect("utf8")
+            .trim()
+            .to_string()
+    }
+
+    fn commit(dir: &Path, file: &str, content: &str) {
+        std::fs::write(dir.join(file), content).expect("write");
+        git(dir, &["add", file]);
+        git(dir, &["commit", "-q", "-m", content]);
+    }
+
+    /// Repo on `main` with three commits; returns (repo, c1, c2, c3).
+    fn repo_with_three(tmp: &Path) -> (PathBuf, String, String, String) {
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        commit(&repo, "a.txt", "a");
+        let c1 = rev(&repo, "HEAD");
+        commit(&repo, "b.txt", "b");
+        let c2 = rev(&repo, "HEAD");
+        commit(&repo, "c.txt", "c");
+        let c3 = rev(&repo, "HEAD");
+        (repo, c1, c2, c3)
+    }
+
+    fn write_record(repo: &Path, name: &str) -> PathBuf {
+        let path = repo.join(".git/super-git/executions").join(name);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, "{}").expect("write record");
+        path
+    }
+
+    #[test]
+    fn rollback_restores_branch_and_removes_record_on_success() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let (repo, c1, c2, _c3) = repo_with_three(tmp.path());
+        // Simulate execute having moved the branch to new_tip = c2.
+        git(&repo, &["update-ref", "refs/heads/main", &c2]);
+        let record = write_record(&repo, "intent.json");
+        let original = SuperGitError::ExecutePlanInvalid {
+            code: "original".to_string(),
+            message: "post-write failure".to_string(),
+        };
+
+        let returned = rollback(
+            &Git::default(),
+            &repo,
+            "refs/heads/main",
+            &c1,
+            &c2,
+            &record,
+            original,
+        );
+
+        assert_eq!(rev(&repo, "refs/heads/main"), c1, "ref restored to old tip");
+        assert!(!record.exists(), "intent record removed after rollback");
+        assert!(
+            matches!(returned, SuperGitError::ExecutePlanInvalid { .. }),
+            "original error is surfaced after a successful rollback"
+        );
+    }
+
+    #[test]
+    fn rollback_reports_failure_and_keeps_record_when_tip_moved() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let (repo, c1, c2, c3) = repo_with_three(tmp.path());
+        // The branch is at c3, but rollback expects new_tip = c2: the CAS refuses.
+        let record = write_record(&repo, "intent.json");
+        let original = SuperGitError::ExecutePlanInvalid {
+            code: "original".to_string(),
+            message: "post-write failure".to_string(),
+        };
+
+        let returned = rollback(
+            &Git::default(),
+            &repo,
+            "refs/heads/main",
+            &c1,
+            &c2,
+            &record,
+            original,
+        );
+
+        assert_eq!(
+            rev(&repo, "refs/heads/main"),
+            c3,
+            "ref untouched on failed rollback"
+        );
+        assert!(
+            record.exists(),
+            "record kept as provenance on failed rollback"
+        );
+        assert!(
+            matches!(returned, SuperGitError::ExecuteRollbackFailed { .. }),
+            "a refused rollback is reported as ExecuteRollbackFailed"
+        );
+    }
 }

@@ -298,8 +298,7 @@ fn commit_exists(git: &Git, worktree_root: &Path, oid: &str) -> Result<bool> {
 }
 
 fn read_path<const N: usize>(git: &Git, path: &Path, args: [&str; N]) -> Result<PathBuf> {
-    let output = git.run_in(path, args)?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, args)
 }
 
 fn validate_oid(field: &str, oid: &str) -> Result<()> {

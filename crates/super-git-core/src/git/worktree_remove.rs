@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::config::store::repository_id;
 use crate::git::command::Git;
-use crate::git::{state, worktree};
+use crate::git::{state, status, worktree};
 use crate::model::Operation;
 use crate::{Result, SuperGitError};
 
@@ -188,16 +188,14 @@ fn list_worktrees_for_scan(
 }
 
 fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(
+    git.run_path_in(
         path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    )
 }
 
 fn worktree_root(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(path, ["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    git.run_path_in(path, ["rev-parse", "--show-toplevel"])
 }
 
 fn read_path_from_git<const N: usize>(git: &Git, path: &Path, args: [&str; N]) -> Option<PathBuf> {
@@ -212,71 +210,32 @@ fn can_scan_target_details(target: &crate::model::WorktreeInfo) -> bool {
 }
 
 fn read_working_tree_with_ignored(git: &Git, path: &Path) -> Result<WorktreeRemoveWorkingTree> {
-    let output = git.run_in(
+    // -z keeps paths raw and parses newline-containing paths; shared parser is
+    // in git/status.rs.
+    let output = git.run_bytes_in(
         path,
         [
             "status",
             "--porcelain=v1",
             "--ignored",
             "--untracked-files=all",
+            "-z",
         ],
     )?;
-    Ok(classify_working_tree_with_ignored(&output.stdout))
-}
-
-fn classify_working_tree_with_ignored(output: &str) -> WorktreeRemoveWorkingTree {
-    let mut staged = 0;
-    let mut unstaged = 0;
-    let mut untracked = 0;
-    let mut ignored = 0;
-    let mut conflicts = Vec::new();
-
-    for line in output.lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let code = &line[..2];
-        let path = line[3..].to_string();
-        let bytes = code.as_bytes();
-        let (x, y) = (bytes[0] as char, bytes[1] as char);
-
-        if code == "!!" {
-            ignored += 1;
-        } else if code == "??" {
-            untracked += 1;
-        } else if is_conflict(x, y) {
-            conflicts.push(path);
-        } else {
-            if is_change(x) {
-                staged += 1;
-            }
-            if is_change(y) {
-                unstaged += 1;
-            }
-        }
-    }
-
-    let conflict_count = conflicts.len() as u32;
-    let clean =
-        staged == 0 && unstaged == 0 && untracked == 0 && ignored == 0 && conflict_count == 0;
-
-    WorktreeRemoveWorkingTree {
-        clean,
-        staged,
-        unstaged,
-        untracked,
-        ignored,
-        conflict_count,
-        conflicts,
-    }
-}
-
-fn is_conflict(x: char, y: char) -> bool {
-    x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')
-}
-
-fn is_change(code: char) -> bool {
-    code != ' ' && code != '?'
+    let counts = status::classify_porcelain_z(&output.stdout);
+    Ok(WorktreeRemoveWorkingTree {
+        clean: counts.staged == 0
+            && counts.unstaged == 0
+            && counts.untracked == 0
+            && counts.ignored == 0
+            && counts.conflict_count() == 0,
+        staged: counts.staged,
+        unstaged: counts.unstaged,
+        untracked: counts.untracked,
+        ignored: counts.ignored,
+        conflict_count: counts.conflict_count(),
+        conflicts: counts.conflicts,
+    })
 }
 
 fn has_submodules(git: &Git, path: &Path) -> Result<bool> {
