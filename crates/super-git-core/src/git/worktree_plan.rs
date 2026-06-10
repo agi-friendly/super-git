@@ -93,6 +93,7 @@ pub fn resolve_worktree_target(
     settings: &WorktreeSettings,
     ref_name: &str,
     existing_worktrees: &[WorktreeInfo],
+    case_insensitive_fs: bool,
 ) -> WorktreePlanResult<ResolvedWorktreeTarget> {
     if settings.ref_slug_algorithm != PATH_SAFE_V1 {
         return Err(plan_error(
@@ -128,7 +129,7 @@ pub fn resolve_worktree_target(
         .filter(|worktree| !worktree.bare)
         .any(|worktree| is_inside(&path, &worktree.path));
     let case_insensitive_collision =
-        has_case_insensitive_collision(&name, &parent, existing_worktrees);
+        has_case_insensitive_collision(&name, &parent, existing_worktrees, case_insensitive_fs);
     let reserved_name_collision = is_windows_reserved_component(&name);
     let parent_creation = parent_creation_policy(
         &parent,
@@ -189,7 +190,16 @@ fn has_case_insensitive_collision(
     target_name: &str,
     parent: &Path,
     existing_worktrees: &[WorktreeInfo],
+    case_insensitive_fs: bool,
 ) -> bool {
+    // On a case-sensitive filesystem, names that differ only by case coexist
+    // fine, so flagging them would over-block legitimate targets. Gate the check
+    // on git's own core.ignorecase detection. (A normalization-insensitive
+    // collision -- e.g. NFC vs NFD on macOS APFS -- is still missed; folding
+    // those would require Unicode normalization and a new dependency.)
+    if !case_insensitive_fs {
+        return false;
+    }
     let target = target_name.to_lowercase();
 
     if existing_worktrees.iter().any(|worktree| {
@@ -337,6 +347,7 @@ mod tests {
             &WorktreeSettings::default(),
             "works/eml-base",
             &worktrees,
+            false,
         )
         .expect("resolve target");
 
@@ -373,10 +384,36 @@ mod tests {
             &WorktreeSettings::default(),
             "works/eml-base",
             &worktrees,
+            true,
         )
         .expect("resolve target");
 
         assert!(target.case_insensitive_collision);
+    }
+
+    #[test]
+    fn resolver_skips_case_collision_on_case_sensitive_fs() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let main = temp_dir.path().join("naon-dnl");
+        let parent = temp_dir.path().join("naon-dnl.worktrees");
+        std::fs::create_dir(&main).expect("main dir");
+        std::fs::create_dir(&parent).expect("parent dir");
+        std::fs::create_dir(parent.join("naon-dnl__Works-EML-Base")).expect("existing target");
+        let repository = saved_repository("naon-dnl", Some(main.clone()));
+        let worktrees = vec![WorktreeInfo::new(main)];
+
+        // case_insensitive_fs = false: differently-cased names coexist, so no
+        // collision should be flagged (the same fixture flags one when true).
+        let target = resolve_worktree_target(
+            &repository,
+            &WorktreeSettings::default(),
+            "works/eml-base",
+            &worktrees,
+            false,
+        )
+        .expect("resolve target");
+
+        assert!(!target.case_insensitive_collision);
     }
 
     #[test]
@@ -394,8 +431,9 @@ mod tests {
             ref_slug_algorithm: "path_safe_v1".to_string(),
         };
 
-        let target = resolve_worktree_target(&repository, &settings, "feature/demo", &worktrees)
-            .expect("resolve target");
+        let target =
+            resolve_worktree_target(&repository, &settings, "feature/demo", &worktrees, false)
+                .expect("resolve target");
 
         assert!(target.inside_git_dir);
         assert!(target.inside_existing_worktree);
@@ -409,6 +447,7 @@ mod tests {
             &WorktreeSettings::default(),
             "feature/demo",
             &[],
+            false,
         )
         .expect_err("bare primary requires explicit parent support");
 
