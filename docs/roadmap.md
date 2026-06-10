@@ -172,15 +172,21 @@ Why this is next:
   moves a branch pointer without deleting objects, so a pre-execute branch
   snapshot can restore the previous tip.
 
+Implemented so far:
+
+- C8-0 contract checkpoint for plan-based history edit
+  (`docs/internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md`)
+
 Planned shape:
 
-- contract checkpoint (C8-0) before implementation
 - `preview history-edit` over a commit range, returning per-commit subject,
   author, upstream/pushed status, and edit constraints as JSON
 - a declarative instruction list inside the plan: `pick`, `reword`, `squash`,
   `fixup`, `drop`, and reordering, instead of todo-file strings
-- `execute` rebuilds the rebase sequence internally from the validated plan;
-  plan-provided text is never executed directly
+- the first op set never changes any tree, so `execute` rebuilds the commit
+  chain with Git plumbing and moves the branch ref atomically; interactive
+  rebase machinery is never invoked, and plan-provided text is never executed
+  directly
 - hard blocks first: dirty working tree, in-progress operation, merge commits
   in range
 - rewriting commits already on an upstream requires the destructive
