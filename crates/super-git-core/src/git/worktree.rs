@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::git::command::Git;
+use crate::git::command::{self, Git};
 use crate::model::WorktreeInfo;
 use crate::Result;
 
@@ -13,21 +13,21 @@ pub fn list_worktrees(path: &Path) -> Result<Vec<WorktreeInfo>> {
 
 /// Parse `git worktree list --porcelain -z`: each attribute is NUL-terminated
 /// and an empty record separates worktree entries (the `-z` analogue of the
-/// blank line in the line-based form).
+/// blank line in the line-based form). The `worktree` path is decoded from raw
+/// bytes so a non-UTF-8 path survives; the other attributes are ASCII.
 pub fn parse_worktree_list(stdout: &[u8]) -> Vec<WorktreeInfo> {
-    let text = String::from_utf8_lossy(stdout);
     let mut worktrees = Vec::new();
     let mut current: Option<WorktreeInfo> = None;
 
-    for record in text.split('\0') {
+    for record in stdout.split(|byte| *byte == 0) {
         if record.is_empty() {
             push_current(&mut worktrees, &mut current);
             continue;
         }
 
-        if let Some(path) = record.strip_prefix("worktree ") {
+        if let Some(path) = record.strip_prefix(b"worktree ") {
             push_current(&mut worktrees, &mut current);
-            current = Some(WorktreeInfo::new(PathBuf::from(path)));
+            current = Some(WorktreeInfo::new(command::os_path_from_bytes(path)));
             continue;
         }
 
@@ -35,17 +35,19 @@ pub fn parse_worktree_list(stdout: &[u8]) -> Vec<WorktreeInfo> {
             continue;
         };
 
-        if let Some(head) = record.strip_prefix("HEAD ") {
+        // HEAD/branch/detached/bare/locked/prunable are all ASCII tokens.
+        let attribute = String::from_utf8_lossy(record);
+        if let Some(head) = attribute.strip_prefix("HEAD ") {
             worktree.head = Some(head.to_string());
-        } else if let Some(branch) = record.strip_prefix("branch ") {
+        } else if let Some(branch) = attribute.strip_prefix("branch ") {
             worktree.branch = Some(short_branch_name(branch));
-        } else if record == "detached" {
+        } else if attribute == "detached" {
             worktree.detached = true;
-        } else if record == "bare" {
+        } else if attribute == "bare" {
             worktree.bare = true;
-        } else if record == "locked" || record.starts_with("locked ") {
+        } else if attribute == "locked" || attribute.starts_with("locked ") {
             worktree.locked = true;
-        } else if record == "prunable" || record.starts_with("prunable ") {
+        } else if attribute == "prunable" || attribute.starts_with("prunable ") {
             worktree.prunable = true;
         }
     }
@@ -70,6 +72,7 @@ fn short_branch_name(branch: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_porcelain_worktree_output() {
@@ -131,6 +134,26 @@ branch refs/heads/main\0\0";
 
         assert_eq!(worktrees.len(), 1);
         assert_eq!(worktrees[0].path, PathBuf::from("/weird\nname"));
+        assert_eq!(worktrees[0].branch, Some("main".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_worktree_path_with_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        // A latin-1 0xe9 byte in the path is invalid UTF-8; lossy decoding would
+        // mangle it to U+FFFD, so the parsed path would not match on disk.
+        let mut output = b"worktree /weird/caf".to_vec();
+        output.push(0xe9);
+        output.extend_from_slice(
+            b"\0HEAD 1111111111111111111111111111111111111111\0branch refs/heads/main\0\0",
+        );
+
+        let worktrees = parse_worktree_list(&output);
+
+        assert_eq!(worktrees.len(), 1);
+        assert_eq!(worktrees[0].path.as_os_str().as_bytes(), b"/weird/caf\xe9");
         assert_eq!(worktrees[0].branch, Some("main".to_string()));
     }
 }

@@ -324,11 +324,10 @@ fn create_index_lock(lock_path: &Path) -> Result<fs::File> {
 }
 
 fn git_path(git: &Git, root: &Path, path: &str) -> Result<PathBuf> {
-    let output = git.run_in(
+    git.run_path_in(
         root,
         ["rev-parse", "--path-format=absolute", "--git-path", path],
-    )?;
-    Ok(PathBuf::from(output.stdout.trim()))
+    )
 }
 
 fn hash_index(path: &Path) -> Result<String> {
