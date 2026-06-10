@@ -559,3 +559,52 @@ fn execute_stage_changes_accepts_plan_from_stdin() {
     );
     assert_eq!(status_porcelain(dir), "M  file.txt\n");
 }
+
+#[cfg(unix)]
+#[test]
+fn execute_stage_changes_ignores_external_diff_driver() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A repo with `diff.external` (e.g. difftastic) made the state fingerprint
+    // hash the driver's output instead of the content. The driver below echoes
+    // its per-call temp blob path, so a fingerprint that honored it would differ
+    // between preview and execute and every execute would fail. The fix pins
+    // --no-ext-diff/--no-textconv; this test would go red without it.
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    init_repo_with_commit(&repo);
+
+    // Driver lives outside the worktree so it is not itself untracked content.
+    let driver = tmp.path().join("ext-diff.sh");
+    std::fs::write(&driver, "#!/bin/sh\necho \"external $2 $5\"\n").expect("write driver");
+    let mut perms = std::fs::metadata(&driver)
+        .expect("driver meta")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&driver, perms).expect("chmod driver");
+    git(
+        &repo,
+        &[
+            "config",
+            "diff.external",
+            driver.to_str().expect("driver path"),
+        ],
+    );
+
+    // Unstaged change so stage-changes has work and the unstaged binary diff runs.
+    std::fs::write(repo.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+
+    let plan = preview_plan_file(&repo);
+    let output = execute_plan(&repo, &plan);
+
+    assert!(
+        output.status.success(),
+        "execute must succeed despite diff.external: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["executed"], true);
+    assert_eq!(status_porcelain(&repo), "M  file.txt\n");
+}

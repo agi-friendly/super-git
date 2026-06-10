@@ -26,12 +26,35 @@ pub fn read_state_fingerprint(
             path,
             ["status", "--porcelain=v1", "-z"],
         )?,
+        // --no-ext-diff/--no-textconv keep the fingerprint bound to the actual
+        // content. Otherwise a repo with `diff.external` (e.g. difftastic) or a
+        // textconv driver substitutes the driver's output — often a per-call
+        // temp path — so preview and execute hash different bytes and every
+        // execute fails with a state_fingerprint mismatch. They also stop the
+        // fingerprint from being a side channel that runs an external command.
         staged_diff_sha256: hash_git_output(
             git,
             path,
-            ["diff", "--cached", "--binary", "--full-index"],
+            [
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--full-index",
+            ],
         )?,
-        unstaged_diff_sha256: hash_git_output(git, path, ["diff", "--binary", "--full-index"])?,
+        unstaged_diff_sha256: hash_git_output(
+            git,
+            path,
+            [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--full-index",
+            ],
+        )?,
         untracked_content_sha256: hash_untracked_content(git, path, repository)?,
     })
 }
