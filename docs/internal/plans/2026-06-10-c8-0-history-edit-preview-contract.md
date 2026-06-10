@@ -72,7 +72,10 @@ Execute must verify this invariant after rewriting. If it does not hold, the
 implementation has a bug and execute must roll the branch ref back.
 
 Ops that re-apply patches (`drop`, reorder, `split`, `edit`) can conflict and
-are excluded until Stage 7 conflict prediction exists.
+are excluded until Stage 7 conflict prediction exists. This includes
+path-disjoint `drop` cases that look safe: any drop changes the final tree
+and silently reverts content without a conflict signal, which is exactly the
+class of surprise this op set excludes by construction.
 
 ## Non-negotiable Rules
 
@@ -106,23 +109,31 @@ The first history edit implementation must follow these rules:
 Initial preview command:
 
 ```bash
-super-git preview history-edit --base <ref> --instructions <file|->
+super-git preview history-edit --base <ref> [--instructions <file|->]
 ```
 
 `--base` names the last commit that stays untouched. The editable range is
 `base..HEAD` on the branch checked out in the current worktree.
 
-`--instructions` carries the declarative instruction list. Requiring it keeps
-one input path through preview. Agents discover commits with read-only tools
-they already have (`git log`, `inspect`); preview then validates the agent's
-view of history against the real repository state.
+Without `--instructions`, preview returns a read-only survey plan: the full
+range with per-commit identity, full messages, published and signed flags,
+and the same hard-block analysis, but `execution.status: "survey"` and
+`execute_supported: false`. The survey is the intended entry point for
+agents: its `range.commits` array is the exact template the instruction list
+must follow, so an agent never reconstructs history from `git log` parsing by
+hand. Published detection in particular is not something an agent should
+recompute itself.
+
+With `--instructions`, preview validates the declarative instruction list
+against the real repository state and produces an executable, blocked, or
+confirmation-gated plan.
 
 The preview command fails with `{ ok: false, error }` only when it cannot form
 a target-specific plan at all, for example:
 
 - the current directory is not inside a Git worktree
 - `--base` cannot be resolved to a commit
-- the instructions input is missing, unreadable, or not valid JSON for
+- the instructions input is provided but unreadable or not valid JSON for
   `super-git.instructions.v0.1`
 
 When the branch, base, and instructions can be identified, Git-state and
@@ -176,7 +187,9 @@ Input rules:
 - `squash` folds the commit into its nearest preceding non-fold item and
   requires `message`, which becomes the combined commit's full message. There
   is no editor to compose a merged message, so the contract demands it
-  explicitly instead of concatenating silently.
+  explicitly instead of concatenating silently. Survey and plan output carry
+  every range commit's full message, so the agent composes the combined
+  message from real context instead of guessing.
 - `fixup` folds like `squash` but keeps the preceding item's message and
   discards its own.
 - The first item must be `pick` or `reword`; a fold needs a predecessor.
@@ -223,9 +236,7 @@ Policy:
 | --- | --- |
 | `head_detached` | History edit operates on the branch checked out in the current worktree. |
 | `operation_in_progress` | Merge, rebase, apply, cherry-pick, revert, bisect, or similar state is active. |
-| `staged_changes_present` | First implementation requires a clean index even though the mechanism never touches it. Relaxation is a documented future decision, not an accident. |
-| `unstaged_changes_present` | Same conservative-first policy as staged changes. |
-| `conflicts_present` | Conflicted paths require human resolution first. |
+| `conflicts_present` | Conflicted index entries indicate unresolved history state even when no operation is detected. |
 | `base_not_ancestor_of_head` | Diverged bases imply re-parenting, which is Stage 7 territory. |
 | `range_empty` | Base equals HEAD; nothing to edit. |
 | `range_too_large` | More than 100 commits in range; likely a wrong `--base`. |
@@ -242,13 +253,18 @@ Policy:
 | `instruction_message_empty` | A message is empty after trimming. |
 | `instructions_no_effective_change` | All items are `pick`; the edit would be a no-op. |
 
-Untracked and ignored files are intentionally allowed. C7 blocks them because
-worktree removal deletes files; history edit never touches the working tree,
-and blocking untracked files would make the feature unusable in real
-repositories.
+Staged, unstaged, untracked, and ignored files are intentionally allowed. C7
+blocks dirty state because worktree removal deletes files; history edit is a
+ref-and-object operation that never touches the working tree or the index, so
+blocking dirty state here would contradict the design anchor and force
+stash-edit-unstash detours for no safety gain. The old and new tips share one
+tree, so every staged and unstaged diff is byte-identical before and after
+execute.
 
 Warnings (not blocks):
 
+- `working_tree_dirty` when staged or unstaged changes exist, so callers see
+  that the edit ran against a dirty tree on purpose.
 - `signed_commits_lose_signatures` when any range commit carries a signature.
   Rewritten commits do not preserve GPG/SSH signatures from the originals.
 
@@ -287,6 +303,29 @@ When the range contains published commits:
   }
 }
 ```
+
+A survey preview (no instructions) reports:
+
+```json
+{
+  "execution": {
+    "status": "survey",
+    "execute_supported": false,
+    "requires_confirmation_artifact": false,
+    "raw_git_allowed": false,
+    "suggested_super_git_command": [
+      "super-git", "preview", "history-edit",
+      "--base", "<ref>",
+      "--instructions", "<instructions-file>"
+    ],
+    "blocked_reasons": []
+  }
+}
+```
+
+Survey plans set `instructions` and `result_summary` to `null` and are never
+eligible for execute. Hard blocks apply to surveys too, so an agent learns
+about a detached HEAD or an oversized range before writing any instructions.
 
 When hard blocks exist, `status` is `blocked`, `execute_supported` is `false`,
 and `blocked_reasons` carries structured codes with details (for example,
@@ -379,6 +418,7 @@ Preview output remains wrapped by the global JSON envelope:
         {
           "commit": "aaa111",
           "subject": "feat(login): add form",
+          "message": "feat(login): add form\n",
           "author_name": "Jane Dev",
           "author_email": "jane@example.com",
           "author_date": "2026-06-09T10:00:00+09:00",
@@ -389,6 +429,7 @@ Preview output remains wrapped by the global JSON envelope:
         {
           "commit": "bbb222",
           "subject": "fix typo",
+          "message": "fix typo\n",
           "author_name": "Jane Dev",
           "author_email": "jane@example.com",
           "author_date": "2026-06-09T11:00:00+09:00",
@@ -399,6 +440,7 @@ Preview output remains wrapped by the global JSON envelope:
         {
           "commit": "ccc333",
           "subject": "wip",
+          "message": "wip\n",
           "author_name": "Jane Dev",
           "author_email": "jane@example.com",
           "author_date": "2026-06-09T12:00:00+09:00",
@@ -435,7 +477,7 @@ Preview output remains wrapped by the global JSON envelope:
     "preconditions": [
       { "code": "head_attached_to_local_branch", "status": "passed" },
       { "code": "operation_none", "status": "passed" },
-      { "code": "index_and_tracked_files_clean", "status": "passed" },
+      { "code": "no_conflicted_paths", "status": "passed" },
       { "code": "base_is_ancestor_of_head", "status": "passed" },
       { "code": "range_linear_without_merges", "status": "passed" },
       { "code": "instructions_match_range", "status": "passed" },
@@ -504,7 +546,7 @@ Preview output remains wrapped by the global JSON envelope:
 - per-commit published and signed flags
 - published scan basis
 - the full instruction list, including ops, frozen full object ids, and
-  messages
+  messages, or its explicit absence in survey plans
 - result summary
 - preconditions
 - execution status and blocked reason codes with details
@@ -514,7 +556,8 @@ Preview output remains wrapped by the global JSON envelope:
 
 `plan_id` must exclude advisory prose:
 
-- commit subjects and author display fields (derived from bound object ids)
+- commit subjects, full original messages, and author display fields
+  (derived from bound object ids)
 - effects
 - limitations
 - reference commands
@@ -538,7 +581,8 @@ super-git-plan-v0.4\n
 2. Recompute the plan hash.
 3. Confirm action kind is allowlisted.
 4. Confirm `execution.status` is eligible: `executable`, or `preview_only`
-   with a valid confirmation artifact for published ranges.
+   with a valid confirmation artifact for published ranges. Survey and
+   blocked plans are never eligible.
 5. For published ranges, statically validate the confirmation artifact under
    the C7-C rules adapted to `history_edit` before touching Git.
 6. Confirm repository family identity still matches.
@@ -548,8 +592,8 @@ super-git-plan-v0.4\n
    plan exactly.
 10. Re-run the published scan and confirm it matches the plan. New published
     commits since preview make the plan stale and blocked.
-11. Confirm no in-progress operation, no staged changes, no unstaged changes,
-    and no conflicts.
+11. Confirm no in-progress operation and no conflicted paths. Staged and
+    unstaged changes are allowed; the mechanism never touches them.
 12. Confirm `commit.gpgsign` is not enabled and committer identity is
     configured.
 13. Write an execution-intent record before any ref write.
@@ -561,8 +605,11 @@ super-git-plan-v0.4\n
     plan tip commit. A CAS failure aborts with a structured error and no
     state change; newly written objects are unreachable and harmless.
 16. Post-verify: the branch tip equals the new tip, `tree(new tip)` equals
-    `tree(old tip)`, the new commit count matches `result_summary`, and the
-    working-tree status summary is unchanged.
+    `tree(old tip)`, and the new commit count matches `result_summary`. The
+    working-tree status summary is compared as a sanity signal only; drift
+    (for example, an editor saving a file during execute) is reported as a
+    warning, not a failure, because those files are not super-git's to
+    manage.
 17. If post-verification fails, attempt a compare-and-swap rollback to the
     old tip and report `failed_rolled_back`; if the rollback CAS also fails,
     report `failed_partial` with the execution record path and both tip ids.
@@ -639,7 +686,7 @@ Then undo updates the branch ref with compare-and-swap from the new tip back
 to the old tip, and post-verifies:
 
 - the branch tip equals the old tip
-- the working-tree status summary is unchanged
+- working-tree status drift is reported as a warning only
 - no refs other than the target branch were modified
 
 The rewritten commits remain in the object store and reflog after undo; they
@@ -682,7 +729,10 @@ Acceptance:
 
 - [ ] `preview history-edit --base <ref> --instructions <file|->` emits a
       `super-git.plan.v0.4` plan with all fields in this contract.
-- [ ] Unpublished clean ranges report `executable`.
+- [ ] `preview history-edit --base <ref>` without instructions emits a survey
+      plan with full range data, `status: "survey"`,
+      `execute_supported: false`, and null instructions/result summary.
+- [ ] Unpublished ranges with valid instructions report `executable`.
 - [ ] Published ranges report `preview_only` with
       `requires_confirmation_artifact: true`.
 - [ ] Every hard block in this contract produces `status: "blocked"` with
@@ -702,6 +752,7 @@ Acceptance:
 Acceptance:
 
 - [ ] Execute revalidates everything in the execute contract before writing.
+- [ ] Survey and blocked plans are rejected before any write.
 - [ ] Commits are rebuilt with plumbing; `git rebase` is never invoked.
 - [ ] The branch ref moves only through compare-and-swap.
 - [ ] Tree-identity, commit-count, and status-unchanged post-verification is
@@ -750,7 +801,8 @@ Acceptance:
 
 These are product ideas, not part of the first history edit implementation:
 
-- `drop` and reordering (wait for Stage 7 conflict prediction)
+- `drop` and reordering (wait for Stage 7 conflict prediction; safe `drop`
+  for wip commits is known high demand and should land early in Stage 7)
 - `edit` and commit `split`
 - autosquash from `fixup!`/`squash!` subjects
 - `--onto` and rebasing onto a moved base
@@ -759,15 +811,13 @@ These are product ideas, not part of the first history edit implementation:
 - commit signing support for rebuilt commits
 - changing author identity
 - editing branches not checked out in the current worktree
-- relaxing the clean-working-tree requirement (the mechanism allows it; the
-  policy stays conservative first)
-- a survey mode for `preview history-edit` without instructions
 - commit-message lint integration (for example, conventional commits)
 - batch history edits across multiple branches
 
 ## C8-0 Self-review Checklist
 
 - [x] The contract does not allow preview to write.
+- [x] Survey mode is read-only and never eligible for execute.
 - [x] Execute never invokes interactive rebase or any editor.
 - [x] The tree-identity invariant is stated and post-verified.
 - [x] Branch ref writes are compare-and-swap only, in execute and undo.

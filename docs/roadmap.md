@@ -180,15 +180,19 @@ Implemented so far:
 Planned shape:
 
 - `preview history-edit` over a commit range, returning per-commit subject,
-  author, upstream/pushed status, and edit constraints as JSON
+  full message, author, upstream/pushed status, and edit constraints as JSON
+- calling preview without instructions returns a read-only survey that
+  doubles as the instruction-list template, so weaker agents never
+  reconstruct history from `git log` parsing by hand
 - a declarative instruction list inside the plan: `pick`, `reword`, `squash`,
   `fixup`, `drop`, and reordering, instead of todo-file strings
 - the first op set never changes any tree, so `execute` rebuilds the commit
   chain with Git plumbing and moves the branch ref atomically; interactive
   rebase machinery is never invoked, and plan-provided text is never executed
   directly
-- hard blocks first: dirty working tree, in-progress operation, merge commits
-  in range
+- hard blocks first: in-progress operations, conflicted paths, and merge
+  commits in range; staged and unstaged changes are allowed with a warning
+  because the mechanism never touches files
 - rewriting commits already on an upstream requires the destructive
   confirmation contract from Stage 5 instead of a silent allow
 - undo token restores the pre-execute branch tip after provenance checks
@@ -205,7 +209,8 @@ Slicing direction:
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits
 - prediction feeds Stage 6 `drop`/reorder steps and standalone merge or rebase
-  previews
+  previews; a safe `drop` for wip commits is the highest-demand consumer and
+  should land early
 - `inspect` gains the branch-relationship context prediction needs, such as
   merge-base and shared-upstream hints
 - safe branch refresh from
