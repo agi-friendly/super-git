@@ -5,7 +5,19 @@ use crate::model::StatusOutput;
 use crate::Result;
 
 pub fn read_status(path: &Path) -> Result<StatusOutput> {
-    let output = Git::default().run_in(path, ["status", "--porcelain=v1", "--branch"])?;
+    // Pin --untracked-files=all so `super-git status` reports the same untracked
+    // set as inspect/fingerprint/history-edit (which all force it). Otherwise a
+    // repo-level status.showUntrackedFiles=no makes status hide untracked files
+    // that inspect still reports -- an inconsistency an agent cannot reconcile.
+    let output = Git::default().run_in(
+        path,
+        [
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=all",
+        ],
+    )?;
     Ok(parse_status_porcelain(&output.stdout))
 }
 
@@ -34,16 +46,22 @@ pub(crate) fn classify_porcelain_z(stdout: &[u8]) -> PorcelainCounts {
     let mut counts = PorcelainCounts::default();
     let mut records = stdout.split(|byte| *byte == 0).filter(|r| !r.is_empty());
     while let Some(record) = records.next() {
-        if record.len() < 3 {
+        // A real record is `XY<space><path>` with a non-empty path, i.e. >= 4
+        // bytes (matching the old line-based `line.len() < 4` guard). Skipping at
+        // < 4 avoids treating a malformed empty-path record as a real entry.
+        if record.len() < 4 {
             continue;
         }
         let (x, y) = (record[0] as char, record[1] as char);
         // record[2] is the separator space; the rest is the raw path.
-        let path = String::from_utf8_lossy(&record[3..]).into_owned();
         match &record[..2] {
             b"!!" => counts.ignored += 1,
             b"??" => counts.untracked += 1,
-            _ if is_conflict(x, y) => counts.conflicts.push(path),
+            // Only conflict paths are retained, so allocate the String here
+            // rather than for every status record on a dirty tree.
+            _ if is_conflict(x, y) => counts
+                .conflicts
+                .push(String::from_utf8_lossy(&record[3..]).into_owned()),
             _ => {
                 if is_change(x) {
                     counts.staged += 1;
@@ -60,6 +78,23 @@ pub(crate) fn classify_porcelain_z(stdout: &[u8]) -> PorcelainCounts {
         }
     }
     counts
+}
+
+/// Run the pinned working-tree status read and classify it. This is the single
+/// source of the porcelain flags: -z (raw paths), --untracked-files=all (mode
+/// independent of status.showUntrackedFiles), and optionally --ignored. Every
+/// working-tree read goes through here so they stay consistent.
+pub(crate) fn read_porcelain_counts(
+    git: &Git,
+    path: &Path,
+    include_ignored: bool,
+) -> Result<PorcelainCounts> {
+    let mut args = vec!["status", "--porcelain=v1", "--untracked-files=all", "-z"];
+    if include_ignored {
+        args.push("--ignored");
+    }
+    let output = git.run_bytes_in(path, args)?;
+    Ok(classify_porcelain_z(&output.stdout))
 }
 
 /// Unmerged (conflict) status codes: DD/AA, or either column being `U`.

@@ -5,20 +5,25 @@ use std::process::{Command, Output, Stdio};
 
 use crate::{Result, SuperGitError};
 
-/// Decode a single path printed by git, trimming one trailing newline. On unix
-/// the bytes become an OsString verbatim (non-UTF-8 names survive); elsewhere
-/// (git emits UTF-8 on Windows) a lossy string is used.
-fn decode_git_path(stdout: &[u8]) -> PathBuf {
-    let trimmed = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+/// Build a PathBuf from raw bytes. On unix the bytes become an OsString verbatim
+/// so a non-UTF-8 filename survives; elsewhere (git emits UTF-8 on Windows) a
+/// lossy string is used. Shared by every git-path decoder so the non-UTF-8
+/// guarantee is one implementation, not per-call-site.
+pub(crate) fn os_path_from_bytes(bytes: &[u8]) -> PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;
-        PathBuf::from(OsString::from_vec(trimmed.to_vec()))
+        PathBuf::from(OsString::from_vec(bytes.to_vec()))
     }
     #[cfg(not(unix))]
     {
-        PathBuf::from(String::from_utf8_lossy(trimmed).into_owned())
+        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
     }
+}
+
+/// Decode a single path printed by git, trimming one trailing newline.
+fn decode_git_path(stdout: &[u8]) -> PathBuf {
+    os_path_from_bytes(stdout.strip_suffix(b"\n").unwrap_or(stdout))
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +188,15 @@ impl Git {
             .output()?;
 
         Ok(GitCommandResult::from_output(output))
+    }
+
+    /// Read a boolean git config value. Returns false when the key is unset,
+    /// unreadable, or not literally "true" after `--type=bool` normalization.
+    pub fn config_bool_true(&self, path: &Path, key: &str) -> bool {
+        self.try_run_in(path, ["config", "--type=bool", "--get", key])
+            .ok()
+            .filter(|output| output.success)
+            .is_some_and(|output| output.stdout.trim() == "true")
     }
 
     fn output_or_error(&self, args: Vec<String>, output: Output) -> Result<GitOutput> {

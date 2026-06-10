@@ -1,13 +1,13 @@
 use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::git::command::Git;
-use crate::git::{worktree, worktree_remove};
+use crate::git::{execute, worktree, worktree_remove};
 use crate::model::{
     ExecuteResult, UnavailableUndoStrategy, WorktreeRemoveExecutionRecord, WorktreeRemovePlan,
     WorktreeRemoveRepository, WorktreeRemoveTarget, WorktreeRemoveTargetState,
@@ -382,31 +382,10 @@ fn write_record_create_new(path: &Path, record: &WorktreeRemoveExecutionRecord) 
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(record)?;
-    let mut file = create_new_or_already_attempted(path)?;
+    let mut file = execute::create_new_or_already_attempted(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
-}
-
-/// Open a fresh execution record, mapping AlreadyExists to a contract error.
-/// The record path is a deterministic function of (plan_id, target), so an
-/// existing record means a prior attempt of the same plan did not complete; a
-/// raw "File exists" io error would otherwise make a still-valid plan
-/// permanently unexecutable.
-fn create_new_or_already_attempted(path: &Path) -> Result<fs::File> {
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(file) => Ok(file),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            Err(SuperGitError::ExecutePlanInvalid {
-                code: "execution_already_attempted".to_string(),
-                message: format!(
-                    "an execution record already exists at {}; inspect or remove it before retrying",
-                    path.display()
-                ),
-            })
-        }
-        Err(err) => Err(err.into()),
-    }
 }
 
 fn write_record_replace(path: &Path, record: &WorktreeRemoveExecutionRecord) -> Result<()> {

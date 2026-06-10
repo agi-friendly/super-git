@@ -185,7 +185,7 @@ pub fn scan_history_edit_range(current_path: &Path, base_input: &str) -> Result<
     let branch = read_branch(&git, &worktree_root, &head_commit)?;
     let operation = state::detect_operation(&git, &worktree_root)?;
     let working_tree = read_working_tree(&git, &worktree_root)?;
-    let commit_signing_enabled = config_bool_true(&git, &worktree_root, "commit.gpgsign");
+    let commit_signing_enabled = git.config_bool_true(&worktree_root, "commit.gpgsign");
     let committer_identity_configured = config_value_set(&git, &worktree_root, "user.name")
         && config_value_set(&git, &worktree_root, "user.email");
 
@@ -578,15 +578,13 @@ fn collect_scan_blocks(
         );
     }
     // Execute preserves author identity via GIT_AUTHOR_NAME/EMAIL; git rejects an
-    // empty author name ("empty ident name not allowed") at commit-tree time. A
-    // commit with an empty author would otherwise reach an "executable" plan that
-    // can never succeed, so block it honestly up front.
+    // empty author NAME ("empty ident name not allowed") at commit-tree time, but
+    // accepts an empty author email ("Name <>"). Block only the empty-name case,
+    // which would otherwise reach an "executable" plan that can never succeed.
     let unreadable_author_commits: Vec<&str> = range
         .commits
         .iter()
-        .filter(|commit| {
-            commit.author_name.trim().is_empty() || commit.author_email.trim().is_empty()
-        })
+        .filter(|commit| commit.author_name.trim().is_empty())
         .map(|commit| commit.commit.as_str())
         .collect();
     if !unreadable_author_commits.is_empty() {
@@ -791,13 +789,6 @@ fn commit_has_signature(git: &Git, root: &Path, oid: &str) -> Result<bool> {
     Ok(false)
 }
 
-fn config_bool_true(git: &Git, root: &Path, key: &str) -> bool {
-    git.try_run_in(root, ["config", "--type=bool", "--get", key])
-        .ok()
-        .filter(|output| output.success)
-        .is_some_and(|output| output.stdout.trim() == "true")
-}
-
 fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {
     git.try_run_in(root, ["config", "--get", key])
         .ok()
@@ -806,14 +797,7 @@ fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {
 }
 
 fn read_working_tree(git: &Git, root: &Path) -> Result<HistoryEditWorkingTree> {
-    // -z keeps conflict paths raw and parses newline paths; --untracked-files=all
-    // pins the mode independent of status.showUntrackedFiles. Shared parser is in
-    // git/status.rs.
-    let output = git.run_bytes_in(
-        root,
-        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-    )?;
-    let counts = status::classify_porcelain_z(&output.stdout);
+    let counts = status::read_porcelain_counts(git, root, false)?;
     Ok(HistoryEditWorkingTree {
         staged: counts.staged,
         unstaged: counts.unstaged,
@@ -1210,6 +1194,54 @@ mod tests {
         );
         assert!(block_codes(&scan).contains(&"author_identity_unreadable"));
         assert_eq!(scan.execution_status, "blocked");
+    }
+
+    #[test]
+    fn scan_allows_commit_with_empty_author_email() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let (repo, oids) = repo_with_feature_range(temp_dir.path());
+        let tree = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+        // git accepts an empty author email ("Name <>") -- only an empty NAME is
+        // rejected at commit-tree time. Such a commit must stay rewritable, not
+        // be over-blocked as author_identity_unreadable.
+        let raw = format!(
+            "tree {tree}\nparent {parent}\nauthor Author Name <> 1700000000 +0000\ncommitter test <test@example.com> 1700000000 +0000\n\nempty email\n",
+            parent = oids[2],
+        );
+        let mut hash_object = Command::new("git")
+            .current_dir(&repo)
+            .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn hash-object");
+        hash_object
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(raw.as_bytes())
+            .expect("write raw commit");
+        let output = hash_object.wait_with_output().expect("hash-object output");
+        assert!(output.status.success());
+        let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        git(&repo, &["update-ref", "refs/heads/feature/login", &oid]);
+
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+
+        let entry = scan
+            .range
+            .commits
+            .iter()
+            .find(|commit| commit.commit == oid)
+            .expect("empty-email commit in range");
+        assert!(
+            entry.author_email.trim().is_empty(),
+            "email parsed as empty"
+        );
+        assert!(!entry.author_name.trim().is_empty(), "name is present");
+        assert!(!block_codes(&scan).contains(&"author_identity_unreadable"));
     }
 
     #[test]

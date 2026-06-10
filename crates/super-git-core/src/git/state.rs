@@ -263,15 +263,7 @@ fn worktree_code(kind: WorktreeKind) -> &'static str {
 
 /// 워킹 트리 변경을 요약한다. 상세 목록은 status 명령에 맡기고 카운트+충돌 목록만 만든다.
 fn read_working_tree(git: &Git, path: &Path) -> Result<WorkingTree> {
-    // -z keeps conflict paths raw and parses newline paths; --untracked-files=all
-    // pins the mode so a status.showUntrackedFiles=no config cannot hide untracked
-    // files (which would make inspect report a clean tree). Shared parser is in
-    // git/status.rs.
-    let output = git.run_bytes_in(
-        path,
-        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-    )?;
-    let counts = status::classify_porcelain_z(&output.stdout);
+    let counts = status::read_porcelain_counts(git, path, false)?;
     Ok(WorkingTree {
         clean: counts.staged == 0
             && counts.unstaged == 0

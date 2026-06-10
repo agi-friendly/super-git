@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::git::command::Git;
+use crate::git::command::{self, Git};
 use crate::model::{Operation, StateFingerprint, FINGERPRINT_SCHEMA_VERSION};
 use crate::{Result, SuperGitError};
 
@@ -100,17 +100,24 @@ where
 }
 
 fn hash_untracked_content(git: &Git, path: &Path, repository: &Path) -> Result<String> {
-    let mut paths = parse_z_paths(
-        &git.run_bytes_in(path, ["ls-files", "--others", "--exclude-standard", "-z"])?
-            .stdout,
-    );
-    paths.sort();
+    // Split the raw -z bytes and keep paths raw, so a non-UTF-8 untracked
+    // filename joins to the real file on disk instead of a U+FFFD path that does
+    // not exist (which would make every fingerprint read fail). The hashed bytes
+    // are identical to before for UTF-8 paths, so plan_id is unchanged.
+    let stdout = git
+        .run_bytes_in(path, ["ls-files", "--others", "--exclude-standard", "-z"])?
+        .stdout;
+    let mut paths: Vec<&[u8]> = stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect();
+    paths.sort_unstable();
 
     let mut hasher = Sha256::new();
     for relative_path in paths {
-        let full_path = repository.join(&relative_path);
-        let entry = read_untracked_entry(&relative_path, &full_path)?;
-        hasher.update(relative_path.as_bytes());
+        let full_path = repository.join(command::os_path_from_bytes(relative_path));
+        let entry = read_untracked_entry(relative_path, &full_path)?;
+        hasher.update(relative_path);
         hasher.update(b"\0");
         hasher.update(entry.kind.as_bytes());
         hasher.update(b"\0");
@@ -129,11 +136,11 @@ fn hash_untracked_content(git: &Git, path: &Path, repository: &Path) -> Result<S
 struct UntrackedEntry {
     kind: &'static str,
     mode: String,
-    len: usize,
+    len: u64,
     content_hash: String,
 }
 
-fn read_untracked_entry(relative_path: &str, path: &Path) -> Result<UntrackedEntry> {
+fn read_untracked_entry(relative_path: &[u8], path: &Path) -> Result<UntrackedEntry> {
     let metadata = fs::symlink_metadata(path).map_err(|err| unreadable(relative_path, err))?;
     if metadata.file_type().is_symlink() {
         let target = fs::read_link(path).map_err(|err| unreadable(relative_path, err))?;
@@ -141,14 +148,15 @@ fn read_untracked_entry(relative_path: &str, path: &Path) -> Result<UntrackedEnt
         return Ok(UntrackedEntry {
             kind: "symlink",
             mode: mode_string(&metadata),
-            len: bytes.len(),
+            len: bytes.len() as u64,
             content_hash: sha256_hex(bytes),
         });
     }
 
     // Stream the file into the hasher instead of buffering it: a large untracked
     // file (a dataset or video) would otherwise be read fully into memory on
-    // every preview and execute revalidation.
+    // every preview and execute revalidation. len stays u64 so a >4 GiB file is
+    // not truncated on 32-bit targets.
     let file = fs::File::open(path).map_err(|err| unreadable(relative_path, err))?;
     let mut hasher = Sha256::new();
     let len = io::copy(&mut io::BufReader::new(file), &mut HashWriter(&mut hasher))
@@ -156,7 +164,7 @@ fn read_untracked_entry(relative_path: &str, path: &Path) -> Result<UntrackedEnt
     Ok(UntrackedEntry {
         kind: "file",
         mode: mode_string(&metadata),
-        len: len as usize,
+        len,
         content_hash: format_digest(hasher.finalize().as_slice()),
     })
 }
@@ -164,11 +172,14 @@ fn read_untracked_entry(relative_path: &str, path: &Path) -> Result<UntrackedEnt
 /// Wrap a bare io error (which carries no path) with the relative path and phase,
 /// so a file vanishing between `ls-files` and the read is identifiable instead
 /// of surfacing as a context-free ENOENT.
-fn unreadable(relative_path: &str, err: io::Error) -> SuperGitError {
+fn unreadable(relative_path: &[u8], err: io::Error) -> SuperGitError {
     SuperGitError::PreviewPreconditionFailed {
         action: "fingerprint".to_string(),
         code: "untracked_entry_unreadable".to_string(),
-        message: format!("could not read untracked entry {relative_path}: {err}"),
+        message: format!(
+            "could not read untracked entry {}: {err}",
+            String::from_utf8_lossy(relative_path)
+        ),
     }
 }
 
@@ -232,7 +243,7 @@ mod tests {
         let path = tmp.path().join("data.bin");
         std::fs::write(&path, b"hello untracked").expect("write file");
 
-        let entry = read_untracked_entry("data.bin", &path).expect("read entry");
+        let entry = read_untracked_entry(b"data.bin", &path).expect("read entry");
 
         assert_eq!(entry.kind, "file");
         assert_eq!(entry.len, 15);
@@ -240,12 +251,33 @@ mod tests {
         assert_eq!(entry.content_hash, sha256_hex(b"hello untracked"));
     }
 
+    // Linux-only: macOS/APFS rejects non-UTF-8 filenames, so the raw-bytes join
+    // can only be exercised on a filesystem that actually permits such a name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_untracked_entry_handles_non_utf8_path() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // A file whose name has a non-UTF-8 byte: the raw relative path must join
+        // to it and hash, not fail as if it vanished.
+        let name = std::ffi::OsStr::from_bytes(b"caf\xe9.bin");
+        let path = tmp.path().join(name);
+        std::fs::write(&path, b"data").expect("write file");
+
+        let entry = read_untracked_entry(b"caf\xe9.bin", &path).expect("read non-utf8 entry");
+
+        assert_eq!(entry.kind, "file");
+        assert_eq!(entry.content_hash, sha256_hex(b"data"));
+    }
+
     #[test]
     fn read_untracked_entry_missing_file_names_the_path() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let path = tmp.path().join("vanished.txt");
 
-        let err = read_untracked_entry("sub/vanished.txt", &path).expect_err("missing file errors");
+        let err =
+            read_untracked_entry(b"sub/vanished.txt", &path).expect_err("missing file errors");
 
         assert!(
             err.to_string().contains("sub/vanished.txt"),

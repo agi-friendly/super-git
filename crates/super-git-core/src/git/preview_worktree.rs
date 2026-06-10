@@ -190,11 +190,7 @@ fn selected_from_path(repository: &SavedRepository) -> PathBuf {
 /// is only meaningful when it is true (default false -> no over-blocking on
 /// case-sensitive filesystems).
 fn read_case_insensitive_fs(path: &Path) -> bool {
-    Git::default()
-        .try_run_in(path, ["config", "--type=bool", "--get", "core.ignorecase"])
-        .ok()
-        .filter(|output| output.success)
-        .is_some_and(|output| output.stdout.trim() == "true")
+    Git::default().config_bool_true(path, "core.ignorecase")
 }
 
 fn classify_source_ref(path: &Path, input: &str) -> Result<WorktreeSourceRef> {

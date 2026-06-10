@@ -696,11 +696,13 @@ fn repository_root(git: &Git, path: &Path) -> Result<PathBuf> {
 }
 
 fn git_common_dir(git: &Git, path: &Path) -> Result<PathBuf> {
-    let output = git.run_in(
+    // run_path_in preserves non-UTF-8 bytes so repository_id (a hash of this
+    // path) stays stable and correct for repos under non-UTF-8 directories.
+    let raw = git.run_path_in(
         path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?;
-    normalize_path(Path::new(output.stdout.trim()))
+    normalize_path(&raw)
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf> {
