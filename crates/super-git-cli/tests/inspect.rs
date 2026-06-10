@@ -681,3 +681,74 @@ fn inspect_bare_primary_worktree_has_null_main() {
     // bare-primary family에는 main worktree가 없으므로 null이어야 한다.
     assert_eq!(wc["main"], serde_json::Value::Null);
 }
+
+#[test]
+fn inspect_ignores_ambient_git_object_directory() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // A bogus object directory in the ambient env would hide every object, so a
+    // tool that inherited it could not resolve HEAD. The command wrapper scrubs
+    // it, keeping inspect bound to the repository selected by `git -C`.
+    let bogus = tmp.path().join("nonexistent-objects");
+    let output = super_git(dir)
+        .env("GIT_OBJECT_DIRECTORY", &bogus)
+        .arg("inspect")
+        .output()
+        .expect("run inspect");
+
+    assert!(
+        output.status.success(),
+        "inspect must ignore ambient GIT_OBJECT_DIRECTORY: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["data"]["head"]["branch"], "main");
+    assert_eq!(json["data"]["head"]["detached"], false);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_ignores_ambient_git_config_fsmonitor_injection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+
+    // Ambient GIT_CONFIG_COUNT/KEY/VALUE inject arbitrary config, and
+    // core.fsmonitor is run as a command on read operations (GIT_OPTIONAL_LOCKS=0
+    // does not suppress it). The driver below touches a sentinel; the scrub
+    // clears GIT_CONFIG_COUNT so the injection never runs.
+    let sentinel = tmp.path().join("pwned");
+    let driver = tmp.path().join("fsmonitor.sh");
+    std::fs::write(
+        &driver,
+        format!("#!/bin/sh\ntouch '{}'\n", sentinel.display()),
+    )
+    .expect("write driver");
+    let mut perms = std::fs::metadata(&driver)
+        .expect("driver meta")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&driver, perms).expect("chmod driver");
+
+    let output = super_git(dir)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", driver.to_str().expect("driver path"))
+        .arg("inspect")
+        .output()
+        .expect("run inspect");
+
+    assert!(
+        output.status.success(),
+        "inspect failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !sentinel.exists(),
+        "ambient GIT_CONFIG core.fsmonitor injection must not run a command"
+    );
+}

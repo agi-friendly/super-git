@@ -188,13 +188,34 @@ impl Git {
     fn base_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         // Plans must bind to the repository selected by `git -C`, not ambient
-        // Git environment inherited from an agent shell.
+        // Git environment inherited from an agent shell. Beyond the directory
+        // family, ambient env can subvert safety in worse ways:
+        // - GIT_CONFIG_COUNT/GIT_CONFIG_PARAMETERS inject arbitrary config such
+        //   as core.fsmonitor / core.hooksPath, which is arbitrary command
+        //   execution on plain read commands (GIT_OPTIONAL_LOCKS=0 does not
+        //   suppress fsmonitor). Clearing GIT_CONFIG_COUNT also neutralizes any
+        //   GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n.
+        // - GIT_NAMESPACE silently retargets ref reads and the history-edit
+        //   compare-and-swap to a different namespace than the plan bound to.
+        // - GIT_OBJECT_DIRECTORY/GIT_ALTERNATE_OBJECT_DIRECTORIES redirect where
+        //   objects are read/written; GIT_EXTERNAL_DIFF/GIT_DIFF_OPTS run an
+        //   external diff driver that would also poison the state fingerprint.
         for key in [
             "GIT_DIR",
             "GIT_WORK_TREE",
             "GIT_COMMON_DIR",
             "GIT_INDEX_FILE",
             "GIT_PREFIX",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_NAMESPACE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_EXTERNAL_DIFF",
+            "GIT_DIFF_OPTS",
         ] {
             command.env_remove(key);
         }
