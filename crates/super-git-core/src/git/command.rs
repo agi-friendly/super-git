@@ -185,6 +185,15 @@ impl Git {
         Ok(GitCommandResult::from_output(output))
     }
 
+    /// Read a boolean git config value. Returns false when the key is unset,
+    /// unreadable, or not literally "true" after `--type=bool` normalization.
+    pub fn config_bool_true(&self, path: &Path, key: &str) -> bool {
+        self.try_run_in(path, ["config", "--type=bool", "--get", key])
+            .ok()
+            .filter(|output| output.success)
+            .is_some_and(|output| output.stdout.trim() == "true")
+    }
+
     fn output_or_error(&self, args: Vec<String>, output: Output) -> Result<GitOutput> {
         let result = GitCommandResult::from_output(output);
 

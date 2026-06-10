@@ -185,7 +185,7 @@ pub fn scan_history_edit_range(current_path: &Path, base_input: &str) -> Result<
     let branch = read_branch(&git, &worktree_root, &head_commit)?;
     let operation = state::detect_operation(&git, &worktree_root)?;
     let working_tree = read_working_tree(&git, &worktree_root)?;
-    let commit_signing_enabled = config_bool_true(&git, &worktree_root, "commit.gpgsign");
+    let commit_signing_enabled = git.config_bool_true(&worktree_root, "commit.gpgsign");
     let committer_identity_configured = config_value_set(&git, &worktree_root, "user.name")
         && config_value_set(&git, &worktree_root, "user.email");
 
@@ -789,13 +789,6 @@ fn commit_has_signature(git: &Git, root: &Path, oid: &str) -> Result<bool> {
         }
     }
     Ok(false)
-}
-
-fn config_bool_true(git: &Git, root: &Path, key: &str) -> bool {
-    git.try_run_in(root, ["config", "--type=bool", "--get", key])
-        .ok()
-        .filter(|output| output.success)
-        .is_some_and(|output| output.stdout.trim() == "true")
 }
 
 fn config_value_set(git: &Git, root: &Path, key: &str) -> bool {

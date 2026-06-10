@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::store::SavedRepository;
 use crate::git::command::Git;
-use crate::git::{preview_worktree, worktree};
+use crate::git::{preview_worktree, worktree, worktree_plan};
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, WorktreeCreatePlan, WorktreeExecutionRecord, WorktreeInfo,
     WorktreeUndoToken, EXECUTE_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
@@ -27,7 +27,11 @@ pub fn execute_worktree_create_plan(plan: WorktreeCreatePlan) -> Result<ExecuteR
     validate_source_ref(&git, &plan)?;
     let worktrees = worktree::list_worktrees(&plan.repository.selected_from)?;
     validate_family_snapshot(&worktrees, &plan)?;
-    validate_target(&plan, &worktrees)?;
+    // Read the same filesystem-case signal preview used (core.ignorecase), so the
+    // case-collision revalidation below cannot disagree with the plan it checks.
+    let case_insensitive_fs =
+        git.config_bool_true(&plan.repository.selected_from, "core.ignorecase");
+    validate_target(&plan, &worktrees, case_insensitive_fs)?;
 
     let execution_record_path = execution_record_path(&plan);
     let expected_head = plan
@@ -411,7 +415,11 @@ fn validate_family_snapshot(worktrees: &[WorktreeInfo], plan: &WorktreeCreatePla
     )
 }
 
-fn validate_target(plan: &WorktreeCreatePlan, worktrees: &[WorktreeInfo]) -> Result<()> {
+fn validate_target(
+    plan: &WorktreeCreatePlan,
+    worktrees: &[WorktreeInfo],
+    case_insensitive_fs: bool,
+) -> Result<()> {
     if plan.target.path.exists() {
         return mismatch("target_path_available", "true", "false");
     }
@@ -446,7 +454,12 @@ fn validate_target(plan: &WorktreeCreatePlan, worktrees: &[WorktreeInfo]) -> Res
     ensure_bool(
         "target.case_insensitive_collision",
         plan.target.case_insensitive_collision,
-        has_case_insensitive_collision(&plan.target.name, &plan.target.parent, worktrees),
+        worktree_plan::has_case_insensitive_collision(
+            &plan.target.name,
+            &plan.target.parent,
+            worktrees,
+            case_insensitive_fs,
+        ),
     )?;
     ensure_bool(
         "target.reserved_name_collision",
@@ -710,35 +723,6 @@ fn same_path(left: &Path, right: &Path) -> bool {
             .ok()
             .zip(std::fs::canonicalize(right).ok())
             .is_some_and(|(left, right)| left == right)
-}
-
-fn has_case_insensitive_collision(
-    target_name: &str,
-    parent: &Path,
-    existing_worktrees: &[WorktreeInfo],
-) -> bool {
-    let target = target_name.to_lowercase();
-
-    if existing_worktrees.iter().any(|worktree| {
-        worktree
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.to_lowercase() == target)
-    }) {
-        return true;
-    }
-
-    let Ok(entries) = fs::read_dir(parent) else {
-        return false;
-    };
-
-    entries.filter_map(std::result::Result::ok).any(|entry| {
-        entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.to_lowercase() == target)
-    })
 }
 
 fn is_windows_reserved_component(value: &str) -> bool {

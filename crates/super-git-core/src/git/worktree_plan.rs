@@ -186,7 +186,9 @@ fn is_inside(path: &Path, parent: &Path) -> bool {
     path == parent || path.starts_with(parent)
 }
 
-fn has_case_insensitive_collision(
+/// Shared by preview (resolve_worktree_target) and execute-side revalidation so
+/// the two never disagree on whether a target collides.
+pub fn has_case_insensitive_collision(
     target_name: &str,
     parent: &Path,
     existing_worktrees: &[WorktreeInfo],
