@@ -289,19 +289,28 @@ super-git execute --plan /tmp/remove-plan.json --confirmation /tmp/remove-confir
 
 Current support is intentionally limited to internal allowlisted actions:
 `stage_changes`, executable `worktree_create` plans, confirmed
-`worktree_remove` plans, and executable (unpublished) `history_edit` plans.
-`execute` rejects stale plans, tampered plans, unsupported actions, unsupported
-options, blocked worktree plans, and mismatched repository state.
+`worktree_remove` plans, and `history_edit` plans (executable, or `preview_only`
+with a confirmation artifact). `execute` rejects stale plans, tampered plans,
+unsupported actions, unsupported options, blocked worktree plans, and mismatched
+repository state.
 
 For `history_edit`, execute re-derives the plan from fresh state and requires an
 identical plan id before writing, then rebuilds the commit chain with Git
 plumbing (`commit-tree`), moves the branch ref by compare-and-swap, and
 post-verifies that the final tree is unchanged. Leading unchanged picks keep
 their original object ids; author identity is preserved on every rewritten
-commit; the working tree and index are never touched. Published ranges
-(`execution.status: "preview_only"`) are rejected with `confirmation_required`
-until confirmation-gated execute lands. Successful results carry a
+commit; the working tree and index are never touched. Successful results carry a
 `restore_branch_tip_snapshot` undo token.
+
+Unpublished ranges (`execution.status: "executable"`) execute directly and must
+not carry a confirmation artifact. Published ranges
+(`execution.status: "preview_only"`) require a separate
+`super-git.confirmation.v0.1` artifact whose target, reason codes, undo
+strategy, and CLI phrase
+(`rewrite published history on <branch.ref> at <branch.tip_commit>`) match the
+plan; the confirmation is authorization only and never replaces fresh
+revalidation. The undo token still restores the local branch tip but cannot
+un-publish anything already pushed.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;

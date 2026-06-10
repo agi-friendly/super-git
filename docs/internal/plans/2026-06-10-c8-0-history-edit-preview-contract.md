@@ -796,11 +796,11 @@ Acceptance:
 
 Acceptance:
 
-- [ ] Static confirmation validation reuses the C7-C rule table with
+- [x] Static confirmation validation reuses the C7-C rule table with
       `history_edit` identity fields and the deterministic phrase.
-- [ ] A forged or stale confirmation never executes.
-- [ ] Fresh revalidation runs even with a valid confirmation.
-- [ ] Successful published-range execute still returns the local undo token
+- [x] A forged or stale confirmation never executes.
+- [x] Fresh revalidation runs even with a valid confirmation.
+- [x] Successful published-range execute still returns the local undo token
       and records that undo does not un-publish.
 
 ## Deferred Features

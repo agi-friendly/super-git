@@ -6,13 +6,15 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use serde_json::Value;
+
 use crate::git::command::Git;
 use crate::git::preview_history_edit::{compute_history_edit_plan_id, preview_history_edit};
 use crate::model::{
-    ExecuteResult, ExecuteUndoToken, HistoryEditExecutionRecord, HistoryEditPlan,
-    HistoryEditPlanCommit, HistoryEditUndoToken, EXECUTE_SCHEMA_VERSION,
-    HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION, HISTORY_EDIT_PLAN_SCHEMA_VERSION,
-    HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
+    ExecuteResult, ExecuteUndoToken, HistoryEditConfirmation, HistoryEditExecutionRecord,
+    HistoryEditPlan, HistoryEditPlanCommit, HistoryEditUndoToken, CONFIRMATION_SCHEMA_VERSION,
+    EXECUTE_SCHEMA_VERSION, HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION,
+    HISTORY_EDIT_PLAN_SCHEMA_VERSION, HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -21,8 +23,33 @@ const ACTION_HISTORY_EDIT: &str = "history_edit";
 pub fn execute_history_edit_plan(
     current_path: &Path,
     plan: HistoryEditPlan,
+    confirmation_bytes: Option<&[u8]>,
 ) -> Result<ExecuteResult> {
     validate_static_contract(&plan)?;
+    // Published rewrites (preview_only) require a separate confirmation
+    // artifact, validated statically against the plan before any write.
+    // Unpublished (executable) plans must not carry one.
+    match plan.execution.status.as_str() {
+        "preview_only" => {
+            let Some(bytes) = confirmation_bytes else {
+                return invalid_plan(
+                    "confirmation_required",
+                    "history_edit execute for a published range requires a separate confirmation artifact",
+                );
+            };
+            let confirmation = parse_confirmation(bytes)?;
+            validate_confirmation(&plan, &confirmation)?;
+        }
+        _ => {
+            if confirmation_bytes.is_some() {
+                return invalid_plan(
+                    "confirmation_not_supported",
+                    "unpublished history_edit plans do not take a confirmation artifact",
+                );
+            }
+        }
+    }
+
     // The whole write path runs off `fresh`, not the caller-supplied `plan`.
     // Author identity and picked-commit messages are excluded from plan_id (the
     // contract treats them as derivable from the bound object ids), so trusting
@@ -161,49 +188,26 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
             "history_edit execute supports only history_edit plans",
         );
     }
-    // Published rewrites (preview_only) need the confirmation artifact added in
-    // C8-E; C8-C executes only unpublished, unblocked plans.
-    if plan.execution.status == "preview_only" {
-        return invalid_plan(
-            "confirmation_required",
-            "history_edit execute for published ranges requires a confirmation artifact (not yet supported)",
-        );
-    }
-    if plan.execution.status != "executable" {
+    let status = plan.execution.status.as_str();
+    if status != "executable" && status != "preview_only" {
         return invalid_plan(
             "not_executable",
-            "history_edit execute requires execution.status=executable",
+            "history_edit execute requires execution.status of executable or preview_only",
         );
     }
     if !plan.execution.execute_supported
-        || plan.execution.requires_confirmation_artifact
         || plan.execution.raw_git_allowed
         || !plan.execution.blocked_reasons.is_empty()
     {
         return invalid_plan(
             "unsupported_execution_contract",
-            "history_edit execute requires an unblocked super-git-only executable plan",
-        );
-    }
-    if plan.risk.severity != "medium"
-        || plan.risk.reversibility != "reversible_if_unchanged"
-        || plan.risk.requires_human_confirmation
-    {
-        return invalid_plan(
-            "unsupported_risk",
-            "history_edit execute requires medium reversible_if_unchanged risk without human confirmation",
+            "history_edit execute requires an unblocked super-git-only plan",
         );
     }
     if plan.undo_strategy.kind != "restore_branch_tip_snapshot" {
         return invalid_plan(
             "unsupported_undo_strategy",
             "history_edit execute requires restore_branch_tip_snapshot undo strategy",
-        );
-    }
-    if plan.confirmation.is_some() {
-        return invalid_plan(
-            "unexpected_confirmation_block",
-            "executable history_edit plans must not carry a confirmation block",
         );
     }
     if plan.branch.is_none() {
@@ -215,7 +219,165 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
     if plan.instructions.is_none() || plan.result_summary.is_none() {
         return invalid_plan(
             "instructions_required",
-            "executable history_edit plans must carry resolved instructions and a result summary",
+            "history_edit execute requires resolved instructions and a result summary",
+        );
+    }
+    validate_tier_contract(plan, status)
+}
+
+/// Risk and confirmation expectations differ by tier: unpublished plans are
+/// medium-risk and carry no confirmation block; published plans are high-risk
+/// and require one. The confirmation block's fields are bound by plan_id, so a
+/// light presence check here plus the artifact validation closes the contract.
+fn validate_tier_contract(plan: &HistoryEditPlan, status: &str) -> Result<()> {
+    match status {
+        "executable" => {
+            if plan.execution.requires_confirmation_artifact || plan.confirmation.is_some() {
+                return invalid_plan(
+                    "unexpected_confirmation_block",
+                    "executable history_edit plans must not require or carry a confirmation block",
+                );
+            }
+            if plan.risk.severity != "medium"
+                || plan.risk.reversibility != "reversible_if_unchanged"
+                || plan.risk.requires_human_confirmation
+            {
+                return invalid_plan(
+                    "unsupported_risk",
+                    "executable history_edit requires medium reversible_if_unchanged risk without human confirmation",
+                );
+            }
+            Ok(())
+        }
+        "preview_only" => {
+            if !plan.execution.requires_confirmation_artifact {
+                return invalid_plan(
+                    "unsupported_execution_contract",
+                    "preview_only history_edit must require a confirmation artifact",
+                );
+            }
+            if plan.risk.severity != "high"
+                || plan.risk.reversibility != "reversible_if_unchanged"
+                || !plan.risk.requires_human_confirmation
+            {
+                return invalid_plan(
+                    "unsupported_risk",
+                    "preview_only history_edit requires high reversible_if_unchanged risk with human confirmation",
+                );
+            }
+            match &plan.confirmation {
+                Some(confirmation) if confirmation.required_before_execute => Ok(()),
+                _ => invalid_plan(
+                    "confirmation_block_required",
+                    "preview_only history_edit must carry a confirmation block that requires confirmation",
+                ),
+            }
+        }
+        _ => invalid_plan("not_executable", "unreachable execution status"),
+    }
+}
+
+fn parse_confirmation(bytes: &[u8]) -> Result<HistoryEditConfirmation> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if value.get("schema_version").and_then(Value::as_str) != Some(CONFIRMATION_SCHEMA_VERSION) {
+        return invalid_plan(
+            "confirmation_schema_unsupported",
+            "history_edit confirmation requires super-git.confirmation.v0.1",
+        );
+    }
+    serde_json::from_value(value).map_err(|err| SuperGitError::ExecutePlanInvalid {
+        code: "confirmation_artifact_invalid".to_string(),
+        message: format!("history_edit confirmation artifact is invalid JSON shape: {err}"),
+    })
+}
+
+/// Static validation mirrors the C7-C rule table with history_edit identity
+/// fields. The artifact is authorization, never a substitute for the fresh
+/// revalidation that follows; a forged or stale confirmation cannot execute.
+fn validate_confirmation(
+    plan: &HistoryEditPlan,
+    confirmation: &HistoryEditConfirmation,
+) -> Result<()> {
+    let branch = plan
+        .branch
+        .as_ref()
+        .expect("branch presence validated by static contract");
+    let plan_confirmation = plan
+        .confirmation
+        .as_ref()
+        .expect("confirmation block validated by static contract");
+
+    if confirmation.kind.as_deref() != Some("destructive_action_confirmation") {
+        return invalid_plan(
+            "confirmation_kind_unsupported",
+            "history_edit confirmation kind must be destructive_action_confirmation",
+        );
+    }
+    if confirmation.action.as_deref() != Some(plan.action.kind.as_str()) {
+        return invalid_plan(
+            "confirmation_action_mismatch",
+            "history_edit confirmation action must match the plan action",
+        );
+    }
+    if confirmation.plan_schema_version.as_deref() != Some(plan.schema_version.as_str())
+        || confirmation.plan_id.as_deref() != Some(plan.plan_id.as_str())
+    {
+        return invalid_plan(
+            "confirmation_plan_mismatch",
+            "history_edit confirmation must match the plan schema version and plan id",
+        );
+    }
+
+    let Some(target) = &confirmation.target else {
+        return invalid_plan(
+            "confirmation_target_mismatch",
+            "history_edit confirmation target is required",
+        );
+    };
+    if target.branch_ref.as_deref() != Some(branch.ref_name.as_str())
+        || target.tip_commit.as_deref() != Some(branch.tip_commit.as_str())
+        || target.git_common_dir.as_deref() != Some(plan.repository.git_common_dir.as_path())
+    {
+        return invalid_plan(
+            "confirmation_target_mismatch",
+            "history_edit confirmation target must match the plan branch, tip, and git_common_dir",
+        );
+    }
+
+    if confirmation.acknowledged_reason_codes.as_ref() != Some(&plan_confirmation.reason_codes) {
+        return invalid_plan(
+            "confirmation_reason_codes_mismatch",
+            "history_edit confirmation must acknowledge the exact plan reason codes",
+        );
+    }
+    if confirmation.acknowledged_undo_strategy.as_deref() != Some(plan.undo_strategy.kind.as_str())
+    {
+        return invalid_plan(
+            "confirmation_undo_strategy_mismatch",
+            "history_edit confirmation must acknowledge the plan undo strategy",
+        );
+    }
+
+    let Some(acknowledgement) = &confirmation.acknowledgement else {
+        return invalid_plan(
+            "confirmation_acknowledgement_missing",
+            "history_edit confirmation must include an explicit acknowledgement",
+        );
+    };
+    if acknowledgement.method.as_deref() != Some("cli_typed_phrase") {
+        return invalid_plan(
+            "confirmation_acknowledgement_missing",
+            "history_edit confirmation acknowledgement method must be cli_typed_phrase",
+        );
+    }
+    let expected_phrase = format!(
+        "rewrite published history on {} at {}",
+        branch.ref_name, branch.tip_commit
+    );
+    if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
+        return invalid_plan(
+            "confirmation_phrase_mismatch",
+            "history_edit confirmation phrase must match the deterministic published-rewrite phrase",
         );
     }
     Ok(())
@@ -233,10 +395,13 @@ fn validate_fresh_binding(current_path: &Path, plan: &HistoryEditPlan) -> Result
         &plan.action.options.base,
         Some(&instructions_bytes),
     )?;
-    if fresh.execution.status != "executable" {
+    // The fresh tier must match the plan's: a range that became (or stopped
+    // being) published since preview shifts the status and the plan_id, and is
+    // rejected rather than executed under stale assumptions.
+    if fresh.execution.status != plan.execution.status {
         return mismatch(
             "fresh_execution_status",
-            "executable",
+            &plan.execution.status,
             &fresh.execution.status,
         );
     }

@@ -52,8 +52,7 @@ pub fn execute_plan_bytes_with_confirmation(
             execute_worktree_remove_plan(current_path, *plan, confirmation_bytes)
         }
         PlanToExecute::HistoryEdit(plan) => {
-            reject_unexpected_confirmation(confirmation_bytes)?;
-            execute_history_edit::execute_history_edit_plan(current_path, *plan)
+            execute_history_edit::execute_history_edit_plan(current_path, *plan, confirmation_bytes)
         }
     }
 }

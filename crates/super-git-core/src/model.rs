@@ -650,6 +650,31 @@ pub struct WorktreeRemoveAcknowledgement {
     pub phrase: Option<String>,
 }
 
+/// `super-git.confirmation.v0.1` 아티팩트의 history_edit 변형.
+/// published 히스토리 재작성 실행 권한을 명시적으로 증명한다.
+/// target은 worktree_remove와 달리 분기 ref/tip 신원을 담는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditConfirmation {
+    pub schema_version: String,
+    pub kind: Option<String>,
+    pub action: Option<String>,
+    pub plan_schema_version: Option<String>,
+    pub plan_id: Option<String>,
+    pub target: Option<HistoryEditConfirmationTarget>,
+    pub acknowledged_reason_codes: Option<Vec<String>>,
+    pub acknowledged_undo_strategy: Option<String>,
+    pub acknowledgement: Option<WorktreeRemoveAcknowledgement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditConfirmationTarget {
+    pub branch_ref: Option<String>,
+    pub git_common_dir: Option<PathBuf>,
+    pub tip_commit: Option<String>,
+}
+
 /// `super-git.plan.v0.4` 히스토리 편집 계획.
 /// 첫 op 세트(pick/reword/squash/fixup)는 트리를 보존하므로 분기 ref만 이동한다.
 /// instructions/result_summary는 survey 모드에서 null로 명시된다.

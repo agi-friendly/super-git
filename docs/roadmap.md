@@ -185,6 +185,9 @@ Implemented so far:
   a branch-tip-snapshot undo token
 - C8-D undo: provenance-checked branch-tip restore by compare-and-swap, refusing
   an advanced tip and verifying no other ref moved
+- C8-E confirmation-gated execute for published ranges: a matching
+  `super-git.confirmation.v0.1` artifact with the deterministic phrase plus fresh
+  revalidation; the local undo token still applies but cannot un-publish
 
 Planned shape:
 

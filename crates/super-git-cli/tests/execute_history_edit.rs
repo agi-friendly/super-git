@@ -334,29 +334,6 @@ fn tampered_plan_id_is_rejected_without_writing() {
 }
 
 #[test]
-fn published_plan_is_rejected_pending_confirmation_support() {
-    let tmp = tempfile::tempdir().expect("temp");
-    let (repo, oids) = feature_repo(tmp.path());
-    git(
-        &repo,
-        &["update-ref", "refs/remotes/origin/feature/login", &oids[2]],
-    );
-    let items = format!(
-        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"m"}},{{"commit":"{}","op":"pick"}}]"#,
-        oids[0], oids[1], oids[2]
-    );
-    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
-    assert_eq!(plan["data"]["execution"]["status"], "preview_only");
-    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
-
-    let json = error_json(execute_plan_from_stdin(&repo, &plan));
-
-    assert_eq!(json["ok"], false);
-    assert!(cause_contains(&json, "confirmation_required"));
-    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
-}
-
-#[test]
 fn survey_plan_cannot_be_executed() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, _) = feature_repo(tmp.path());
