@@ -552,17 +552,27 @@ fn rollback_index_after_registry_failure(snapshot: &IndexSnapshot) -> Result<()>
         .create_new(true)
         .open(&snapshot.index_lock_path)?;
 
-    if snapshot.pre_index_existed {
-        let bytes = fs::read(&snapshot.path)?;
-        restore_index_from_bytes(
-            lock,
-            &snapshot.index_path,
-            &snapshot.index_lock_path,
-            &bytes,
-        )
-    } else {
-        remove_index_after_failed_execute(lock, &snapshot.index_path, &snapshot.index_lock_path)
+    // The restore/remove helpers consume the lock and unlink it via rename or
+    // remove on success. If any step fails first (e.g. reading the snapshot, or
+    // the write/rename), the lock file would otherwise be orphaned and block
+    // every future git write, so remove it on any error path.
+    let result = (move || -> Result<()> {
+        if snapshot.pre_index_existed {
+            let bytes = fs::read(&snapshot.path)?;
+            restore_index_from_bytes(
+                lock,
+                &snapshot.index_path,
+                &snapshot.index_lock_path,
+                &bytes,
+            )
+        } else {
+            remove_index_after_failed_execute(lock, &snapshot.index_path, &snapshot.index_lock_path)
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&snapshot.index_lock_path);
     }
+    result
 }
 
 fn restore_index_from_bytes(
@@ -739,5 +749,36 @@ fn hex_char(value: u8) -> char {
         0..=9 => (b'0' + value) as char,
         10..=15 => (b'a' + value - 10) as char,
         _ => unreachable!("nibble is always <= 15"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollback_removes_index_lock_when_snapshot_read_fails() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let index_path = tmp.path().join("index");
+        std::fs::write(&index_path, b"current-index").expect("write index");
+        let index_lock_path = tmp.path().join("index.lock");
+        // pre_index_existed=true forces the restore branch, whose first step
+        // reads the snapshot file -- which is missing here, so rollback errors.
+        let snapshot = IndexSnapshot {
+            path: tmp.path().join("missing.snapshot"),
+            undo_dir: tmp.path().to_path_buf(),
+            index_path,
+            index_lock_path: index_lock_path.clone(),
+            pre_index_existed: true,
+            pre_index_sha256: "sha256:x".to_string(),
+        };
+
+        let result = rollback_index_after_registry_failure(&snapshot);
+
+        assert!(result.is_err(), "a missing snapshot must surface an error");
+        assert!(
+            !index_lock_path.exists(),
+            "rollback must not leave a stale index.lock on the error path"
+        );
     }
 }
