@@ -100,9 +100,16 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
         Some(HISTORY_EDIT_PLAN_SCHEMA_VERSION) => Ok(PlanToExecute::HistoryEdit(Box::new(
             serde_json::from_value(value)?,
         ))),
-        _ => invalid_plan(
+        Some(_) => invalid_plan(
             "unsupported_schema_version",
             "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, super-git.plan.v0.3, and super-git.plan.v0.4",
+        ),
+        // No schema_version string at all: this is not a plan document (e.g. a
+        // null or a failed preview's {ok:false} piped through jq .data), which is
+        // a different problem from a present-but-unknown version.
+        None => invalid_plan(
+            "plan_document_invalid",
+            "input is not a plan document (missing schema_version)",
         ),
     }
 }
@@ -162,7 +169,7 @@ fn reject_unexpected_confirmation(confirmation_bytes: Option<&[u8]>) -> Result<(
     if confirmation_bytes.is_some() {
         return invalid_plan(
             "confirmation_not_supported",
-            "confirmation artifacts are supported only for destructive worktree_remove plans",
+            "confirmation artifacts are supported only for worktree_remove plans and published-range history_edit plans",
         );
     }
     Ok(())
@@ -232,7 +239,7 @@ fn validate_worktree_remove_confirmation(
     };
     if acknowledgement.method.as_deref() != Some("cli_typed_phrase") {
         return invalid_plan(
-            "confirmation_acknowledgement_missing",
+            "confirmation_method_unsupported",
             "worktree_remove confirmation acknowledgement method must be cli_typed_phrase",
         );
     }

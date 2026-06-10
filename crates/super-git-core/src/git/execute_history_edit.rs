@@ -385,7 +385,7 @@ fn validate_confirmation(
     };
     if acknowledgement.method.as_deref() != Some("cli_typed_phrase") {
         return invalid_plan(
-            "confirmation_acknowledgement_missing",
+            "confirmation_method_unsupported",
             "history_edit confirmation acknowledgement method must be cli_typed_phrase",
         );
     }

@@ -638,3 +638,31 @@ fn execute_stage_changes_stages_colon_prefixed_filename() {
         "normal file must be staged: {staged}"
     );
 }
+
+#[test]
+fn execute_rejects_non_plan_document_with_distinct_code() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    // A JSON object with no schema_version is not a plan document; this is a
+    // different failure from a present-but-unknown plan version.
+    let plan_path = dir.join(".git").join("not-a-plan.json");
+    std::fs::write(&plan_path, "{}").expect("write non-plan");
+
+    let output = execute_plan(dir, &plan_path);
+
+    assert!(!output.status.success(), "a non-plan document must fail");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]["causes"]
+            .as_array()
+            .expect("causes")
+            .iter()
+            .any(|cause| cause
+                .as_str()
+                .unwrap_or_default()
+                .contains("plan_document_invalid")),
+        "expected plan_document_invalid: {json}"
+    );
+}
