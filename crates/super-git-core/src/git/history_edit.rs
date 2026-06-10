@@ -491,7 +491,9 @@ fn resolve_range_commit<'a>(
     input: &str,
 ) -> Option<&'a HistoryEditCommit> {
     let needle = input.to_ascii_lowercase();
-    if needle.len() < 4 || needle.len() > 40 || !needle.bytes().all(|b| b.is_ascii_hexdigit()) {
+    // Accept up to 64 hex chars so full SHA-256 object ids resolve, matching the
+    // undo side; SHA-1 (40) and abbreviations stay valid.
+    if needle.len() < 4 || needle.len() > 64 || !needle.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut matches = range_commits
@@ -1384,5 +1386,49 @@ mod tests {
         assert!(codes.contains(&"instruction_op_unsupported"));
         assert!(codes.contains(&"instruction_message_unexpected"));
         assert!(validation.program.is_none());
+    }
+
+    #[test]
+    fn resolve_accepts_full_sha256_object_ids() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        // SHA-256 repository: object ids are 64 hex chars, which the scan emits
+        // and an agent echoes straight back into the instruction list.
+        git(
+            &repo,
+            &["init", "-q", "-b", "main", "--object-format=sha256"],
+        );
+        git(&repo, &["config", "user.name", "test"]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        commit_file(&repo, "README.md", "hello\n", "initial");
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        commit_file(&repo, "a.txt", "a\n", "feat: a");
+        commit_file(&repo, "b.txt", "b\n", "fix: b");
+        let oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(oids[0].len(), 64, "sha256 object id is 64 hex chars");
+
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+        let document = parse_instructions(&instructions_json(&format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"reworded"}}]"#,
+            oids[0], oids[1]
+        )))
+        .expect("parse");
+
+        let validation = validate_instructions(&scan.range.commits, &document);
+
+        assert!(
+            validation.blocks.is_empty(),
+            "full sha256 ids must resolve: {:?}",
+            validation.blocks
+        );
+        assert!(
+            validation.program.is_some(),
+            "a valid sha256 instruction list yields a program"
+        );
     }
 }
