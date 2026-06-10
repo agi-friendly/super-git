@@ -35,6 +35,13 @@ Implementation plans and design checkpoints live under:
 These files are useful for project history and implementation context, but the
 public-facing contract should be reflected in the main docs listed above.
 
+## Reviews
+
+Point-in-time review reports (snapshots, not active contracts) live under:
+
+- [internal/reviews](internal/reviews/)
+- [2026-06-10 full project review](internal/reviews/2026-06-10-full-project-review.md)
+
 ## Archive
 
 Original research and dual-brain notes moved to:
