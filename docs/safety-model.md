@@ -200,3 +200,25 @@ The project is converging on a two-axis risk model:
 The current implementation already separates read-only inspect data, preview
 plans, guarded execute, and registry-backed undo. Future work will expand this
 into richer warnings and human-confirmation rules for high-risk actions.
+
+## Untrusted Repositories
+
+`super-git` wraps the system `git`, so it inherits Git's standard code-execution
+behavior when pointed at a repository whose configuration or hooks are
+attacker-controlled. The ambient-environment vectors (`GIT_CONFIG_*`,
+`GIT_NAMESPACE`, object-directory and external-diff variables) are scrubbed
+before every `git` invocation, but a repository's own `.git/config` and hooks
+are part of the repository under inspection.
+
+- **Read commands** (`inspect [path]`, `status [path]`, `wt list [path]`,
+  `repo add/save <path>`) accept arbitrary paths. They run `git` with
+  `core.fsmonitor` disabled (`-c core.fsmonitor=false`), so a hostile repo's
+  `core.fsmonitor` command does not run on read-only inspection. Other
+  read-triggered hooks are not a concern for the porcelain commands used here.
+- **Write commands** run against the repository the plan is bound to, not an
+  arbitrary path. They keep standard Git behavior: in particular,
+  `worktree add` fires the repository's `post-checkout` hook. Running a write
+  action implies you trust that repository.
+
+Treat inspecting or registering a repository you do not control as carrying the
+same risk as running `git status` / `git worktree add` in it yourself.

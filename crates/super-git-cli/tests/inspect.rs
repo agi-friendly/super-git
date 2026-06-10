@@ -769,3 +769,48 @@ fn inspect_reports_untracked_despite_show_untracked_files_no() {
     assert_eq!(json["data"]["working_tree"]["untracked"], 1);
     assert_eq!(json["data"]["working_tree"]["clean"], false);
 }
+
+#[cfg(unix)]
+#[test]
+fn inspect_does_not_run_repo_local_fsmonitor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    // A hostile repo can set core.fsmonitor in its own .git/config; git runs it
+    // as a command even on read-only inspection. Read commands disable fsmonitor
+    // via -c, so the driver must not run.
+    let sentinel = tmp.path().join("pwned");
+    let driver = tmp.path().join("fsmonitor.sh");
+    std::fs::write(
+        &driver,
+        format!("#!/bin/sh\ntouch '{}'\n", sentinel.display()),
+    )
+    .expect("write driver");
+    let mut perms = std::fs::metadata(&driver)
+        .expect("driver meta")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&driver, perms).expect("chmod driver");
+    git(
+        dir,
+        &[
+            "config",
+            "core.fsmonitor",
+            driver.to_str().expect("driver path"),
+        ],
+    );
+
+    let output = super_git(dir).arg("inspect").output().expect("run inspect");
+
+    assert!(
+        output.status.success(),
+        "inspect failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !sentinel.exists(),
+        "a repo-local core.fsmonitor must not run on read-only inspect"
+    );
+}

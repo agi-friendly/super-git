@@ -178,6 +178,14 @@ impl Git {
         // Read-side commands must not opportunistically refresh or lock the index.
         // Write actions use `write_command` so Git can take the locks it needs.
         command.env("GIT_OPTIONAL_LOCKS", "0");
+        // Read commands accept arbitrary repository paths (inspect/status/wt
+        // list/repo add). A hostile repo's core.fsmonitor is run as a command
+        // even on read-only operations (GIT_OPTIONAL_LOCKS=0 does not suppress
+        // it), so disable it: reads have no use for an fsmonitor. The -c override
+        // wins over repo-local config. Write paths run against the plan-bound
+        // repository and keep standard Git behavior; that limitation is
+        // documented in docs/safety-model.md.
+        command.args(["-c", "core.fsmonitor=false"]);
         command
     }
 
