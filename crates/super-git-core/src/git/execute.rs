@@ -311,7 +311,14 @@ fn execute_stage_changes_plan(current_path: &Path, plan: PreviewPlan) -> Result<
         OsString::from("--all"),
         OsString::from("--"),
     ];
-    args.extend(plan.action.resolved_paths.iter().map(OsString::from));
+    // Disarm pathspec magic: a resolved path beginning with ':' (e.g. ':foo' or
+    // ':(exclude)src') or containing glob metacharacters would otherwise change
+    // which files git stages. :(literal) forces the exact path as written.
+    args.extend(plan.action.resolved_paths.iter().map(|path| {
+        let mut spec = OsString::from(":(literal)");
+        spec.push(path);
+        spec
+    }));
 
     if let Err(err) = git.run_write_in(&state.root, args) {
         let _ = fs::remove_file(&snapshot.path);

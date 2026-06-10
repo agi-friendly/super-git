@@ -608,3 +608,33 @@ fn execute_stage_changes_ignores_external_diff_driver() {
     assert_eq!(json["data"]["executed"], true);
     assert_eq!(status_porcelain(&repo), "M  file.txt\n");
 }
+
+#[cfg(unix)]
+#[test]
+fn execute_stage_changes_stages_colon_prefixed_filename() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    // A ':'-prefixed filename is valid on POSIX but is pathspec magic to
+    // `git add`; without :(literal) it would be misinterpreted and skipped.
+    std::fs::write(dir.join(":weird.txt"), "x\n").expect("write colon file");
+    std::fs::write(dir.join("normal.txt"), "y\n").expect("write normal file");
+
+    let plan = preview_plan_file(dir);
+    let output = execute_plan(dir, &plan);
+
+    assert!(
+        output.status.success(),
+        "execute failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let staged = status_porcelain(dir);
+    assert!(
+        staged.contains(":weird.txt"),
+        "colon-prefixed file must be staged: {staged}"
+    );
+    assert!(
+        staged.contains("normal.txt"),
+        "normal file must be staged: {staged}"
+    );
+}
