@@ -814,3 +814,37 @@ fn inspect_does_not_run_repo_local_fsmonitor() {
         "a repo-local core.fsmonitor must not run on read-only inspect"
     );
 }
+
+#[test]
+fn inspect_reports_unborn_head_on_fresh_init() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    // A fresh `git init` with zero commits: the state every bootstrap agent
+    // starts from. inspect must succeed and say so, not error out.
+    git(dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("new.txt"), "x\n").expect("write untracked");
+
+    let json = inspect_json(dir);
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["head"]["commit"], serde_json::Value::Null);
+    assert_eq!(json["data"]["working_tree"]["untracked"], 1);
+    assert_eq!(json["data"]["working_tree"]["clean"], false);
+}
+
+#[test]
+fn preview_history_edit_on_unborn_head_fails_with_clear_code() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+
+    let output = super_git(dir)
+        .args(["preview", "history-edit", "--base", "main"])
+        .output()
+        .expect("run preview history-edit");
+
+    assert!(!output.status.success(), "unborn HEAD cannot be edited");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "head_unborn");
+}

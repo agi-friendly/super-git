@@ -675,3 +675,52 @@ pub fn print_worktrees(mode: OutputMode, worktrees: &[WorktreeInfo]) -> Result<(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{structured_error_code, structured_error_details};
+    use std::path::PathBuf;
+    use super_git_core::SuperGitError;
+
+    /// ExecutePartialFailure is the agent's recovery contract: the envelope must
+    /// expose machine-readable details (observed state + safe next step), not
+    /// just prose. This pins the JSON shape.
+    #[test]
+    fn partial_failure_envelope_exposes_recovery_details() {
+        let err = anyhow::Error::new(SuperGitError::ExecutePartialFailure {
+            action: "worktree_create".to_string(),
+            message: "git worktree add failed".to_string(),
+            execution_record_path: PathBuf::from("/repo/.git/super-git/executions/x.json"),
+            target_path: PathBuf::from("/repo.worktrees/repo__feature"),
+            target_path_exists: true,
+            worktree_list_entry_present: false,
+        })
+        .context("could not execute plan");
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("execute_partial_failure")
+        );
+        let details = structured_error_details(&err).expect("details");
+        assert_eq!(details["status"], "failed_partial");
+        assert_eq!(details["action"], "worktree_create");
+        assert_eq!(details["observed"]["target_path_exists"], true);
+        assert_eq!(details["observed"]["worktree_list_entry_present"], false);
+        assert_eq!(details["cleanup"]["automatic_undo_available"], false);
+        assert_eq!(details["cleanup"]["safe_next"], "inspect_cleanup_record");
+    }
+
+    /// Contract-coded variants surface their inner code through error.code.
+    #[test]
+    fn structured_error_code_surfaces_inner_domain_code() {
+        let err = anyhow::Error::new(SuperGitError::ExecutePlanInvalid {
+            code: "confirmation_required".to_string(),
+            message: "needs a confirmation artifact".to_string(),
+        });
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("confirmation_required")
+        );
+    }
+}
