@@ -244,10 +244,8 @@ fn validate_worktree_remove_confirmation(
         );
     }
 
-    let expected_phrase = format!(
-        "remove worktree {} without automatic undo",
-        plan.target.worktree_list_path.display()
-    );
+    let expected_phrase =
+        preview_worktree_remove::confirmation_phrase(&plan.target.worktree_list_path);
     if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
         return invalid_plan(
             "confirmation_phrase_mismatch",

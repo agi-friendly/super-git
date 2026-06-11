@@ -155,6 +155,10 @@ fn build_plan(
                 "local_undo_does_not_unpublish".to_string(),
             ],
             human_prompt: format!("Rewrite published history on {branch_label}?"),
+            required_phrase: scan
+                .branch
+                .as_ref()
+                .map(|branch| confirmation_phrase(&branch.ref_name, &branch.tip_commit)),
         })
     } else {
         None
@@ -401,6 +405,13 @@ fn limitations() -> Vec<String> {
         "Undo depends on the previous tip staying reachable in the local object store.".to_string(),
         "Rewritten commits do not preserve GPG/SSH signatures from the originals.".to_string(),
     ]
+}
+
+/// The deterministic typed phrase a published-range history_edit confirmation
+/// must carry. Shared by preview (which advertises it in the plan) and execute
+/// (which enforces it), so the two can never drift.
+pub fn confirmation_phrase(branch_ref: &str, tip_commit: &str) -> String {
+    format!("rewrite published history on {branch_ref} at {tip_commit}")
 }
 
 pub fn compute_history_edit_plan_id(plan: &HistoryEditPlan) -> String {

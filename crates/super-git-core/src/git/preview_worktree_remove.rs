@@ -87,7 +87,18 @@ pub fn preview_worktree_remove(
             execute_supported: future_execute_eligibility == "needs_human_confirmation",
             future_execute_eligibility: future_execute_eligibility.to_string(),
             raw_git_allowed: false,
-            suggested_super_git_command: None,
+            suggested_super_git_command: (future_execute_eligibility
+                == "needs_human_confirmation")
+                .then(|| {
+                    vec![
+                        "super-git".to_string(),
+                        "execute".to_string(),
+                        "--plan".to_string(),
+                        "<plan-file>".to_string(),
+                        "--confirmation".to_string(),
+                        "<confirmation-file>".to_string(),
+                    ]
+                }),
             blocked_reasons,
         },
         risk: ActionRisk {
@@ -103,6 +114,7 @@ pub fn preview_worktree_remove(
                 "no_automatic_undo".to_string(),
             ],
             human_prompt: format!("Remove linked worktree at {}?", target_path.display()),
+            required_phrase: Some(confirmation_phrase(&target_path)),
         },
         effects: effects_for(future_execute_eligibility, &target_path),
         limitations: vec![
@@ -208,6 +220,16 @@ fn recovery_hints(target_path: &Path, branch: Option<&str>) -> Vec<RecoveryHint>
             ref_name.to_string(),
         ],
     }]
+}
+
+/// The deterministic typed phrase a worktree_remove confirmation must carry.
+/// Shared by preview (which advertises it in the plan) and execute (which
+/// enforces it), so the two can never drift.
+pub fn confirmation_phrase(target_path: &Path) -> String {
+    format!(
+        "remove worktree {} without automatic undo",
+        target_path.display()
+    )
 }
 
 pub fn compute_worktree_remove_plan_id(plan: &WorktreeRemovePlan) -> Result<String> {
@@ -350,6 +372,8 @@ mod tests {
         plan.limitations = vec!["Different limitation.".to_string()];
         plan.reference_commands.commands = vec![vec!["git".to_string(), "status".to_string()]];
         plan.confirmation.human_prompt = "Different prompt.".to_string();
+        plan.confirmation.required_phrase = Some("tampered phrase".to_string());
+        plan.execution.suggested_super_git_command = Some(vec!["different".to_string()]);
         plan.undo_strategy.reason = "Different undo prose.".to_string();
         plan.recovery_hints[0].description = "Different recovery prose.".to_string();
         plan.recovery_hints[0].reference_command = vec!["git".to_string(), "status".to_string()];
@@ -423,6 +447,7 @@ mod tests {
                 required_before_execute: true,
                 reason_codes: vec!["no_automatic_undo".to_string()],
                 human_prompt: "Remove linked worktree?".to_string(),
+                required_phrase: None,
             },
             effects: vec!["Delete worktree.".to_string()],
             limitations: vec!["Cannot detect processes.".to_string()],

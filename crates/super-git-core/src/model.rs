@@ -603,6 +603,13 @@ pub struct PreviewConfirmation {
     pub required_before_execute: bool,
     pub reason_codes: Vec<String>,
     pub human_prompt: String,
+    /// The exact phrase the confirmation artifact's acknowledgement must carry.
+    /// Advisory (excluded from plan_id, like human_prompt): execute re-derives
+    /// the phrase from plan-bound fields, so tampering here cannot relax the
+    /// check -- it only saves agents from reconstructing the phrase by trial
+    /// and error. `default` keeps plans from older binaries deserializable.
+    #[serde(default)]
+    pub required_phrase: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
