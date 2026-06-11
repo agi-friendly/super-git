@@ -445,10 +445,61 @@ fn validate_current_fingerprint(
         return Ok(());
     }
 
-    ensure_match(
+    let expected = &plan.state_fingerprint;
+    let mut changed = Vec::new();
+    if current.schema_version != expected.schema_version {
+        changed.push("schema_version");
+    }
+    if current.repository != expected.repository {
+        changed.push("repository");
+    }
+    if current.head_commit != expected.head_commit {
+        changed.push("head_commit");
+    }
+    if current.operation != expected.operation {
+        changed.push("operation");
+    }
+    if current.staged_diff_sha256 != expected.staged_diff_sha256 {
+        changed.push("staged_diff_sha256");
+    }
+    if current.unstaged_diff_sha256 != expected.unstaged_diff_sha256 {
+        changed.push("unstaged_diff_sha256");
+    }
+    if current.status_porcelain_v1_z_sha256 != expected.status_porcelain_v1_z_sha256 {
+        changed.push("status_porcelain_v1_z_sha256");
+    }
+    if current.untracked_content_sha256 != expected.untracked_content_sha256 {
+        changed.push("untracked_content_sha256");
+    }
+
+    // Saving the plan file inside the repository adds it as a new untracked
+    // entry, so the most natural agent flow (`preview > plan.json` in the repo
+    // root, then execute) invalidates its own plan. Only the status hash and the
+    // untracked content hash move in that case; give it a dedicated code and an
+    // actionable hint instead of a generic mismatch.
+    let only_untracked = changed.iter().all(|field| {
+        matches!(
+            *field,
+            "status_porcelain_v1_z_sha256" | "untracked_content_sha256"
+        )
+    });
+    if only_untracked {
+        return Err(SuperGitError::ExecutePlanInvalid {
+            code: "untracked_changed_since_preview".to_string(),
+            message: format!(
+                "only untracked files changed since preview (state_fingerprint: {}); if the plan was saved inside the repository it invalidates itself -- keep the plan outside the repo or pipe `preview ... | execute --plan -`, otherwise rerun preview",
+                changed.join(", ")
+            ),
+        });
+    }
+
+    mismatch(
         "state_fingerprint",
-        &serde_json::to_string(&plan.state_fingerprint)?,
-        &serde_json::to_string(&current)?,
+        "unchanged_since_preview",
+        &format!(
+            "changed: {}; rerun preview for a fresh plan",
+            changed.join(", ")
+        ),
     )
 }
 
