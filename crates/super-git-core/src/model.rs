@@ -109,6 +109,20 @@ pub enum Operation {
     Bisecting,
 }
 
+impl Operation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Merging => "merging",
+            Self::Rebasing => "rebasing",
+            Self::Applying => "applying",
+            Self::CherryPicking => "cherry-picking",
+            Self::Reverting => "reverting",
+            Self::Bisecting => "bisecting",
+        }
+    }
+}
+
 /// HEAD가 가리키는 위치.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HeadInfo {
@@ -603,6 +617,13 @@ pub struct PreviewConfirmation {
     pub required_before_execute: bool,
     pub reason_codes: Vec<String>,
     pub human_prompt: String,
+    /// The exact phrase the confirmation artifact's acknowledgement must carry.
+    /// Advisory (excluded from plan_id, like human_prompt): execute re-derives
+    /// the phrase from plan-bound fields, so tampering here cannot relax the
+    /// check -- it only saves agents from reconstructing the phrase by trial
+    /// and error. `default` keeps plans from older binaries deserializable.
+    #[serde(default)]
+    pub required_phrase: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -689,6 +710,11 @@ pub struct HistoryEditPlan {
     pub range: HistoryEditPlanRange,
     pub published_scan: HistoryEditPublishedScan,
     pub instructions: Option<HistoryEditPlanInstructions>,
+    /// Filled on survey plans (no instructions supplied) so the agent can edit
+    /// and resubmit it. Advisory: excluded from plan_id; survey plans are not
+    /// executable, so the template carries no write authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_template: Option<HistoryEditInstructionsTemplate>,
     pub result_summary: Option<HistoryEditResultSummaryView>,
     pub preconditions: Vec<HistoryEditPrecondition>,
     pub execution: HistoryEditExecution,
@@ -783,6 +809,20 @@ pub struct HistoryEditPlanInstructionItem {
     pub op: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// A ready-to-edit `super-git.instructions.v0.1` document carried by survey
+/// plans: every range commit prefilled as `pick`, in the exact shape
+/// `preview history-edit --instructions` accepts. Agents copy it, change ops
+/// and messages, and feed it back -- instead of reconstructing the schema from
+/// docs or error breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditInstructionsTemplate {
+    pub schema_version: String,
+    pub action: String,
+    pub base: String,
+    pub items: Vec<HistoryEditPlanInstructionItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -57,13 +57,25 @@ Implemented today:
     worktree
   - reports strict hard blocks, human confirmation requirements, no automatic
     undo, and manual recovery hints without deleting anything
+- `super-git preview history-edit --base <ref> [--instructions <file|->]`
+  - without `--instructions`, returns a read-only survey of the editable
+    `base..HEAD` range (commits, published state, signatures, hard blocks)
+  - with a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
+    `fixup` per commit), builds a tree-preserving rewrite plan
+  - unpublished ranges produce an executable plan; published ranges produce a
+    `preview_only` plan that requires a separate human confirmation artifact
 - `super-git execute --plan <file|-> [--confirmation <file|->]`
   - re-validates the plan and state before writing
   - executes only internal allowlisted actions: `stage_changes`, executable
-    `worktree_create` plans, and confirmed `worktree_remove` plans
+    `worktree_create` plans, confirmed `worktree_remove` plans, and
+    `history_edit` plans
   - writes local provenance before reporting success
   - for destructive `worktree_remove`, requires a separate confirmation
     artifact and returns no automatic undo token
+  - for `history_edit`, rebuilds commits with `commit-tree` (author identity
+    preserved), moves the branch ref with compare-and-swap, verifies the final
+    tree is unchanged, and requires the confirmation artifact when the range
+    is published
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current
@@ -72,6 +84,10 @@ Implemented today:
   - for `worktree_create`, validates local execution-record provenance, target
     worktree identity, clean state, lock state, and HEAD/ref drift before
     removing the linked worktree
+  - for `history_edit`, validates local execution-record provenance and that
+    the branch still points at the post-execute tip, then restores the
+    pre-execute branch tip with compare-and-swap (local only; it cannot
+    un-publish pushed history)
   - never edits working-tree file contents or deletes branch refs/history
 - Supporting commands: `doctor`, `config path`, `config show`,
   `config validate`, `config set-worktree-template`, `repo save`, `repo add`,

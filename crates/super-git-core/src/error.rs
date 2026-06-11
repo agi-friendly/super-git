@@ -112,3 +112,35 @@ pub enum SuperGitError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
+
+impl SuperGitError {
+    /// Stable machine-readable error code for the JSON envelope, so agents can
+    /// branch on `error.code` instead of regexing English prose. Variants that
+    /// already carry a domain code (preview/execute/undo contract errors)
+    /// surface that inner code directly.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::ConfigDirectoryUnavailable => "config_directory_unavailable",
+            Self::EmptySuperGitHome => "super_git_home_empty",
+            Self::RelativeSuperGitHome(_) => "super_git_home_relative",
+            Self::InvalidConfigSchemaVersion(_) => "config_schema_invalid",
+            Self::UnsupportedConfigSchemaVersion { .. } => "unsupported_config_schema",
+            Self::ConfigValidationFailed { code, .. } => code,
+            Self::RepositoryNotFound { .. } => "repository_not_found",
+            Self::AmbiguousRepositoryTarget { .. } => "ambiguous_repository_target",
+            Self::PathDoesNotExist(_) => "path_does_not_exist",
+            Self::PathIsNotDirectory(_) => "path_is_not_directory",
+            Self::NotGitRepository(_) => "not_git_repository",
+            Self::GitCommandFailed { .. } => "git_command_failed",
+            Self::PreviewPreconditionFailed { code, .. } => code,
+            Self::ExecutePlanInvalid { code, .. } => code,
+            Self::ExecutePreconditionMismatch { .. } => "execute_precondition_mismatch",
+            Self::ExecuteRollbackFailed { .. } => "execute_rollback_failed",
+            Self::ExecutePartialFailure { .. } => "execute_partial_failure",
+            Self::UndoTokenInvalid { code, .. } => code,
+            Self::UndoPreconditionMismatch { .. } => "undo_precondition_mismatch",
+            Self::Io(_) => "io_error",
+            Self::Json(_) => "json_error",
+        }
+    }
+}

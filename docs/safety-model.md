@@ -94,12 +94,13 @@ worktrees.
 
 ## Current Write Boundary
 
-Three Git write actions exist today:
+Four Git write actions exist today:
 
 ```text
 stage_changes
 worktree_create
 worktree_remove
+history_edit
 ```
 
 `stage_changes` stages the unstaged/untracked pathset captured by `preview`,
@@ -117,6 +118,21 @@ execution record before Git may mutate worktree metadata.
 before deletion, writes an execution record, and confirms the command is not
 being run from inside the target worktree. It is destructive and does not
 return an automatic undo token.
+
+`history_edit` rewrites the `base..HEAD` range of the current branch from a
+`super-git.plan.v0.4` built out of declarative `pick`/`reword`/`squash`/`fixup`
+instructions. Execute re-derives a fresh plan from the live repository and
+requires its plan id to match (so author identity and messages cannot be forged
+through a tampered plan), rebuilds the commits with `git commit-tree` while
+preserving each original author, writes an intent record, then moves the branch
+ref with a compare-and-swap against the pre-execute tip. A post-verify check
+proves the final tree is identical to the pre-execute tree; any failure after
+the ref moved rolls the branch back. Published ranges are `preview_only` and
+require a separate `super-git.confirmation.v0.1` artifact with a typed phrase.
+Undo restores the pre-execute branch tip from the execution record, again via
+compare-and-swap, and refuses if the branch has advanced since execute. It
+moves only the branch pointer: the working tree and index are untouched, and
+local undo cannot un-publish history that was already pushed.
 
 Future actions must earn their way into the allowlist with tests and docs.
 
@@ -187,6 +203,12 @@ Successful worktree removal results do not return an `undo_token`. The local
 execution record states `automatic_undo_available: false` so downstream agents
 cannot accidentally treat the destructive action as reversible.
 
+`worktree_remove` is not the only confirmation-gated action: a `history_edit`
+plan over a published range also requires a `super-git.confirmation.v0.1`
+artifact. The difference is reversibility — a confirmed history edit still
+returns an undo token (restore the branch tip), while a confirmed worktree
+removal never does.
+
 The confirmation contract is documented in
 `docs/internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md`.
 
@@ -198,8 +220,12 @@ The project is converging on a two-axis risk model:
 - reversibility: how confidently the action can be undone
 
 The current implementation already separates read-only inspect data, preview
-plans, guarded execute, and registry-backed undo. Future work will expand this
-into richer warnings and human-confirmation rules for high-risk actions.
+plans, guarded execute, and registry-backed undo. `history_edit` exercises both
+axes: an unpublished range is medium severity and `reversible_if_unchanged`
+with no human confirmation, while a published range is high severity, still
+`reversible_if_unchanged` locally, and requires explicit human confirmation
+because local undo cannot un-publish remote history. Future work will expand
+this into richer warnings and human-confirmation rules for high-risk actions.
 
 ## Untrusted Repositories
 

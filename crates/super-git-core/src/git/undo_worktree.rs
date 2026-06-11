@@ -5,7 +5,7 @@ use std::path::{Component, Path};
 
 use crate::config::store::SavedRepository;
 use crate::git::command::Git;
-use crate::git::{state, worktree};
+use crate::git::{state, undo_registry, worktree};
 use crate::model::{
     Operation, UndoResult, WorktreeExecutionRecord, WorktreeInfo, WorktreeUndoToken,
     UNDO_RESULT_SCHEMA_VERSION, UNDO_TOKEN_SCHEMA_VERSION,
@@ -197,35 +197,10 @@ fn validate_execution_record(token: &WorktreeUndoToken) -> Result<()> {
 }
 
 fn validate_execution_record_path(token: &WorktreeUndoToken) -> Result<()> {
-    let execution_dir = token.git_common_dir.join("super-git").join("executions");
-    if !token.execution_record_path.starts_with(&execution_dir) {
-        return invalid_token(
-            "unsafe_execution_record_path",
-            "execution record path must stay inside the repository executions directory",
-        );
-    }
-
-    let relative = token
-        .execution_record_path
-        .strip_prefix(&execution_dir)
-        .map_err(|_| SuperGitError::UndoTokenInvalid {
-            code: "unsafe_execution_record_path".to_string(),
-            message: "execution record path must be under the executions directory".to_string(),
-        })?;
-    if relative.components().count() != 1
-        || !matches!(relative.components().next(), Some(Component::Normal(_)))
-        || token
-            .execution_record_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            != Some("json")
-    {
-        return invalid_token(
-            "unsafe_execution_record_path",
-            "execution record path must be a direct .json file inside the executions directory",
-        );
-    }
-    Ok(())
+    undo_registry::validate_execution_record_path(
+        &token.git_common_dir,
+        &token.execution_record_path,
+    )
 }
 
 fn find_target_worktree_index(worktrees: &[WorktreeInfo], target_path: &Path) -> Result<usize> {
@@ -282,11 +257,7 @@ fn validate_target_head_and_ref(git: &Git, token: &WorktreeUndoToken) -> Result<
 fn validate_target_is_clean(token: &WorktreeUndoToken) -> Result<()> {
     let repo_state = state::read_state(&token.target_path)?;
     if repo_state.operation != Operation::None {
-        return mismatch(
-            "target_operation",
-            "none",
-            operation_name(repo_state.operation),
-        );
+        return mismatch("target_operation", "none", repo_state.operation.as_str());
     }
     if repo_state.working_tree.clean {
         return validate_target_has_no_ignored_files(token);
@@ -446,18 +417,6 @@ fn invalid_token<T>(code: &str, message: &str) -> Result<T> {
         code: code.to_string(),
         message: message.to_string(),
     })
-}
-
-fn operation_name(operation: Operation) -> &'static str {
-    match operation {
-        Operation::None => "none",
-        Operation::Merging => "merging",
-        Operation::Rebasing => "rebasing",
-        Operation::Applying => "applying",
-        Operation::CherryPicking => "cherry-picking",
-        Operation::Reverting => "reverting",
-        Operation::Bisecting => "bisecting",
-    }
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

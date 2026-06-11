@@ -176,9 +176,12 @@ fn write_json(path: &Path, value: &serde_json::Value) {
 fn confirmation_for_remove_plan(plan: &serde_json::Value) -> serde_json::Value {
     let data = &plan["data"];
     let target = &data["target"];
-    let worktree_path = target["worktree_list_path"]
+    // The plan advertises the exact phrase; building the artifact from it (not
+    // by reconstructing the format) is the intended agent flow, so a missing or
+    // wrong required_phrase makes execute fail with confirmation_phrase_mismatch.
+    let phrase = data["confirmation"]["required_phrase"]
         .as_str()
-        .expect("worktree_list_path");
+        .expect("plan advertises required_phrase");
     serde_json::json!({
         "schema_version": "super-git.confirmation.v0.1",
         "kind": "destructive_action_confirmation",
@@ -195,7 +198,7 @@ fn confirmation_for_remove_plan(plan: &serde_json::Value) -> serde_json::Value {
         "acknowledged_undo_strategy": data["undo_strategy"]["kind"],
         "acknowledgement": {
             "method": "cli_typed_phrase",
-            "phrase": format!("remove worktree {worktree_path} without automatic undo")
+            "phrase": phrase
         }
     })
 }
@@ -250,9 +253,25 @@ fn preview_worktree_remove_clean_linked_worktree_emits_preview_only_plan_without
         "needs_human_confirmation"
     );
     assert_eq!(data["execution"]["raw_git_allowed"], false);
+    // A confirmable plan advertises how to execute it and the exact phrase the
+    // confirmation artifact must carry, so agents need no trial and error.
     assert_eq!(
         data["execution"]["suggested_super_git_command"],
-        serde_json::Value::Null
+        serde_json::json!([
+            "super-git",
+            "execute",
+            "--plan",
+            "<plan-file>",
+            "--confirmation",
+            "<confirmation-file>"
+        ])
+    );
+    assert!(
+        data["confirmation"]["required_phrase"]
+            .as_str()
+            .expect("required_phrase advertised")
+            .starts_with("remove worktree "),
+        "phrase must be the deterministic remove phrase"
     );
     assert_eq!(data["execution"]["blocked_reasons"], serde_json::json!([]));
     assert_eq!(data["risk"]["severity"], "high");

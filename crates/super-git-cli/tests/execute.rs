@@ -666,3 +666,53 @@ fn execute_rejects_non_plan_document_with_distinct_code() {
         "expected plan_document_invalid: {json}"
     );
 }
+
+#[test]
+fn execute_error_envelope_carries_machine_readable_code() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    let plan_path = dir.join(".git").join("not-a-plan.json");
+    std::fs::write(&plan_path, "{}").expect("write non-plan");
+
+    let output = execute_plan(dir, &plan_path);
+
+    assert!(!output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    // Agents branch on error.code instead of regexing the English message.
+    assert_eq!(json["error"]["code"], "plan_document_invalid");
+}
+
+#[test]
+fn execute_names_untracked_self_invalidation_with_dedicated_code() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let dir = tmp.path();
+    init_repo_with_commit(dir);
+    std::fs::write(dir.join("file.txt"), "hello\nchanged\n").expect("modify tracked");
+    // The natural agent flow: save the plan INSIDE the repository. The plan file
+    // itself becomes a new untracked entry and invalidates the fingerprint.
+    let output = super_git(dir)
+        .args(["preview", "stage-changes"])
+        .output()
+        .expect("run preview");
+    assert!(output.status.success());
+    let plan_path = dir.join("plan.json");
+    std::fs::write(&plan_path, output.stdout).expect("write plan inside repo");
+
+    let output = execute_plan(dir, &plan_path);
+
+    assert!(!output.status.success(), "self-invalidated plan must fail");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse json");
+    assert_eq!(json["error"]["code"], "untracked_changed_since_preview");
+    assert!(
+        json["error"]["causes"]
+            .as_array()
+            .expect("causes")
+            .iter()
+            .any(|cause| cause
+                .as_str()
+                .unwrap_or_default()
+                .contains("outside the repo")),
+        "causes must carry the recovery hint: {json}"
+    );
+}

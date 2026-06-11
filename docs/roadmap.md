@@ -5,17 +5,20 @@ should be useful before the next stage starts.
 
 ## Current Position
 
-The project has a working read-side inspection layer, two undoable write-side
+The project has a working read-side inspection layer, three undoable write-side
 safety flows, and one confirmed destructive flow:
 
 ```text
 inspect -> preview stage-changes -> execute --plan -> undo --token
 inspect -> preview worktree-create -> execute --plan -> undo --token
+inspect -> preview history-edit -> execute --plan [--confirmation] -> undo --token
 inspect -> preview worktree-remove -> execute --plan --confirmation
 ```
 
 `worktree_remove` is intentionally not automatically undoable; it requires
 explicit confirmation and recovery hints instead of an `undo_token`.
+`history_edit` requires the confirmation artifact only when the range is
+published, and its undo restores the pre-execute branch tip locally.
 
 The next stages should expand this lifecycle carefully instead of adding raw Git
 wrappers.

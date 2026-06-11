@@ -8,9 +8,8 @@ use super_git_core::config::store::{
 };
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
-    ExecuteResult, HistoryEditPlan, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput,
-    UndoResult, WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan,
-    INSPECT_SCHEMA_VERSION,
+    ExecuteResult, HistoryEditPlan, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -47,6 +46,10 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
                     "causes": causes,
                 }
             });
+            // 기계가독 코드: 에이전트가 영어 메시지 파싱 대신 `error.code`로 분기한다.
+            if let Some(code) = structured_error_code(err) {
+                value["error"]["code"] = json!(code);
+            }
             if let Some(details) = structured_error_details(err) {
                 value["error"]["details"] = details;
             }
@@ -61,6 +64,14 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
             eprintln!("Error: {err:#}");
         }
     }
+}
+
+fn structured_error_code(err: &anyhow::Error) -> Option<String> {
+    err.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<SuperGitError>()
+            .map(|error| error.code().to_string())
+    })
 }
 
 fn structured_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
@@ -103,6 +114,7 @@ pub fn print_parse_error(mode: OutputMode, err: &clap::Error) {
             let value = json!({
                 "ok": false,
                 "error": {
+                    "code": "invalid_arguments",
                     "message": "invalid command-line arguments",
                     "causes": [err.to_string()],
                 }
@@ -424,7 +436,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                 }
             }
 
-            println!("Operation: {}", operation_label(state.operation));
+            println!("Operation: {}", state.operation.as_str());
 
             if !state.next.allowed.is_empty() {
                 println!("Preview candidates:");
@@ -621,18 +633,6 @@ fn worktree_kind_label(kind: WorktreeKind) -> &'static str {
     }
 }
 
-fn operation_label(operation: Operation) -> &'static str {
-    match operation {
-        Operation::None => "none",
-        Operation::Merging => "merging",
-        Operation::Rebasing => "rebasing",
-        Operation::Applying => "applying",
-        Operation::CherryPicking => "cherry-picking",
-        Operation::Reverting => "reverting",
-        Operation::Bisecting => "bisecting",
-    }
-}
-
 fn risk_level_label(level: RiskLevel) -> &'static str {
     match level {
         RiskLevel::Low => "low",
@@ -673,5 +673,54 @@ pub fn print_worktrees(mode: OutputMode, worktrees: &[WorktreeInfo]) -> Result<(
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{structured_error_code, structured_error_details};
+    use std::path::PathBuf;
+    use super_git_core::SuperGitError;
+
+    /// ExecutePartialFailure is the agent's recovery contract: the envelope must
+    /// expose machine-readable details (observed state + safe next step), not
+    /// just prose. This pins the JSON shape.
+    #[test]
+    fn partial_failure_envelope_exposes_recovery_details() {
+        let err = anyhow::Error::new(SuperGitError::ExecutePartialFailure {
+            action: "worktree_create".to_string(),
+            message: "git worktree add failed".to_string(),
+            execution_record_path: PathBuf::from("/repo/.git/super-git/executions/x.json"),
+            target_path: PathBuf::from("/repo.worktrees/repo__feature"),
+            target_path_exists: true,
+            worktree_list_entry_present: false,
+        })
+        .context("could not execute plan");
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("execute_partial_failure")
+        );
+        let details = structured_error_details(&err).expect("details");
+        assert_eq!(details["status"], "failed_partial");
+        assert_eq!(details["action"], "worktree_create");
+        assert_eq!(details["observed"]["target_path_exists"], true);
+        assert_eq!(details["observed"]["worktree_list_entry_present"], false);
+        assert_eq!(details["cleanup"]["automatic_undo_available"], false);
+        assert_eq!(details["cleanup"]["safe_next"], "inspect_cleanup_record");
+    }
+
+    /// Contract-coded variants surface their inner code through error.code.
+    #[test]
+    fn structured_error_code_surfaces_inner_domain_code() {
+        let err = anyhow::Error::new(SuperGitError::ExecutePlanInvalid {
+            code: "confirmation_required".to_string(),
+            message: "needs a confirmation artifact".to_string(),
+        });
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("confirmation_required")
+        );
     }
 }

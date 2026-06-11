@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::git::command::Git;
 use crate::git::execute;
+use crate::git::preview_history_edit;
 use crate::git::preview_history_edit::{compute_history_edit_plan_id, preview_history_edit};
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, HistoryEditConfirmation, HistoryEditExecutionRecord,
@@ -390,10 +391,8 @@ fn validate_confirmation(
             "history_edit confirmation acknowledgement method must be cli_typed_phrase",
         );
     }
-    let expected_phrase = format!(
-        "rewrite published history on {} at {}",
-        branch.ref_name, branch.tip_commit
-    );
+    let expected_phrase =
+        preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit);
     if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
         return invalid_plan(
             "confirmation_phrase_mismatch",

@@ -1,0 +1,43 @@
+# Mirrors the local "every commit green" gate from AGENTS.md:
+# fmt check, clippy -D warnings, full test suite, and git diff --check.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: fmt + clippy + test (${{ matrix.os }})
+    # Linux and macOS only: Windows is not a supported target yet (unix-only
+    # raw-bytes path handling has lossy fallbacks but no test coverage there).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+      - name: Whitespace errors
+        run: git diff --check

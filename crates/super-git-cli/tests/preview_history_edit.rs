@@ -364,3 +364,38 @@ fn plan_id_is_stable_across_identical_previews() {
 
     assert_eq!(first["data"]["plan_id"], second["data"]["plan_id"]);
 }
+
+#[test]
+fn survey_instructions_template_round_trips_to_executable_plan() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+
+    let survey = json_output(preview_survey(&repo, "main"));
+    let template = &survey["data"]["instructions_template"];
+
+    // The template is a complete, valid instructions document: every range
+    // commit prefilled as pick, oldest first.
+    assert_eq!(template["schema_version"], "super-git.instructions.v0.1");
+    assert_eq!(template["action"], "history_edit");
+    assert_eq!(template["base"], "main");
+    let items = template["items"].as_array().expect("template items");
+    assert_eq!(items.len(), 3);
+    for (item, oid) in items.iter().zip(&oids) {
+        assert_eq!(item["commit"], oid.as_str());
+        assert_eq!(item["op"], "pick");
+    }
+
+    // The intended agent flow: copy the template, change one op, resubmit --
+    // zero schema reconstruction. (Unmodified all-pick input is a no-op and
+    // correctly blocks with instructions_no_effective_change.)
+    let mut document = template.clone();
+    document["items"][1]["op"] = serde_json::json!("reword");
+    document["items"][1]["message"] = serde_json::json!("fix(login): correct typo");
+    let body = serde_json::to_string(&document).expect("serialize template");
+    let json = json_output(preview_with_instructions(&repo, "main", &body));
+    assert_eq!(json["data"]["execution"]["status"], "executable");
+    assert!(
+        json["data"]["instructions_template"].is_null(),
+        "non-survey plans carry no template"
+    );
+}
