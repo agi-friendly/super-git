@@ -10,12 +10,13 @@ use crate::git::history_edit::{
 };
 use crate::model::{
     ActionRisk, HistoryEditAction, HistoryEditBlockedReason, HistoryEditExecution,
-    HistoryEditOptions, HistoryEditPlan, HistoryEditPlanBranch, HistoryEditPlanCommit,
-    HistoryEditPlanInstructionItem, HistoryEditPlanInstructions, HistoryEditPlanRange,
-    HistoryEditPlanRepository, HistoryEditPlanWarning, HistoryEditPrecondition,
-    HistoryEditPublishedScan, HistoryEditResultSummaryView, HistoryEditUndoPreview,
-    HistoryEditUndoStrategy, PreviewConfirmation, WorktreeReferenceCommands,
-    HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION, HISTORY_EDIT_PLAN_SCHEMA_VERSION,
+    HistoryEditInstructionsTemplate, HistoryEditOptions, HistoryEditPlan, HistoryEditPlanBranch,
+    HistoryEditPlanCommit, HistoryEditPlanInstructionItem, HistoryEditPlanInstructions,
+    HistoryEditPlanRange, HistoryEditPlanRepository, HistoryEditPlanWarning,
+    HistoryEditPrecondition, HistoryEditPublishedScan, HistoryEditResultSummaryView,
+    HistoryEditUndoPreview, HistoryEditUndoStrategy, PreviewConfirmation,
+    WorktreeReferenceCommands, HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION,
+    HISTORY_EDIT_PLAN_SCHEMA_VERSION,
 };
 use crate::Result;
 
@@ -146,6 +147,24 @@ fn build_plan(
     let instructions = program.as_ref().map(plan_instructions);
     let result_summary = program.as_ref().map(result_summary_view);
 
+    // Survey plans hand back a ready-to-edit instruction document (every range
+    // commit as `pick`) so the agent never reconstructs the schema by hand.
+    let instructions_template = (status == "survey").then(|| HistoryEditInstructionsTemplate {
+        schema_version: HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION.to_string(),
+        action: ACTION_HISTORY_EDIT.to_string(),
+        base: base.to_string(),
+        items: scan
+            .range
+            .commits
+            .iter()
+            .map(|commit| HistoryEditPlanInstructionItem {
+                commit: commit.commit.clone(),
+                op: "pick".to_string(),
+                message: None,
+            })
+            .collect(),
+    });
+
     let confirmation = if requires_confirmation_artifact {
         Some(PreviewConfirmation {
             required_before_execute: true,
@@ -193,6 +212,7 @@ fn build_plan(
             published_commits,
         },
         instructions,
+        instructions_template,
         result_summary,
         preconditions: preconditions(&block_codes, instructions_provided),
         execution,

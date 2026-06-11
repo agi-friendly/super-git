@@ -696,6 +696,11 @@ pub struct HistoryEditPlan {
     pub range: HistoryEditPlanRange,
     pub published_scan: HistoryEditPublishedScan,
     pub instructions: Option<HistoryEditPlanInstructions>,
+    /// Filled on survey plans (no instructions supplied) so the agent can edit
+    /// and resubmit it. Advisory: excluded from plan_id; survey plans are not
+    /// executable, so the template carries no write authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_template: Option<HistoryEditInstructionsTemplate>,
     pub result_summary: Option<HistoryEditResultSummaryView>,
     pub preconditions: Vec<HistoryEditPrecondition>,
     pub execution: HistoryEditExecution,
@@ -790,6 +795,20 @@ pub struct HistoryEditPlanInstructionItem {
     pub op: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// A ready-to-edit `super-git.instructions.v0.1` document carried by survey
+/// plans: every range commit prefilled as `pick`, in the exact shape
+/// `preview history-edit --instructions` accepts. Agents copy it, change ops
+/// and messages, and feed it back -- instead of reconstructing the schema from
+/// docs or error breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditInstructionsTemplate {
+    pub schema_version: String,
+    pub action: String,
+    pub base: String,
+    pub items: Vec<HistoryEditPlanInstructionItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
