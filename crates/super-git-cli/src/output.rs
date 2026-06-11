@@ -47,6 +47,10 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
                     "causes": causes,
                 }
             });
+            // 기계가독 코드: 에이전트가 영어 메시지 파싱 대신 `error.code`로 분기한다.
+            if let Some(code) = structured_error_code(err) {
+                value["error"]["code"] = json!(code);
+            }
             if let Some(details) = structured_error_details(err) {
                 value["error"]["details"] = details;
             }
@@ -61,6 +65,14 @@ pub fn print_error(mode: OutputMode, err: &anyhow::Error) {
             eprintln!("Error: {err:#}");
         }
     }
+}
+
+fn structured_error_code(err: &anyhow::Error) -> Option<String> {
+    err.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<SuperGitError>()
+            .map(|error| error.code().to_string())
+    })
 }
 
 fn structured_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
@@ -103,6 +115,7 @@ pub fn print_parse_error(mode: OutputMode, err: &clap::Error) {
             let value = json!({
                 "ok": false,
                 "error": {
+                    "code": "invalid_arguments",
                     "message": "invalid command-line arguments",
                     "causes": [err.to_string()],
                 }
