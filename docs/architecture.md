@@ -112,6 +112,12 @@ then removes the linked worktree with `git worktree remove` without `--force`.
 It must not delete branch refs, remote refs, commits, history, or user-created
 files.
 
+`history_edit` undo restores the pre-execute branch tip recorded in the local
+execution record, using a compare-and-swap so it refuses if the branch advanced
+after execute. It moves only the branch pointer — the working tree and index
+are untouched — and local undo cannot un-publish history that was already
+pushed.
+
 Not every Git write can honestly offer automatic undo. Destructive actions such
 as removing an existing linked worktree must say so in their preview contract,
 require separate confirmation plus fresh revalidation, and provide recovery
@@ -254,6 +260,26 @@ The execute-side confirmation model is recorded separately in
 `worktree_remove`, revalidates the full target state, writes a local execution
 record, and then removes only the linked worktree without deleting refs or
 history.
+
+## History Edit Workflows
+
+`history_edit` is the fourth write action: a plan-based, tree-preserving
+rewrite of the `base..HEAD` range on the current branch.
+
+- `preview history-edit --base <ref>` without instructions returns a read-only
+  survey of the range (commits, published state, signatures, hard blocks).
+- With a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
+  `fixup` per commit), preview validates the instruction program against the
+  scanned range and freezes it into `super-git.plan.v0.4`. Unpublished ranges
+  are `executable`; published ranges are `preview_only` and require a separate
+  typed-phrase confirmation artifact.
+- `execute` re-derives a fresh plan from the live repository and requires the
+  plan id to match, rebuilds commits with `git commit-tree` preserving each
+  original author, writes an intent record, moves the branch ref with a
+  compare-and-swap, and post-verifies that the final tree is byte-identical to
+  the pre-execute tree.
+- Undo consumes the execution record to restore the pre-execute branch tip, as
+  described above.
 
 ## Plugins And Guides
 
