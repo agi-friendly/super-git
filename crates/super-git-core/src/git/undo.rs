@@ -65,10 +65,8 @@ fn token_from_data(value: &Value) -> Result<ExecuteUndoToken> {
         );
     }
 
-    if value.get("schema_version").and_then(Value::as_str) == Some(UNDO_TOKEN_SCHEMA_VERSION) {
-        return parse_token_value(value);
-    }
-
+    // No schema_version pre-screen here: parse_token_value dispatches on `kind`,
+    // and every typed handler validates its own token schema_version afterwards.
     parse_token_value(value)
 }
 

@@ -109,6 +109,20 @@ pub enum Operation {
     Bisecting,
 }
 
+impl Operation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Merging => "merging",
+            Self::Rebasing => "rebasing",
+            Self::Applying => "applying",
+            Self::CherryPicking => "cherry-picking",
+            Self::Reverting => "reverting",
+            Self::Bisecting => "bisecting",
+        }
+    }
+}
+
 /// HEAD가 가리키는 위치.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HeadInfo {

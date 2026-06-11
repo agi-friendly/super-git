@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::config::store::repository_id;
 use crate::git::command::Git;
-use crate::git::state;
+use crate::git::{state, undo_registry};
 use crate::model::{
     HistoryEditExecutionRecord, HistoryEditUndoToken, Operation, UndoResult,
     HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION, HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
@@ -45,7 +45,7 @@ pub fn undo_history_edit_token(
     }
     let operation = state::detect_operation(&git, &worktree_root)?;
     if operation != Operation::None {
-        return mismatch("operation", "none", operation_name(operation));
+        return mismatch("operation", "none", operation.as_str());
     }
 
     // Compare-and-swap from new_tip back to previous_tip: a concurrent move
@@ -233,34 +233,10 @@ fn validate_execution_record(token: &HistoryEditUndoToken) -> Result<()> {
 }
 
 fn validate_execution_record_path(token: &HistoryEditUndoToken) -> Result<()> {
-    let execution_dir = token.git_common_dir.join("super-git").join("executions");
-    if !token.execution_record_path.starts_with(&execution_dir) {
-        return invalid_token(
-            "unsafe_execution_record_path",
-            "execution record path must stay inside the repository executions directory",
-        );
-    }
-    let relative = token
-        .execution_record_path
-        .strip_prefix(&execution_dir)
-        .map_err(|_| SuperGitError::UndoTokenInvalid {
-            code: "unsafe_execution_record_path".to_string(),
-            message: "execution record path must be under the executions directory".to_string(),
-        })?;
-    if relative.components().count() != 1
-        || !matches!(relative.components().next(), Some(Component::Normal(_)))
-        || token
-            .execution_record_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            != Some("json")
-    {
-        return invalid_token(
-            "unsafe_execution_record_path",
-            "execution record path must be a direct .json file inside the executions directory",
-        );
-    }
-    Ok(())
+    undo_registry::validate_execution_record_path(
+        &token.git_common_dir,
+        &token.execution_record_path,
+    )
 }
 
 fn post_verify(git: &Git, worktree_root: &Path, token: &HistoryEditUndoToken) -> Result<()> {
@@ -355,16 +331,4 @@ fn invalid_token<T>(code: &str, message: &str) -> Result<T> {
         code: code.to_string(),
         message: message.to_string(),
     })
-}
-
-fn operation_name(operation: Operation) -> &'static str {
-    match operation {
-        Operation::None => "none",
-        Operation::Merging => "merging",
-        Operation::Rebasing => "rebasing",
-        Operation::Applying => "applying",
-        Operation::CherryPicking => "cherry-picking",
-        Operation::Reverting => "reverting",
-        Operation::Bisecting => "bisecting",
-    }
 }

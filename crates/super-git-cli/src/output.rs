@@ -8,9 +8,8 @@ use super_git_core::config::store::{
 };
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
-    ExecuteResult, HistoryEditPlan, Operation, PreviewPlan, RepoState, RiskLevel, StatusOutput,
-    UndoResult, WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan,
-    INSPECT_SCHEMA_VERSION,
+    ExecuteResult, HistoryEditPlan, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
+    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -437,7 +436,7 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                 }
             }
 
-            println!("Operation: {}", operation_label(state.operation));
+            println!("Operation: {}", state.operation.as_str());
 
             if !state.next.allowed.is_empty() {
                 println!("Preview candidates:");
@@ -631,18 +630,6 @@ fn worktree_kind_label(kind: WorktreeKind) -> &'static str {
         WorktreeKind::Linked => "linked",
         WorktreeKind::Bare => "bare",
         WorktreeKind::Unknown => "unknown",
-    }
-}
-
-fn operation_label(operation: Operation) -> &'static str {
-    match operation {
-        Operation::None => "none",
-        Operation::Merging => "merging",
-        Operation::Rebasing => "rebasing",
-        Operation::Applying => "applying",
-        Operation::CherryPicking => "cherry-picking",
-        Operation::Reverting => "reverting",
-        Operation::Bisecting => "bisecting",
     }
 }
 

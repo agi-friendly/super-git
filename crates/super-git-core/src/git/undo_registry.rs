@@ -9,6 +9,42 @@ use sha2::{Digest, Sha256};
 use crate::model::{UndoRegistryRecord, UndoToken, UNDO_REGISTRY_SCHEMA_VERSION};
 use crate::{Result, SuperGitError};
 
+/// Security check shared by the worktree and history-edit undo paths: an
+/// attacker-supplied token must not be able to point provenance reads at an
+/// arbitrary file. The record path must be a direct `<name>.json` inside this
+/// repository's executions directory -- no traversal, no nesting.
+pub(crate) fn validate_execution_record_path(
+    git_common_dir: &Path,
+    execution_record_path: &Path,
+) -> Result<()> {
+    let invalid = |message: &str| SuperGitError::UndoTokenInvalid {
+        code: "unsafe_execution_record_path".to_string(),
+        message: message.to_string(),
+    };
+
+    let execution_dir = git_common_dir.join("super-git").join("executions");
+    if !execution_record_path.starts_with(&execution_dir) {
+        return Err(invalid(
+            "execution record path must stay inside the repository executions directory",
+        ));
+    }
+    let relative = execution_record_path
+        .strip_prefix(&execution_dir)
+        .map_err(|_| invalid("execution record path must be under the executions directory"))?;
+    if relative.components().count() != 1
+        || !matches!(relative.components().next(), Some(Component::Normal(_)))
+        || execution_record_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            != Some("json")
+    {
+        return Err(invalid(
+            "execution record path must be a direct .json file inside the executions directory",
+        ));
+    }
+    Ok(())
+}
+
 pub fn write_record(token: &UndoToken, undo_dir: &Path) -> Result<PathBuf> {
     let path = record_path_for_snapshot(&token.index_snapshot_path, undo_dir)?;
     let record = UndoRegistryRecord {
