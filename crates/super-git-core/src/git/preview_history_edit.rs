@@ -723,7 +723,9 @@ pub fn compute_history_edit_plan_id(plan: &HistoryEditPlan) -> String {
         }),
         undo_strategy: &plan.undo_strategy,
     };
-    sha256_with_domain(b"super-git-plan-v0.4\n", &hash_input)
+    // hash domain은 schema_version과 같은 버전을 따라간다: drop의 prediction이
+    // projection에 들어오며 v0.4 → v0.5로 바뀌었다.
+    sha256_with_domain(b"super-git-plan-v0.5\n", &hash_input)
 }
 
 fn sha256_with_domain<T: Serialize>(domain: &[u8], value: &T) -> String {
@@ -913,7 +915,7 @@ mod tests {
 
         let plan = preview_history_edit(&repo, "main", None).expect("survey plan");
 
-        assert_eq!(plan.schema_version, "super-git.plan.v0.4");
+        assert_eq!(plan.schema_version, "super-git.plan.v0.5");
         assert!(plan.plan_id.starts_with("sha256:"));
         assert_eq!(plan.execution.status, "survey");
         assert!(!plan.execution.execute_supported);

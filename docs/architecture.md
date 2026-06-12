@@ -269,10 +269,11 @@ rewrite of the `base..HEAD` range on the current branch.
 - `preview history-edit --base <ref>` without instructions returns a read-only
   survey of the range (commits, published state, signatures, hard blocks).
 - With a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
-  `fixup` per commit), preview validates the instruction program against the
-  scanned range and freezes it into `super-git.plan.v0.4`. Unpublished ranges
-  are `executable`; published ranges are `preview_only` and require a separate
-  typed-phrase confirmation artifact.
+  `fixup`/`drop` per commit), preview validates the instruction program against
+  the scanned range and freezes it into `super-git.plan.v0.5`. Unpublished
+  tree-preserving ranges are `executable`; published ranges and all `drop`
+  plans are `preview_only` and require a separate typed-phrase confirmation
+  artifact.
 - `execute` re-derives a fresh plan from the live repository and requires the
   plan id to match, rebuilds commits with `git commit-tree` preserving each
   original author, writes an intent record, moves the branch ref with a

@@ -129,7 +129,7 @@ being run from inside the target worktree. It is destructive and does not
 return an automatic undo token.
 
 `history_edit` rewrites the `base..HEAD` range of the current branch from a
-`super-git.plan.v0.4` built out of declarative
+`super-git.plan.v0.5` built out of declarative
 `pick`/`reword`/`squash`/`fixup`/`drop` instructions. Execute re-derives a
 fresh plan from the live repository and requires its plan id to match (so
 author identity, messages, and the embedded replay prediction cannot be forged

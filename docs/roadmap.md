@@ -181,7 +181,8 @@ Implemented so far:
   (`docs/internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md`)
 - C8-A read-only range resolver, published scan, and instruction validation
   with structured block codes in `super-git-core`
-- C8-B `preview history-edit` command emitting `super-git.plan.v0.4` with
+- C8-B `preview history-edit` command emitting the history-edit plan
+  (`super-git.plan.v0.5` after the C8-drop projection change) with
   survey/executable/preview_only/blocked execution states and a stable plan id
 - C8-C execute for unpublished plans: plumbing-rebuilt commits, compare-and-swap
   branch move, tree-identity post-verify with rollback, author preservation, and

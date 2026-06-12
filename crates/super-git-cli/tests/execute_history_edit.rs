@@ -359,6 +359,28 @@ fn squash_folds_two_commits_into_one_with_explicit_message() {
 }
 
 #[test]
+fn old_v0_4_plan_is_rejected_with_a_clear_schema_signal() {
+    // The C8-drop series added prediction and drop preconditions to the plan-id
+    // projection, so the hash contract moved from v0.4 to v0.5. A plan minted by
+    // an older binary must fail with an explicit unsupported_schema_version, not
+    // a cryptic plan_id mismatch.
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"m"}},{{"commit":"{}","op":"fixup"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let mut plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    plan["data"]["schema_version"] = serde_json::json!("super-git.plan.v0.4");
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["error"]["code"], "unsupported_schema_version");
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+#[test]
 fn stale_plan_after_new_commit_is_rejected_without_moving_ref() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());

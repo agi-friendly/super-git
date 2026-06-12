@@ -255,7 +255,7 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 
 ## `preview history-edit`
 
-Builds a read-only `super-git.plan.v0.4` plan for editing commit history on the
+Builds a read-only `super-git.plan.v0.5` plan for editing commit history on the
 branch checked out in the current worktree. The op set is `pick`, `reword`,
 `squash`, `fixup`, and `drop`. The first four preserve every tree object, so
 those edits can never produce a content conflict; `drop` removes a commit's

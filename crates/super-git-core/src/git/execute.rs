@@ -102,7 +102,7 @@ fn parse_plan_value(value: Value) -> Result<PlanToExecute> {
         ))),
         Some(_) => invalid_plan(
             "unsupported_schema_version",
-            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, super-git.plan.v0.3, and super-git.plan.v0.4",
+            "execute supports only super-git.plan.v0.1, super-git.plan.v0.2, super-git.plan.v0.3, and super-git.plan.v0.5",
         ),
         // No schema_version string at all: this is not a plan document (e.g. a
         // null or a failed preview's {ok:false} piped through jq .data), which is
