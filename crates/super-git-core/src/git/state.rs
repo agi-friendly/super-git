@@ -20,7 +20,7 @@ pub fn read_state(path: &Path) -> Result<RepoState> {
     let upstream = read_upstream(&git, path)?;
     let working_tree = read_working_tree(&git, path)?;
     let operation = detect_operation(&git, path)?;
-    let next = compute_next_guardrails(operation, &working_tree, &upstream);
+    let next = compute_next_guardrails(operation, &working_tree, &upstream, &head);
     let warnings = compute_warnings(&upstream);
     let summary = compute_summary(operation, &working_tree, &upstream, &worktree_context);
     let risk_hint = compute_risk_hint(operation, &working_tree);
@@ -283,6 +283,7 @@ fn compute_next_guardrails(
     operation: Operation,
     working_tree: &WorkingTree,
     upstream: &Option<UpstreamInfo>,
+    head: &HeadInfo,
 ) -> NextGuardrails {
     NextGuardrails {
         scope: "inspect_state_only".to_string(),
@@ -295,8 +296,8 @@ fn compute_next_guardrails(
             .iter()
             .map(|action| (*action).to_string())
             .collect(),
-        allowed: compute_allowed_actions(operation, working_tree, upstream),
-        blocked: compute_blocked_actions(operation, working_tree, upstream),
+        allowed: compute_allowed_actions(operation, working_tree, upstream, head),
+        blocked: compute_blocked_actions(operation, working_tree, upstream, head),
         needs_human_review: Vec::new(),
     }
 }
@@ -305,6 +306,7 @@ fn compute_allowed_actions(
     operation: Operation,
     working_tree: &WorkingTree,
     upstream: &Option<UpstreamInfo>,
+    head: &HeadInfo,
 ) -> Vec<NextAction> {
     let mut actions = Vec::new();
 
@@ -403,6 +405,40 @@ fn compute_allowed_actions(
                 _ => {}
             }
         }
+
+        // preview-gated write 흐름(worktree_create/history_edit)은 진행 중 작업과
+        // 충돌이 없을 때만 후보로 안내한다. allowed_semantics가 preview_candidate
+        // 이므로 이 노출은 실행 허가가 아니라 preview 진입점 안내다.
+        // reference_command의 <ref>/<base>는 의도적인 placeholder: 그대로 실행할
+        // 수 없는 형태라 "실행 가능한 명령"으로 오해될 수 없다.
+        if working_tree.conflict_count == 0 {
+            // worktree 생성은 기존 ref 하나만 있으면 되고 현재 워킹 트리를 건드리지
+            // 않는다. born HEAD를 "ref가 존재한다"의 근사로 쓴다.
+            if head.commit.is_some() {
+                actions.push(action(
+                    "worktree_create",
+                    "an existing ref can be checked out into a new linked worktree; choose the ref in preview",
+                    Some(&["super-git", "preview", "worktree-create", "--ref", "<ref>"]),
+                    None,
+                ));
+            }
+            // history_edit preview는 attached HEAD + born branch를 요구한다
+            // (preview precondition: head_attached_to_local_branch). survey는
+            // read-only이므로 dirty 워킹 트리는 막지 않고 reason으로만 알린다.
+            if head.branch.is_some() && head.commit.is_some() {
+                let reason = if working_tree.clean {
+                    "history below HEAD can be surveyed for editing"
+                } else {
+                    "history below HEAD can be surveyed for editing; the survey is read-only, so local changes do not block it"
+                };
+                actions.push(action(
+                    "history_edit",
+                    reason,
+                    Some(&["super-git", "preview", "history-edit", "--base", "<base>"]),
+                    None,
+                ));
+            }
+        }
     }
 
     actions
@@ -412,6 +448,7 @@ fn compute_blocked_actions(
     operation: Operation,
     working_tree: &WorkingTree,
     upstream: &Option<UpstreamInfo>,
+    head: &HeadInfo,
 ) -> Vec<NextAction> {
     let mut blocked = Vec::new();
 
@@ -450,6 +487,39 @@ fn compute_blocked_actions(
                 ));
             }
         }
+    }
+
+    // history_edit의 state guardrail: preview의 거부 사유(head_attached_to_local_branch /
+    // operation_none / no_conflicted_paths)를 inspect에서 미리 보여줘서, 에이전트가
+    // 어차피 거부될 preview를 돌리지 않게 한다. 진행 중 작업/충돌 상황에서는
+    // resolve/continue/abort 흐름이 우선이므로 worktree_create는 노출 자체를 생략한다.
+    if operation != Operation::None || working_tree.conflict_count > 0 {
+        blocked.push(action(
+            "history_edit",
+            "an operation is in progress or conflicts remain; finish or abort it before editing history",
+            None,
+            None,
+        ));
+    } else if head.commit.is_none() {
+        blocked.push(action(
+            "history_edit",
+            "HEAD has no commits yet; there is no history to edit",
+            None,
+            None,
+        ));
+        blocked.push(action(
+            "worktree_create",
+            "HEAD has no commits yet; a worktree needs an existing ref to start from",
+            None,
+            None,
+        ));
+    } else if head.branch.is_none() {
+        blocked.push(action(
+            "history_edit",
+            "HEAD is detached; history edit requires HEAD attached to a local branch",
+            None,
+            None,
+        ));
     }
 
     blocked
@@ -788,6 +858,30 @@ mod tests {
         }
     }
 
+    fn head_on_branch() -> HeadInfo {
+        HeadInfo {
+            branch: Some("main".to_string()),
+            commit: Some("abc1234".to_string()),
+            detached: false,
+        }
+    }
+
+    fn head_detached() -> HeadInfo {
+        HeadInfo {
+            branch: None,
+            commit: Some("abc1234".to_string()),
+            detached: true,
+        }
+    }
+
+    fn head_unborn() -> HeadInfo {
+        HeadInfo {
+            branch: Some("main".to_string()),
+            commit: None,
+            detached: false,
+        }
+    }
+
     fn kinds(actions: &[NextAction]) -> Vec<&str> {
         actions.iter().map(|a| a.kind.as_str()).collect()
     }
@@ -811,11 +905,85 @@ mod tests {
     }
 
     #[test]
-    fn next_clean_without_upstream_is_empty() {
-        let next = compute_next_guardrails(Operation::None, &clean_wt(), &None);
-        assert!(next.allowed.is_empty());
+    fn next_clean_offers_only_preview_gated_write_candidates() {
+        // clean + upstream 없음: 일반 흐름(commit/push/pull)은 없고
+        // preview 진입점 후보(worktree_create/history_edit)만 안내한다.
+        let next = compute_next_guardrails(Operation::None, &clean_wt(), &None, &head_on_branch());
+        assert_eq!(
+            kinds(&next.allowed),
+            vec!["worktree_create", "history_edit"]
+        );
         assert!(next.blocked.is_empty());
         assert!(next.needs_human_review.is_empty());
+
+        // reference_command는 placeholder를 포함한 preview 진입점이어야 한다.
+        let worktree = &next.allowed[0];
+        assert_eq!(
+            worktree.reference_command.as_deref(),
+            Some(
+                ["super-git", "preview", "worktree-create", "--ref", "<ref>"]
+                    .map(String::from)
+                    .as_slice()
+            )
+        );
+        let history = &next.allowed[1];
+        assert_eq!(
+            history.reference_command.as_deref(),
+            Some(
+                ["super-git", "preview", "history-edit", "--base", "<base>"]
+                    .map(String::from)
+                    .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn next_unborn_blocks_both_write_candidates() {
+        let next = compute_next_guardrails(Operation::None, &clean_wt(), &None, &head_unborn());
+        assert!(next.allowed.is_empty());
+        let blocked = kinds(&next.blocked);
+        assert!(blocked.contains(&"history_edit"));
+        assert!(blocked.contains(&"worktree_create"));
+    }
+
+    #[test]
+    fn next_detached_blocks_history_edit_but_allows_worktree_create() {
+        let next = compute_next_guardrails(Operation::None, &clean_wt(), &None, &head_detached());
+        assert!(kinds(&next.allowed).contains(&"worktree_create"));
+        assert!(!kinds(&next.allowed).contains(&"history_edit"));
+        assert!(kinds(&next.blocked).contains(&"history_edit"));
+    }
+
+    #[test]
+    fn next_in_progress_blocks_history_edit_and_omits_worktree_create() {
+        // 진행 중 작업에서는 resolve/continue/abort가 우선:
+        // history_edit는 blocked로 사유를 보여주고 worktree_create는 노출하지 않는다.
+        let next =
+            compute_next_guardrails(Operation::Merging, &clean_wt(), &None, &head_on_branch());
+        assert!(kinds(&next.blocked).contains(&"history_edit"));
+        assert!(!kinds(&next.allowed).contains(&"worktree_create"));
+        assert!(!kinds(&next.blocked).contains(&"worktree_create"));
+    }
+
+    #[test]
+    fn next_dirty_keeps_history_edit_with_read_only_note() {
+        // dirty여도 survey preview는 read-only라 막지 않는다. reason으로만 알린다.
+        let wt = WorkingTree {
+            clean: false,
+            staged: 0,
+            unstaged: 1,
+            untracked: 0,
+            conflict_count: 0,
+            conflicts: vec![],
+        };
+        let next = compute_next_guardrails(Operation::None, &wt, &None, &head_on_branch());
+        let history = next
+            .allowed
+            .iter()
+            .find(|a| a.kind == "history_edit")
+            .expect("history_edit stays allowed on a dirty tree");
+        assert!(history.reason.contains("read-only"));
+        assert!(!kinds(&next.blocked).contains(&"history_edit"));
     }
 
     #[test]
@@ -851,17 +1019,20 @@ mod tests {
             comparison_status: UpstreamComparisonStatus::Ok,
         });
 
+        let attached = head_on_branch();
         let cases = [
-            compute_next_guardrails(Operation::None, &staged_wt, &behind),
-            compute_next_guardrails(Operation::None, &clean_wt(), &diverged),
-            compute_next_guardrails(Operation::Merging, &conflict_wt, &None),
-            compute_next_guardrails(Operation::Merging, &staged_wt, &None),
-            compute_next_guardrails(Operation::Rebasing, &conflict_wt, &None),
-            compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None),
-            compute_next_guardrails(Operation::Applying, &clean_wt(), &None),
-            compute_next_guardrails(Operation::CherryPicking, &clean_wt(), &None),
-            compute_next_guardrails(Operation::Reverting, &clean_wt(), &None),
-            compute_next_guardrails(Operation::Bisecting, &clean_wt(), &None),
+            compute_next_guardrails(Operation::None, &staged_wt, &behind, &attached),
+            compute_next_guardrails(Operation::None, &clean_wt(), &diverged, &attached),
+            compute_next_guardrails(Operation::None, &clean_wt(), &None, &head_detached()),
+            compute_next_guardrails(Operation::None, &clean_wt(), &None, &head_unborn()),
+            compute_next_guardrails(Operation::Merging, &conflict_wt, &None, &attached),
+            compute_next_guardrails(Operation::Merging, &staged_wt, &None, &attached),
+            compute_next_guardrails(Operation::Rebasing, &conflict_wt, &None, &attached),
+            compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None, &attached),
+            compute_next_guardrails(Operation::Applying, &clean_wt(), &None, &attached),
+            compute_next_guardrails(Operation::CherryPicking, &clean_wt(), &None, &attached),
+            compute_next_guardrails(Operation::Reverting, &clean_wt(), &None, &attached),
+            compute_next_guardrails(Operation::Bisecting, &clean_wt(), &None, &attached),
         ];
 
         for next in &cases {
@@ -879,7 +1050,7 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        let next = compute_next_guardrails(Operation::None, &wt, &None);
+        let next = compute_next_guardrails(Operation::None, &wt, &None, &head_on_branch());
         assert!(kinds(&next.allowed).contains(&"commit"));
         assert!(!kinds(&next.blocked).contains(&"commit"));
     }
@@ -893,10 +1064,11 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        assert!(
-            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &ahead).allowed)
-                .contains(&"push")
-        );
+        assert!(kinds(
+            &compute_next_guardrails(Operation::None, &clean_wt(), &ahead, &head_on_branch())
+                .allowed
+        )
+        .contains(&"push"));
 
         let behind = Some(UpstreamInfo {
             name: "origin/main".to_string(),
@@ -905,10 +1077,11 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        assert!(
-            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &behind).allowed)
-                .contains(&"pull")
-        );
+        assert!(kinds(
+            &compute_next_guardrails(Operation::None, &clean_wt(), &behind, &head_on_branch())
+                .allowed
+        )
+        .contains(&"pull"));
 
         let diverged = Some(UpstreamInfo {
             name: "origin/main".to_string(),
@@ -917,15 +1090,17 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        assert!(
-            kinds(&compute_next_guardrails(Operation::None, &clean_wt(), &diverged).allowed)
-                .contains(&"integrate_diverged")
-        );
+        assert!(kinds(
+            &compute_next_guardrails(Operation::None, &clean_wt(), &diverged, &head_on_branch())
+                .allowed
+        )
+        .contains(&"integrate_diverged"));
     }
 
     #[test]
     fn next_rebasing_has_continue_skip_abort_only() {
-        let next = compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None);
+        let next =
+            compute_next_guardrails(Operation::Rebasing, &clean_wt(), &None, &head_on_branch());
         let ks = kinds(&next.allowed);
         assert!(ks.contains(&"rebase_continue"));
         assert!(ks.contains(&"rebase_skip"));
@@ -945,7 +1120,7 @@ mod tests {
             conflict_count: 1,
             conflicts: vec!["f.txt".to_string()],
         };
-        let next = compute_next_guardrails(Operation::Merging, &wt, &None);
+        let next = compute_next_guardrails(Operation::Merging, &wt, &None, &head_on_branch());
         let ks = kinds(&next.allowed);
         assert!(ks.contains(&"resolve_conflicts"));
         assert!(ks.contains(&"merge_abort"));
@@ -974,7 +1149,7 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        let next = compute_next_guardrails(Operation::Merging, &wt, &None);
+        let next = compute_next_guardrails(Operation::Merging, &wt, &None, &head_on_branch());
         let ks = kinds(&next.allowed);
         assert!(ks.contains(&"merge_continue"));
         assert!(ks.contains(&"merge_abort"));
@@ -992,7 +1167,7 @@ mod tests {
             conflict_count: 0,
             conflicts: vec![],
         };
-        let next = compute_next_guardrails(Operation::None, &wt, &None);
+        let next = compute_next_guardrails(Operation::None, &wt, &None, &head_on_branch());
         let ks = kinds(&next.allowed);
         // untracked는 아직 commit 대상이 아니므로 stage_changes를 제안한다.
         assert!(ks.contains(&"stage_changes"));
@@ -1018,7 +1193,7 @@ mod tests {
             comparison_basis: UpstreamComparisonBasis::LocalTrackingRef,
             comparison_status: UpstreamComparisonStatus::Ok,
         });
-        let next = compute_next_guardrails(Operation::None, &wt, &behind);
+        let next = compute_next_guardrails(Operation::None, &wt, &behind, &head_on_branch());
         let ks = kinds(&next.allowed);
         assert!(ks.contains(&"stage_changes"));
         assert!(!ks.contains(&"pull"));
@@ -1035,7 +1210,7 @@ mod tests {
             conflict_count: 1,
             conflicts: vec!["f.txt".to_string()],
         };
-        let next = compute_next_guardrails(Operation::Rebasing, &wt, &None);
+        let next = compute_next_guardrails(Operation::Rebasing, &wt, &None, &head_on_branch());
         let ks = kinds(&next.allowed);
         assert!(ks.contains(&"resolve_conflicts"));
         assert!(ks.contains(&"rebase_skip"));

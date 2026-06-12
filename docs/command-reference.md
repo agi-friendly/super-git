@@ -191,6 +191,15 @@ The snapshot includes:
 `inspect` is read-only. Its next-action fields are not permission to execute raw
 Git commands. Use `preview` before any write.
 
+When the repository state allows it, `next.allowed` also lists the
+preview-gated write flows (`worktree_create`, `history_edit`) as preview
+candidates. Their `reference_command` points at the matching `super-git
+preview` entrypoint with placeholder arguments such as `<ref>` and `<base>`:
+the placeholders must be replaced before the command can run, which keeps the
+hint documentation-only. When a flow's preview would refuse (in-progress
+operation, conflicts, detached or unborn HEAD), `next.blocked` carries the
+reason instead.
+
 ## `preview stage-changes`
 
 Builds a read-only plan for staging current unstaged and untracked changes.

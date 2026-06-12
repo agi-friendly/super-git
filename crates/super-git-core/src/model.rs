@@ -67,6 +67,8 @@ pub const EVALUATED_INSPECT_ACTIONS: &[&str] = &[
     "revert_skip",
     "revert_abort",
     "bisect_reset",
+    "worktree_create",
+    "history_edit",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -229,7 +231,9 @@ pub struct NextAction {
     pub kind: String,
     /// 이 행동이 가능한 이유(현재 상태 근거).
     pub reason: String,
-    /// 참고용 git 명령(canonical reference). 실행 허가가 아니라 문서화용 예시다.
+    /// 참고용 명령(canonical reference) — git 또는 super-git preview 진입점.
+    /// 실행 허가가 아니라 문서화용 예시이며, `<ref>` 같은 placeholder는
+    /// 그대로 실행할 수 없는 형태로 둬서 오해를 막는다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference_command: Option<Vec<String>>,
     /// 되돌림 가능성 힌트("reversible" 등). 확실한 경우에만 채운다.
