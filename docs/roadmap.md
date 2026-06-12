@@ -17,8 +17,9 @@ inspect -> preview worktree-remove -> execute --plan --confirmation
 
 `worktree_remove` is intentionally not automatically undoable; it requires
 explicit confirmation and recovery hints instead of an `undo_token`.
-`history_edit` requires the confirmation artifact only when the range is
-published, and its undo restores the pre-execute branch tip locally.
+`history_edit` requires the confirmation artifact when the range is published
+and always for `drop`; its undo restores the pre-execute branch tip locally
+(and, for `drop`, synchronizes the working tree back to it).
 
 The next stages should expand this lifecycle carefully instead of adding raw Git
 wrappers.
@@ -238,14 +239,15 @@ Done so far: the C9-A merge prediction core
 (`super-git.conflict-prediction.v0.1`), the C9-B `predict merge` CLI verb,
 the C9-C rebase-chain prediction core
 (`super-git.rebase-prediction.v0.1`, per-step replay that stops at the first
-predicted conflict), and the C9-D `predict rebase` CLI verb. Inspect
-integration and the Stage 6 `drop`/reorder consumer are open.
+predicted conflict), and the C9-D `predict rebase` CLI verb. The Stage 6
+`drop` consumer has since landed (the C8-drop series); `inspect` integration
+and the `reorder` consumer remain open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits
 - prediction feeds Stage 6 `drop`/reorder steps and standalone merge or rebase
-  previews; a safe `drop` for wip commits is the highest-demand consumer and
-  should land early
+  previews; the safe `drop` for wip commits — the highest-demand consumer —
+  has landed, with `reorder` still to follow
 - `inspect` gains the branch-relationship context prediction needs, such as
   merge-base and shared-upstream hints
 - safe branch refresh from

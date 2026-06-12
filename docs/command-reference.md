@@ -478,9 +478,11 @@ super-git undo --token /tmp/super-git-result.json
 super-git undo --token - < /tmp/super-git-result.json
 ```
 
-The token is treated as untrusted input. `undo` validates local registry
-provenance and index checksums before restoring the previous index snapshot.
-It does not modify working-tree file contents.
+The token is treated as untrusted input. For `stage_changes`, `undo` validates
+local registry provenance and index checksums before restoring the previous
+index snapshot, and does not modify working-tree file contents. Other actions
+have their own boundaries below; only `history_edit` `drop` undo deliberately
+synchronizes the working tree (as the inverse of its execute).
 
 For `worktree_create` results, `undo` validates the local execution record,
 target worktree identity, lock/prunable state, HEAD/ref drift, and a clean

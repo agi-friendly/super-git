@@ -257,9 +257,10 @@ execution record states `automatic_undo_available: false` so downstream agents
 cannot accidentally treat the destructive action as reversible.
 
 `worktree_remove` is not the only confirmation-gated action: a `history_edit`
-plan over a published range also requires a `super-git.confirmation.v0.1`
-artifact. The difference is reversibility — a confirmed history edit still
-returns an undo token (restore the branch tip), while a confirmed worktree
+plan over a published range — and every `drop` plan, regardless of published
+state — also requires a `super-git.confirmation.v0.1` artifact. The difference
+is reversibility — a confirmed history edit still returns an undo token (restore
+the branch tip, and for `drop` the working tree), while a confirmed worktree
 removal never does.
 
 The confirmation contract is documented in
@@ -274,11 +275,13 @@ The project is converging on a two-axis risk model:
 
 The current implementation already separates read-only inspect data, preview
 plans, guarded execute, and registry-backed undo. `history_edit` exercises both
-axes: an unpublished range is medium severity and `reversible_if_unchanged`
-with no human confirmation, while a published range is high severity, still
-`reversible_if_unchanged` locally, and requires explicit human confirmation
-because local undo cannot un-publish remote history. Future work will expand
-this into richer warnings and human-confirmation rules for high-risk actions.
+axes: an unpublished tree-preserving range is medium severity and
+`reversible_if_unchanged` with no human confirmation, while a published range or
+any `drop` is high severity, still `reversible_if_unchanged` locally, and
+requires explicit human confirmation — for a published range because local undo
+cannot un-publish remote history, and for `drop` because it changes the final
+tree and synchronizes the working tree. Future work will expand this into
+richer warnings and human-confirmation rules for high-risk actions.
 
 ## Untrusted Repositories
 

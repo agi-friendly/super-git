@@ -40,6 +40,9 @@ Current commands:
 - `super-git preview stage-changes`
 - `super-git preview worktree-create --ref <ref> [--repo <id-or-name-or-path>]`
 - `super-git preview worktree-remove --worktree <absolute-linked-worktree-path>`
+- `super-git preview history-edit --base <ref> [--instructions <file|->]`
+- `super-git predict merge --theirs <rev> [--ours <rev>]`
+- `super-git predict rebase --base <rev> --onto <rev>`
 - `super-git execute --plan <file|-> [--confirmation <file|->]`
 - `super-git undo --token <file|->`
 - `super-git wt list [path]`
@@ -114,8 +117,12 @@ files.
 
 `history_edit` undo restores the pre-execute branch tip recorded in the local
 execution record, using a compare-and-swap so it refuses if the branch advanced
-after execute. It moves only the branch pointer — the working tree and index
-are untouched — and local undo cannot un-publish history that was already
+after execute. For tree-preserving edits it moves only the branch pointer — the
+working tree and index are untouched. For `drop` it is the symmetric inverse of
+execute: it requires a clean working tree, blocks ignored-path collisions
+against the pre-execute tip, then synchronizes the index and working tree back
+to that tip. A successful undo consumes the execution record so the same plan
+can be executed again; local undo cannot un-publish history that was already
 pushed.
 
 Not every Git write can honestly offer automatic undo. Destructive actions such
@@ -277,9 +284,12 @@ rewrite of the `base..HEAD` range on the current branch.
 - `execute` re-derives a fresh plan from the live repository and requires the
   plan id to match, rebuilds commits with `git commit-tree` preserving each
   original author, writes an intent record, moves the branch ref with a
-  compare-and-swap, and post-verifies that the final tree is byte-identical to
-  the pre-execute tree.
-- Undo consumes the execution record to restore the pre-execute branch tip, as
+  compare-and-swap, and post-verifies the final tree. Tree-preserving ops must
+  keep it byte-identical to the pre-execute tree; `drop` must land on the
+  prediction's `final_tree` oracle and then synchronizes the working tree to
+  the new tip (after a clean-tree and ignored-collision gate).
+- Undo restores the pre-execute branch tip (and, for `drop`, the working tree),
+  then consumes the execution record so the same plan can be executed again, as
   described above.
 
 ## Plugins And Guides
