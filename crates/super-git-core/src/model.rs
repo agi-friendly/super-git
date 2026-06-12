@@ -1150,3 +1150,58 @@ pub struct ConflictPredictionNote {
     pub paths: Vec<String>,
     pub message: String,
 }
+
+pub const REBASE_PREDICTION_SCHEMA_VERSION: &str = "super-git.rebase-prediction.v0.1";
+
+/// Stage 7 rebase-chain 충돌 예측 결과 (C9-C). merge 예측과 schema를 분리한
+/// 이유: shape가 다르다(단일 prediction vs step 배열). schema_version이 shape를,
+/// prediction_kind가 의미(merge/rebase)를 식별한다. 역시 plan이 아니다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RebasePrediction {
+    pub schema_version: String,
+    /// 항상 "rebase".
+    pub prediction_kind: String,
+    pub repository: PathBuf,
+    pub inputs: RebasePredictionInputs,
+    /// oldest first. 첫 충돌 step까지만 들어 있다(이후 step은 예측하지 않음).
+    pub steps: Vec<RebasePredictionStep>,
+    pub summary: RebasePredictionSummary,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RebasePredictionInputs {
+    /// 재생 범위의 하한(이 커밋은 건드리지 않음). 범위는 base..head.
+    pub base: ResolvedRev,
+    /// 재생이 올라갈 새 시작점.
+    pub onto: ResolvedRev,
+    pub head: ResolvedRev,
+    /// resolved oid 기준 "<base>..<head>" 표기. 표시용.
+    pub range: String,
+}
+
+/// 커밋 하나의 replay 예측. C9-0 회전표 그대로:
+/// merge base = 이 커밋의 parent, ours = 지금까지 합성된 tip, theirs = 이 커밋.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RebasePredictionStep {
+    pub commit: String,
+    /// 3-way base로 쓴 이 커밋의 실제 parent.
+    pub parent: String,
+    pub prediction: ConflictPredictionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RebasePredictionSummary {
+    /// "clean" | "conflicted".
+    pub status: String,
+    pub total_steps: u32,
+    pub predicted_steps: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_conflict_commit: Option<String>,
+    /// 첫 충돌 이후 예측하지 않은 커밋 oid들(oldest first). 충돌 해결이
+    /// 이후 모든 step을 바꾸므로 충돌 tree 위에 합성을 계속하지 않는다.
+    pub steps_not_predicted: Vec<String>,
+    /// 전 step clean일 때 rebase 후 예상되는 최종 트리 oid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_tree: Option<String>,
+}

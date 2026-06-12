@@ -244,6 +244,54 @@ prediction and guidance only (roadmap Stage 7 rule). No batch/chain
 prediction, no branch-refresh wiring, no history-edit `drop`/reorder in this
 checkpoint.
 
+## C9-C Rebase-Chain Prediction
+
+A rebase is **not** one merge: it replays commits one at a time, and the
+terminology table above rotates per step. `predict_rebase_chain(path, base,
+onto)` models exactly that for the linear range `base..HEAD`:
+
+```text
+for each commit in rev-list --reverse base..HEAD:
+  merge-tree --write-tree -z --merge-base=<commit's parent> <tip> <commit>
+  clean      -> wrap result tree in an unreferenced synthetic commit, advance tip
+  conflicted -> record the step, STOP
+```
+
+Decisions fixed by this contract:
+
+- **Stop at the first conflict.** Composing the next step on top of a
+  conflicted tree (whose blobs contain conflict markers) would predict
+  conflicts-of-conflicts, and the real resolution changes every later step.
+  The summary reports `first_conflict_commit` and lists the unpredicted
+  commits in `steps_not_predicted`, so consumers can see exactly how far the
+  prediction reaches.
+- **Synthetic tips are unreferenced commits.** `merge-tree` happens to accept
+  a raw tree OID as a branch argument on current Git, but that is
+  undocumented; the predictor instead wraps each clean result tree via
+  documented `git commit-tree` (with a fixed `-c` identity so missing user
+  config cannot fail it). This adds one unreferenced, gc-collectable commit
+  per clean step — the same object-database nuance the read-only boundary
+  already states, now covering commits as well as trees and blobs.
+- **Own schema string.** The result is `super-git.rebase-prediction.v0.1`
+  with `prediction_kind: "rebase"`: the shape (a `steps` array plus summary)
+  differs structurally from the single-outcome merge shape, and
+  schema_version identifies shape while prediction_kind identifies semantics.
+  Each step embeds the same per-file conflict shape (`stages`, `notes`) as
+  the merge prediction — that reuse is the point of C9-0.
+- **`onto` needs no common ancestor.** Each step's base is the replayed
+  commit's actual parent, passed explicitly via `--merge-base`, so no
+  merge-base computation happens and `rebase --onto`-style unrelated targets
+  predict fine. (`no_merge_base` remains a merge-prediction-only error.)
+- **Linear ranges only.** A merge commit in range fails with
+  `merge_commit_in_range` and a root commit with `root_commit_in_range`:
+  single-parent 3-way replay cannot model either, the same boundary C8-0
+  drew for history-edit ops. An empty range fails with `empty_range` —
+  predicting zero steps answers nothing the agent cannot already see.
+- `summary.final_tree` is the predicted post-rebase tree, present only when
+  every step is clean. The limitations list additionally warns that a clean
+  step whose tree equals the tip would become an empty commit in a real
+  rebase; emptiness is not predicted.
+
 ## C9-A Slice (Minimal Core)
 
 - [x] `git/conflict_prediction.rs` in `super-git-core`: `predict_merge`
@@ -258,4 +306,9 @@ checkpoint.
       (ours defaults to HEAD; current repository only), JSON/human output,
       integration tests for both outcome classes and every structured error
       code reachable from the CLI.
-- [ ] Inspect integration, batch/rebase-chain prediction: later slices.
+- [x] C9-C: `predict_rebase_chain` core per the C9-C section above
+      (per-step composition, stop at first conflict, synthetic unreferenced
+      tips, `super-git.rebase-prediction.v0.1`). Internal function + tests
+      only; no CLI verb yet.
+- [ ] CLI verb for rebase prediction (C9-D candidate), inspect integration,
+      history-edit drop/reorder consumption: later slices.

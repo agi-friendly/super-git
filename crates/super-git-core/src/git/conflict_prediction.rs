@@ -11,8 +11,9 @@ use std::path::Path;
 use crate::git::command::Git;
 use crate::model::{
     ConflictPrediction, ConflictPredictionInputs, ConflictPredictionNote,
-    ConflictPredictionOutcome, PredictedConflictFile, PredictedConflictStage, ResolvedRev,
-    CONFLICT_PREDICTION_SCHEMA_VERSION,
+    ConflictPredictionOutcome, PredictedConflictFile, PredictedConflictStage, RebasePrediction,
+    RebasePredictionInputs, RebasePredictionStep, RebasePredictionSummary, ResolvedRev,
+    CONFLICT_PREDICTION_SCHEMA_VERSION, REBASE_PREDICTION_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -44,16 +45,215 @@ pub fn predict_merge(
         );
     }
 
-    // resolve 단계에서 얻은 oid를 넘긴다: rev 표기 재해석 여지와 옵션 주입
-    // 여지를 함께 없앤다(oid는 hex라 `-`로 시작할 수 없다).
-    let args = [
+    let run = run_merge_tree(&git, &repository, None, &ours.commit, &theirs.commit)?;
+
+    Ok(ConflictPrediction {
+        schema_version: CONFLICT_PREDICTION_SCHEMA_VERSION.to_string(),
+        prediction_kind: "merge".to_string(),
+        repository,
+        inputs: ConflictPredictionInputs {
+            ours,
+            theirs,
+            merge_base,
+        },
+        prediction: outcome_from(run),
+        limitations: limitations(),
+    })
+}
+
+/// base..HEAD의 커밋들을 onto 위에 순서대로 replay하면 어디서 충돌하는지
+/// 예측한다 (C9-C). step별 역할은 C9-0 회전표: base = 그 커밋의 parent,
+/// ours = 지금까지 합성된 tip, theirs = 그 커밋. 첫 충돌에서 멈춘다 —
+/// 충돌 마커가 들어간 tree 위에 다음 step을 합성하면 의미가 불안정해지고,
+/// 실제 충돌 해결이 이후 모든 step을 바꾸기 때문이다.
+pub fn predict_rebase_chain(
+    current_path: &Path,
+    base_rev: &str,
+    onto_rev: &str,
+) -> Result<RebasePrediction> {
+    let git = Git::default();
+    let repository = git.run_path_in(current_path, ["rev-parse", "--show-toplevel"])?;
+
+    let base = resolve_commit(&git, &repository, "base", base_rev)?;
+    let onto = resolve_commit(&git, &repository, "onto", onto_rev)?;
+    let head = resolve_commit(&git, &repository, "head", "HEAD")?;
+
+    let replay = list_replay_commits(&git, &repository, &base.commit, &head.commit)?;
+    if replay.is_empty() {
+        return precondition(
+            "empty_range",
+            format!(
+                "{}..HEAD contains no commits; there is nothing to replay",
+                base.rev
+            ),
+        );
+    }
+
+    let total_steps = replay.len();
+    let mut steps: Vec<RebasePredictionStep> = Vec::new();
+    let mut tip = onto.commit.clone();
+    let mut first_conflict_commit = None;
+
+    for (commit, parent) in &replay {
+        let run = run_merge_tree(&git, &repository, Some(parent), &tip, commit)?;
+        let conflicted = run.conflicted;
+        let outcome = outcome_from(run);
+        let merged_tree = outcome.merged_tree.clone();
+        steps.push(RebasePredictionStep {
+            commit: commit.clone(),
+            parent: parent.clone(),
+            prediction: outcome,
+        });
+        if conflicted {
+            first_conflict_commit = Some(commit.clone());
+            break;
+        }
+        // 다음 step의 ours가 될 합성 tip. merge-tree의 branch 인자에 tree를
+        // 직접 넘기는 것은 미문서 동작이라, 문서화된 commit-tree로 참조되지
+        // 않는(gc 회수 가능) synthetic commit을 만들어 감싼다.
+        tip = synthesize_tip(&git, &repository, &merged_tree, &tip)?;
+    }
+
+    let predicted_steps = steps.len();
+    let steps_not_predicted: Vec<String> = replay[predicted_steps..]
+        .iter()
+        .map(|(commit, _)| commit.clone())
+        .collect();
+    let final_tree = if first_conflict_commit.is_none() {
+        steps.last().map(|step| step.prediction.merged_tree.clone())
+    } else {
+        None
+    };
+
+    Ok(RebasePrediction {
+        schema_version: REBASE_PREDICTION_SCHEMA_VERSION.to_string(),
+        prediction_kind: "rebase".to_string(),
+        repository,
+        inputs: RebasePredictionInputs {
+            range: format!("{}..{}", base.commit, head.commit),
+            base,
+            onto,
+            head,
+        },
+        steps,
+        summary: RebasePredictionSummary {
+            status: if first_conflict_commit.is_some() {
+                "conflicted"
+            } else {
+                "clean"
+            }
+            .to_string(),
+            total_steps: total_steps as u32,
+            predicted_steps: predicted_steps as u32,
+            first_conflict_commit,
+            steps_not_predicted,
+            final_tree,
+        },
+        limitations: rebase_limitations(),
+    })
+}
+
+/// base..head의 (commit, parent) 쌍을 oldest first로 나열한다.
+/// merge 커밋과 root 커밋은 single-parent 3-way replay로 모델링할 수 없어
+/// structured error로 거부한다 — C8-0이 drop/reorder에서 merge를 제외한
+/// 것과 같은 경계다.
+fn list_replay_commits(
+    git: &Git,
+    repository: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<(String, String)>> {
+    let result = git.run_in(
+        repository,
+        [
+            "rev-list",
+            "--reverse",
+            "--parents",
+            &format!("{base}..{head}"),
+        ],
+    )?;
+
+    let mut commits = Vec::new();
+    for line in result.stdout.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [commit, parent] => commits.push(((*commit).to_string(), (*parent).to_string())),
+            [commit] => {
+                return precondition(
+                    "root_commit_in_range",
+                    format!("commit {commit} has no parent; a root commit cannot be replayed"),
+                )
+            }
+            [commit, ..] => {
+                return precondition(
+                    "merge_commit_in_range",
+                    format!(
+                        "commit {commit} is a merge; replaying merges is not supported, choose a linear range"
+                    ),
+                )
+            }
+            [] => {}
+        }
+    }
+    Ok(commits)
+}
+
+/// clean step의 결과 tree를 다음 step의 ours로 쓰기 위해 unreferenced
+/// synthetic commit으로 감싼다. identity는 -c로 고정해 사용자 git 설정이
+/// 없어도 동작하게 한다(커밋은 어디서도 참조되지 않으므로 내용은 무의미).
+fn synthesize_tip(git: &Git, repository: &Path, tree: &str, parent: &str) -> Result<String> {
+    let result = git.try_run_in(
+        repository,
+        [
+            "-c",
+            "user.name=super-git-prediction",
+            "-c",
+            "user.email=prediction@super-git.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            "-m",
+            "super-git conflict prediction synthetic tip (unreferenced)",
+        ],
+    )?;
+    if !result.success {
+        return Err(SuperGitError::GitCommandFailed {
+            args: vec!["commit-tree".to_string(), tree.to_string()],
+            status: result.status,
+            stderr: result.stderr,
+        });
+    }
+    Ok(result.stdout.trim().to_string())
+}
+
+struct MergeTreeRun {
+    conflicted: bool,
+    parsed: ParsedMergeTree,
+}
+
+/// merge-tree --write-tree 한 번의 호출과 결과 검증. explicit_base가 있으면
+/// merge-base 자동 계산 대신 그 tree-ish를 base로 쓴다(rebase step 모델링).
+/// 인자는 항상 사전 resolve된 hex oid만 받는다(옵션 주입 불가).
+fn run_merge_tree(
+    git: &Git,
+    repository: &Path,
+    explicit_base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+) -> Result<MergeTreeRun> {
+    let mut args = vec![
         "merge-tree".to_string(),
         "--write-tree".to_string(),
         "-z".to_string(),
-        ours.commit.clone(),
-        theirs.commit.clone(),
     ];
-    let result = git.try_run_in(&repository, args.iter().map(String::as_str))?;
+    if let Some(base) = explicit_base {
+        args.push(format!("--merge-base={base}"));
+    }
+    args.push(ours.to_string());
+    args.push(theirs.to_string());
+
+    let result = git.try_run_in(repository, args.iter().map(String::as_str))?;
 
     let conflicted = match result.status {
         Some(0) => false,
@@ -67,7 +267,7 @@ pub fn predict_merge(
         }
         status => {
             return Err(SuperGitError::GitCommandFailed {
-                args: args.to_vec(),
+                args,
                 status,
                 stderr: result.stderr,
             })
@@ -83,23 +283,33 @@ pub fn predict_merge(
         );
     }
 
-    Ok(ConflictPrediction {
-        schema_version: CONFLICT_PREDICTION_SCHEMA_VERSION.to_string(),
-        prediction_kind: "merge".to_string(),
-        repository,
-        inputs: ConflictPredictionInputs {
-            ours,
-            theirs,
-            merge_base,
-        },
-        prediction: ConflictPredictionOutcome {
-            status: if conflicted { "conflicted" } else { "clean" }.to_string(),
-            merged_tree: parsed.tree,
-            conflicted_files: parsed.files,
-            notes: parsed.notes,
-        },
-        limitations: limitations(),
-    })
+    Ok(MergeTreeRun { conflicted, parsed })
+}
+
+fn outcome_from(run: MergeTreeRun) -> ConflictPredictionOutcome {
+    ConflictPredictionOutcome {
+        status: if run.conflicted {
+            "conflicted"
+        } else {
+            "clean"
+        }
+        .to_string(),
+        merged_tree: run.parsed.tree,
+        conflicted_files: run.parsed.files,
+        notes: run.parsed.notes,
+    }
+}
+
+/// rebase 예측 전용 과장 방지 문구.
+fn rebase_limitations() -> Vec<String> {
+    [
+        "prediction is commit-level: the index and working tree are ignored",
+        "steps after the first predicted conflict are not predicted; resolving that conflict changes every later step",
+        "a clean step whose result tree equals the new tip would become an empty commit in a real rebase; emptiness is not predicted here",
+        "note messages are localized free text; only `kind` and `paths` are stable",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 /// 출력에 항상 실리는 과장 방지 문구. 소비자(에이전트)가 예측을 rebase
@@ -274,7 +484,7 @@ mod tests {
     use std::path::Path;
     use std::process::{Command, Output};
 
-    use super::{parse_merge_tree_z, predict_merge};
+    use super::{parse_merge_tree_z, predict_merge, predict_rebase_chain};
     use crate::SuperGitError;
 
     // ---- 순수 파서 테스트: git 출력 드리프트가 여기서 먼저 깨지게 한다 ----
@@ -491,5 +701,213 @@ mod tests {
             }
             other => panic!("expected precondition error, got {other:?}"),
         }
+    }
+
+    // ---- rebase-chain 예측 테스트 ----
+
+    fn git_stdout(dir: &Path, args: &[&str]) -> String {
+        let output = run_git(dir, args);
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("utf8")
+            .trim()
+            .to_string()
+    }
+
+    /// base 커밋 위에 feat 브랜치(줄별 변경 커밋 체인)와 onto 브랜치를 만들고
+    /// HEAD를 feat에 둔다. 각 커밋은 f.txt의 한 줄만 바꾼다(1-indexed).
+    /// 반환: base oid.
+    fn repo_with_chain(
+        dir: &Path,
+        onto_line: (usize, &str),
+        feat_lines: &[(usize, &str)],
+    ) -> String {
+        let base_lines = ["a", "b", "c", "d", "e"];
+        let render = |overrides: &[(usize, &str)]| {
+            let mut lines: Vec<&str> = base_lines.to_vec();
+            for (index, text) in overrides {
+                lines[index - 1] = text;
+            }
+            format!("{}\n", lines.join("\n"))
+        };
+
+        git(dir, &["init", "-q", "-b", "main"]);
+        write(dir, "f.txt", &render(&[]));
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "base"]);
+        let base = git_stdout(dir, &["rev-parse", "HEAD"]);
+
+        git(dir, &["checkout", "-q", "-b", "onto"]);
+        write(dir, "f.txt", &render(&[onto_line]));
+        git(dir, &["commit", "-q", "-am", "onto"]);
+
+        git(dir, &["checkout", "-q", "-b", "feat", "main"]);
+        // feat 체인: 누적 적용해 각 커밋이 직전 커밋의 자식이 되게 한다.
+        let mut applied: Vec<(usize, &str)> = Vec::new();
+        for (index, change) in feat_lines.iter().enumerate() {
+            applied.push(*change);
+            write(dir, "f.txt", &render(&applied));
+            git(dir, &["commit", "-q", "-am", &format!("c{}", index + 1)]);
+        }
+        base
+    }
+
+    #[test]
+    fn rebase_chain_single_commit_clean() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // onto는 줄3, 커밋은 줄1을 바꾼다 → clean.
+        let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+
+        let prediction = predict_rebase_chain(tmp.path(), &base, "onto").expect("predict");
+
+        assert_eq!(
+            prediction.schema_version,
+            "super-git.rebase-prediction.v0.1"
+        );
+        assert_eq!(prediction.prediction_kind, "rebase");
+        assert_eq!(prediction.summary.status, "clean");
+        assert_eq!(prediction.summary.total_steps, 1);
+        assert_eq!(prediction.summary.predicted_steps, 1);
+        assert!(prediction.summary.steps_not_predicted.is_empty());
+        assert_eq!(prediction.steps.len(), 1);
+        assert_eq!(prediction.steps[0].parent, base);
+        // 최종 트리는 onto 변경과 커밋 변경이 모두 반영된 합성 결과여야 한다.
+        let final_tree = prediction
+            .summary
+            .final_tree
+            .as_deref()
+            .expect("final tree");
+        let merged = git_stdout(
+            tmp.path(),
+            &["cat-file", "-p", &format!("{final_tree}:f.txt")],
+        );
+        assert_eq!(merged, "C1\nb\nONTO\nd\ne");
+    }
+
+    #[test]
+    fn rebase_chain_multiple_commits_clean_composes_steps() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // onto 줄3, 커밋들은 줄1/줄5 → 전부 clean, step 2개.
+        let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1"), (5, "C2")]);
+
+        let prediction = predict_rebase_chain(tmp.path(), &base, "onto").expect("predict");
+
+        assert_eq!(prediction.summary.status, "clean");
+        assert_eq!(prediction.summary.total_steps, 2);
+        assert_eq!(prediction.summary.predicted_steps, 2);
+        assert_eq!(prediction.steps.len(), 2);
+        // 두 번째 step의 base는 두 번째 커밋의 실제 parent(첫 커밋)다.
+        assert_eq!(prediction.steps[1].parent, prediction.steps[0].commit);
+        let final_tree = prediction
+            .summary
+            .final_tree
+            .as_deref()
+            .expect("final tree");
+        let merged = git_stdout(
+            tmp.path(),
+            &["cat-file", "-p", &format!("{final_tree}:f.txt")],
+        );
+        assert_eq!(merged, "C1\nb\nONTO\nd\nC2");
+    }
+
+    #[test]
+    fn rebase_chain_stops_at_first_conflict() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // onto가 줄1을 바꾸므로 c2(줄1 변경)에서 충돌. c1(줄3), c3(줄4)는 그 앞뒤.
+        let base = repo_with_chain(tmp.path(), (1, "OTHER"), &[(3, "C1"), (1, "C2"), (4, "C3")]);
+
+        let prediction = predict_rebase_chain(tmp.path(), &base, "onto").expect("predict");
+
+        assert_eq!(prediction.summary.status, "conflicted");
+        assert_eq!(prediction.summary.total_steps, 3);
+        // 충돌 step까지만 예측한다: clean c1 + conflicted c2.
+        assert_eq!(prediction.summary.predicted_steps, 2);
+        assert_eq!(prediction.steps.len(), 2);
+        assert_eq!(prediction.steps[0].prediction.status, "clean");
+        assert_eq!(prediction.steps[1].prediction.status, "conflicted");
+        assert_eq!(
+            prediction.summary.first_conflict_commit.as_deref(),
+            Some(prediction.steps[1].commit.as_str())
+        );
+        // 충돌 이후 step은 예측하지 않고 oid만 남긴다.
+        assert_eq!(prediction.summary.steps_not_predicted.len(), 1);
+        assert!(prediction.summary.final_tree.is_none());
+        // 충돌 파일 shape는 merge 예측과 같은 모양으로 재사용된다.
+        assert_eq!(
+            prediction.steps[1].prediction.conflicted_files[0].path,
+            "f.txt"
+        );
+    }
+
+    #[test]
+    fn rebase_chain_empty_range_is_structured_error() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _ = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+
+        // base = HEAD → 재생할 커밋이 없다.
+        let err = predict_rebase_chain(tmp.path(), "HEAD", "onto").unwrap_err();
+        match err {
+            SuperGitError::PreviewPreconditionFailed { code, .. } => {
+                assert_eq!(code, "empty_range");
+            }
+            other => panic!("expected precondition error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rebase_chain_rejects_merge_commit_in_range() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+        // feat 위에 머지 커밋을 만든다: side 브랜치를 --no-ff로 합친다.
+        git(tmp.path(), &["checkout", "-q", "-b", "side", &base]);
+        write(tmp.path(), "side.txt", "side\n");
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "side"]);
+        git(tmp.path(), &["checkout", "-q", "feat"]);
+        git(
+            tmp.path(),
+            &["merge", "-q", "--no-ff", "-m", "merge side", "side"],
+        );
+
+        let err = predict_rebase_chain(tmp.path(), &base, "onto").unwrap_err();
+        match err {
+            SuperGitError::PreviewPreconditionFailed { code, .. } => {
+                assert_eq!(code, "merge_commit_in_range");
+            }
+            other => panic!("expected precondition error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rebase_chain_unknown_onto_is_rev_not_found() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+
+        let err = predict_rebase_chain(tmp.path(), &base, "no-such-onto").unwrap_err();
+        match err {
+            SuperGitError::PreviewPreconditionFailed { code, message, .. } => {
+                assert_eq!(code, "rev_not_found");
+                assert!(message.contains("onto"));
+            }
+            other => panic!("expected precondition error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rebase_chain_onto_unrelated_history_still_predicts() {
+        // rebase --onto는 공통 조상이 없어도 의미가 있다(step별 base는 명시
+        // parent라 merge-base 계산이 필요 없다). 에러가 아니라 예측이 나와야 한다.
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+        git(tmp.path(), &["checkout", "-q", "--orphan", "island"]);
+        git(tmp.path(), &["rm", "-rfq", "."]);
+        write(tmp.path(), "other.txt", "island\n");
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "island root"]);
+        git(tmp.path(), &["checkout", "-q", "feat"]);
+
+        let prediction = predict_rebase_chain(tmp.path(), &base, "island").expect("predict");
+        // f.txt는 base에서 왔고 island에는 없다 → 한쪽 삭제 + 한쪽 수정 충돌.
+        assert_eq!(prediction.summary.status, "conflicted");
     }
 }
