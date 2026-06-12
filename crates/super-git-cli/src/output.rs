@@ -102,6 +102,23 @@ fn structured_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
                     "reason": "Git may have created partial worktree state; re-inspect the execution record before cleanup."
                 }
             })),
+            // history_edit drop의 execute/undo 동기화 단계 부분 실패. 둘은 같은
+            // 페이로드를 공유하므로 한 모양으로 직렬화한다 — 에이전트가 prose가
+            // 아니라 구조화된 필드로 복구 행동을 결정한다(P1 follow-up).
+            SuperGitError::ExecuteSyncPartialFailure(details)
+            | SuperGitError::UndoSyncPartialFailure(details) => Some(json!({
+                "status": "failed_partial",
+                "action": details.action,
+                "message": details.message,
+                "branch_ref": details.branch_ref,
+                "observed_tip": details.observed_tip,
+                "sync_completed": details.sync_completed,
+                "execution_record_path": details.execution_record_path,
+                "cleanup": {
+                    "automatic_undo_available": false,
+                    "safe_next": details.safe_next,
+                }
+            })),
             _ => None,
         }
     })
@@ -806,5 +823,66 @@ mod tests {
             structured_error_code(&err).as_deref(),
             Some("confirmation_required")
         );
+    }
+
+    fn sync_partial_payload() -> Box<super_git_core::error::SyncPartialFailureError> {
+        Box::new(super_git_core::error::SyncPartialFailureError {
+            action: "history_edit".to_string(),
+            message: "read-tree -u failed".to_string(),
+            branch_ref: "refs/heads/feature".to_string(),
+            observed_tip: "abc123".to_string(),
+            sync_completed: false,
+            execution_record_path: PathBuf::from("/repo/.git/super-git/executions/x.json"),
+            safe_next: "finish synchronizing to the recorded tip".to_string(),
+        })
+    }
+
+    /// The drop execute sync partial failure must expose the same machine-readable
+    /// recovery contract as the worktree partial failure, not just prose.
+    #[test]
+    fn execute_sync_partial_failure_exposes_recovery_details() {
+        let err = anyhow::Error::new(SuperGitError::ExecuteSyncPartialFailure(
+            sync_partial_payload(),
+        ))
+        .context("could not execute plan");
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("execute_partial_failure")
+        );
+        let details = structured_error_details(&err).expect("details");
+        assert_eq!(details["status"], "failed_partial");
+        assert_eq!(details["action"], "history_edit");
+        assert_eq!(details["branch_ref"], "refs/heads/feature");
+        assert_eq!(details["observed_tip"], "abc123");
+        assert_eq!(details["sync_completed"], false);
+        assert_eq!(
+            details["execution_record_path"],
+            "/repo/.git/super-git/executions/x.json"
+        );
+        assert_eq!(details["cleanup"]["automatic_undo_available"], false);
+        assert_eq!(
+            details["cleanup"]["safe_next"],
+            "finish synchronizing to the recorded tip"
+        );
+    }
+
+    /// The undo variant shares the payload and the JSON shape but reports the
+    /// undo error code.
+    #[test]
+    fn undo_sync_partial_failure_exposes_recovery_details() {
+        let mut payload = sync_partial_payload();
+        payload.sync_completed = true;
+        let err = anyhow::Error::new(SuperGitError::UndoSyncPartialFailure(payload));
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("undo_partial_failure")
+        );
+        let details = structured_error_details(&err).expect("details");
+        assert_eq!(details["status"], "failed_partial");
+        assert_eq!(details["action"], "history_edit");
+        assert_eq!(details["sync_completed"], true);
+        assert_eq!(details["cleanup"]["automatic_undo_available"], false);
     }
 }

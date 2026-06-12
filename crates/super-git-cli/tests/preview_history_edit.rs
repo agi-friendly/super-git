@@ -1,5 +1,5 @@
 //! `super-git preview history-edit` integration tests.
-//! Preview must be read-only and must emit a stable `super-git.plan.v0.4` plan.
+//! Preview must be read-only and must emit a stable `super-git.plan.v0.5` plan.
 
 use std::io::Write;
 use std::path::Path;
@@ -151,7 +151,7 @@ fn survey_without_instructions_emits_read_only_plan() {
 
     assert_eq!(json["ok"], true);
     let data = &json["data"];
-    assert_eq!(data["schema_version"], "super-git.plan.v0.4");
+    assert_eq!(data["schema_version"], "super-git.plan.v0.5");
     assert!(data["plan_id"]
         .as_str()
         .expect("plan id")

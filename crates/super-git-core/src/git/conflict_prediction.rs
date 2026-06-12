@@ -342,6 +342,7 @@ fn rebase_limitations() -> Vec<String> {
         "steps after the first predicted conflict are not predicted; resolving that conflict changes every later step",
         "a clean step whose result tree equals the new tip would become an empty commit in a real rebase; emptiness is not predicted here",
         "note messages are localized free text; only `kind` and `paths` are stable",
+        "paths are decoded as UTF-8; non-UTF-8 bytes are replaced (the result is advisory JSON, which is Unicode-only)",
     ]
     .map(String::from)
     .to_vec()
@@ -354,6 +355,7 @@ fn limitations() -> Vec<String> {
         "prediction is commit-level: the index and working tree are ignored",
         "a rebase replays commits one by one; its conflicts can differ from this single merge prediction",
         "note messages are localized free text; only `kind` and `paths` are stable",
+        "paths are decoded as UTF-8; non-UTF-8 bytes are replaced (the result is advisory JSON, which is Unicode-only)",
     ]
     .map(String::from)
     .to_vec()

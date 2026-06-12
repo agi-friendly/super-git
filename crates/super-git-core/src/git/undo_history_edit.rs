@@ -97,9 +97,19 @@ pub fn undo_history_edit_token(
     // 효과가 되돌려졌으니 replay 가드도 푼다: record를 소비해 같은 plan을
     // 다시 실행할 수 있게 한다. plan_id는 상태 기반이라 새 preview를 받아도
     // 같은 record 경로로 떨어지므로, 소비하지 않으면 같은 편집이 그 브랜치에서
-    // 영구히 막힌다. best-effort: 제거 실패가 성공한 undo를 실패로 만들면
-    // 안 된다.
-    let _ = fs::remove_file(&token.execution_record_path);
+    // 영구히 막힌다(execution_already_attempted). 따라서 제거 실패는 침묵으로
+    // 삼키지 않는다: ref/워킹트리 복원은 끝났지만 record가 남아 재실행이 막힌
+    // partial-failure다. NotFound는 이미 목표 상태(소비됨)라 성공으로 본다.
+    if let Err(err) = fs::remove_file(&token.execution_record_path) {
+        if err.kind() != ErrorKind::NotFound {
+            return Err(record_consume_partial_failure(
+                &git,
+                &worktree_root,
+                &token,
+                err,
+            ));
+        }
+    }
 
     Ok(UndoResult {
         schema_version: UNDO_RESULT_SCHEMA_VERSION.to_string(),
@@ -159,6 +169,31 @@ fn ensure_no_ignored_path_collisions(
         "no ignored paths colliding with paths tracked at the pre-execute tip",
         &execute_history_edit::describe_collisions(&collisions),
     )
+}
+
+/// ref/워킹트리 복원은 끝났지만 execution record 제거가 실패한 경우. undo의
+/// 효과(복원)는 적용됐으나 replay 가드가 남아 같은 plan 재실행이
+/// execution_already_attempted로 막힌다 — 침묵 대신 partial failure로 보고한다
+/// (sync_completed=true: 복원은 완료, 미완은 record 소비뿐).
+fn record_consume_partial_failure(
+    git: &Git,
+    worktree_root: &Path,
+    token: &HistoryEditUndoToken,
+    original: std::io::Error,
+) -> SuperGitError {
+    let observed_tip = read_ref_oid(git, worktree_root, &token.branch_ref)
+        .unwrap_or_else(|_| "unreadable".to_string());
+    SuperGitError::UndoSyncPartialFailure(Box::new(crate::error::SyncPartialFailureError {
+        action: ACTION_HISTORY_EDIT.to_string(),
+        message: format!(
+            "the branch ref and working tree are restored, but the execution record could not be removed: {original}"
+        ),
+        branch_ref: token.branch_ref.clone(),
+        observed_tip,
+        sync_completed: true,
+        execution_record_path: token.execution_record_path.clone(),
+        safe_next: "the undo effect is applied (the branch ref and working tree are restored); remove the execution record manually to re-enable executing the same plan — until then the identical plan is rejected as execution_already_attempted".to_string(),
+    }))
 }
 
 /// ref가 이미 pre-execute tip으로 복원된 뒤의 sync 실패 보고. ref 롤백은

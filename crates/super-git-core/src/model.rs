@@ -29,7 +29,11 @@ pub const INSPECT_SCHEMA_VERSION: &str = "super-git.inspect.v0.3";
 pub const PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.1";
 pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.2";
 pub const DESTRUCTIVE_PREVIEW_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.3";
-pub const HISTORY_EDIT_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.4";
+// v0.5: drop 지원이 plan_id projection에 prediction과 drop precondition들을
+// 더하면서 v0.4 hash 계약이 바뀌었다. 구조 자체는 serde default로 하위호환이지만
+// projection이 달라졌으므로, 옛 v0.4 plan은 plan_id mismatch가 아니라 명확한
+// unsupported_schema_version으로 거부되도록 버전을 올린다.
+pub const HISTORY_EDIT_PLAN_SCHEMA_VERSION: &str = "super-git.plan.v0.5";
 pub const HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION: &str = "super-git.instructions.v0.1";
 pub const CONFIRMATION_SCHEMA_VERSION: &str = "super-git.confirmation.v0.1";
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "super-git.fingerprint.v0.1";
@@ -701,8 +705,9 @@ pub struct HistoryEditConfirmationTarget {
     pub tip_commit: Option<String>,
 }
 
-/// `super-git.plan.v0.4` 히스토리 편집 계획.
-/// 첫 op 세트(pick/reword/squash/fixup)는 트리를 보존하므로 분기 ref만 이동한다.
+/// `super-git.plan.v0.5` 히스토리 편집 계획.
+/// pick/reword/squash/fixup는 트리를 보존해 분기 ref만 이동하고, drop은 patch를
+/// 최종 history에서 제거한다(prediction이 plan_id에 바인딩된다).
 /// instructions/result_summary는 survey 모드에서 null로 명시된다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

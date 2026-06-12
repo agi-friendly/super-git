@@ -279,7 +279,7 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
     if plan.schema_version != HISTORY_EDIT_PLAN_SCHEMA_VERSION {
         return invalid_plan(
             "unsupported_schema_version",
-            "history_edit execute requires super-git.plan.v0.4",
+            "history_edit execute requires super-git.plan.v0.5",
         );
     }
     let expected_plan_id = compute_history_edit_plan_id(plan);

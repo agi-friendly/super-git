@@ -115,15 +115,20 @@ fn preview_plan(dir: &Path, base: &str, instructions: &str) -> serde_json::Value
 }
 
 fn execute(dir: &Path, plan: &serde_json::Value) -> serde_json::Value {
-    let mut command = super_git(dir);
-    command.args(["execute", "--plan", "-"]);
-    let output = pipe_stdin(command, &serde_json::to_string(plan).expect("plan json"));
+    let output = execute_expect_error(dir, plan);
     assert!(
         output.status.success(),
         "execute failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("parse execute json")
+}
+
+/// Runs execute without asserting success, so a test can inspect a rejection.
+fn execute_expect_error(dir: &Path, plan: &serde_json::Value) -> Output {
+    let mut command = super_git(dir);
+    command.args(["execute", "--plan", "-"]);
+    pipe_stdin(command, &serde_json::to_string(plan).expect("plan json"))
 }
 
 fn undo(dir: &Path, result: &serde_json::Value) -> Output {
@@ -285,6 +290,57 @@ fn undo_is_idempotent_refusing_a_second_run() {
     let json = error_json(undo(&repo, &result));
     assert!(cause_contains(&json, "execution_record_missing"));
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+/// Record consumption is part of the undo success contract: if the ref and
+/// working tree are restored but the record cannot be removed, undo must report
+/// a structured partial failure instead of `{ ok: true }`. Otherwise a fresh
+/// preview of the same state reproduces the same state-based plan id, hits the
+/// surviving record, and is rejected as `execution_already_attempted` while the
+/// user was told the plan could be executed again.
+#[cfg(unix)]
+#[test]
+fn undo_reports_partial_failure_when_record_consumption_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let plan = preview_plan(&repo, "main", &reword_fixup_items(&oids));
+    let result = execute(&repo, &plan);
+    let tip_after_execute = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    assert_ne!(tip_after_execute, tip_before);
+
+    // Make the executions directory read-only so removing the record fails
+    // (a containing-directory write is required to unlink an entry). This test
+    // assumes a non-root runner, the standard case for `cargo test`.
+    let executions = repo.join(".git/super-git/executions");
+    let original = std::fs::metadata(&executions).expect("meta").permissions();
+    std::fs::set_permissions(&executions, std::fs::Permissions::from_mode(0o555))
+        .expect("lock dir");
+
+    let json = error_json(undo(&repo, &result));
+
+    // Restore permissions before any assertion can panic and leak the lock.
+    std::fs::set_permissions(&executions, original).expect("restore dir");
+
+    // The ref restore happened before the record removal, so the branch is back.
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert_eq!(json["error"]["code"], "undo_partial_failure");
+    let details = &json["error"]["details"];
+    assert_eq!(details["status"], "failed_partial");
+    assert_eq!(details["sync_completed"], true);
+    assert!(details["cleanup"]["safe_next"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("execution_already_attempted"));
+
+    // The record survived, so the same plan really is blocked from re-execute -
+    // which is exactly why undo must not have claimed success.
+    let records = std::fs::read_dir(&executions).expect("dir").count();
+    assert_eq!(records, 1, "the record must remain when removal failed");
+    let reexecute = error_json(execute_expect_error(&repo, &plan));
+    assert!(cause_contains(&reexecute, "execution_already_attempted"));
 }
 
 // ---- C8-drop-D: drop undo (restore_branch_tip_and_worktree) ----
@@ -550,4 +606,55 @@ fn undo_consumes_the_record_so_the_same_plan_re_executes() {
 
     let rerun = execute(&repo, &plan);
     assert_eq!(rerun["ok"], true);
+}
+
+#[test]
+fn drop_undo_respects_the_sparse_checkout_cone() {
+    // Undo's reverse sync uses the same read-tree -u --reset primitive as
+    // execute, so it must respect a sparse cone too: the revived in-cone file
+    // comes back while tracked outside paths stay non-materialized.
+    let tmp = tempfile::tempdir().expect("temp");
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "feature/login"]);
+    std::fs::create_dir_all(repo.join("inside")).expect("mkdir inside");
+    std::fs::create_dir_all(repo.join("outside")).expect("mkdir outside");
+    std::fs::write(repo.join("inside/keep.txt"), "keep\n").expect("write");
+    std::fs::write(repo.join("outside/x.txt"), "x\n").expect("write");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "seed"]);
+    commit_file(&repo, "outside/y.txt", "y\n", "outside change");
+    commit_file(&repo, "inside/b.txt", "b\n", "inside b to drop");
+    commit_file(&repo, "inside/c.txt", "c\n", "inside c to keep");
+    let oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    git(&repo, &["sparse-checkout", "set", "inside"]);
+
+    let items = instructions_doc(&format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2], oids[3]
+    ));
+    let plan = preview_plan(&repo, "main", &items);
+    let result = json_output(execute_confirmed(&repo, &plan));
+    assert!(!repo.join("inside/b.txt").exists());
+
+    let undone = json_output(undo(&repo, &result));
+    assert_eq!(undone["ok"], true);
+    assert!(
+        repo.join("inside/b.txt").exists(),
+        "undo revives the dropped in-cone file"
+    );
+    assert!(
+        !repo.join("outside/x.txt").exists(),
+        "the cone stays respected through undo's reverse sync"
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
 }

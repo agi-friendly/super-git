@@ -255,7 +255,7 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 
 ## `preview history-edit`
 
-Builds a read-only `super-git.plan.v0.4` plan for editing commit history on the
+Builds a read-only `super-git.plan.v0.5` plan for editing commit history on the
 branch checked out in the current worktree. The op set is `pick`, `reword`,
 `squash`, `fixup`, and `drop`. The first four preserve every tree object, so
 those edits can never produce a content conflict; `drop` removes a commit's
@@ -281,10 +281,15 @@ example a detached HEAD, an in-progress operation, a merge commit in range, or
 an instruction list that does not cover the range) returns
 `execution.status: "blocked"` with structured, repairable reason codes.
 
-Staged and unstaged changes are allowed with a `working_tree_dirty` warning;
-preview is always read-only. Only malformed or wrong-schema instruction input
-fails with `{ ok: false, error }`; content problems become blocked plans
-instead. `reference_commands` are documentation only.
+Staged and unstaged changes are allowed with a `working_tree_dirty` warning.
+Preview never touches refs, the index, the working tree, or config. A
+tree-preserving preview reads only; a `drop` preview additionally runs the
+kept-commit replay prediction, which — like `predict rebase` — may write
+unreferenced, gc-collectable objects into the object database (each clean
+replay step wraps its result tree in a synthetic commit). Only malformed or
+wrong-schema instruction input fails with `{ ok: false, error }`; content
+problems become blocked plans instead. `reference_commands` are documentation
+only.
 
 ### Dropping commits
 
@@ -478,9 +483,11 @@ super-git undo --token /tmp/super-git-result.json
 super-git undo --token - < /tmp/super-git-result.json
 ```
 
-The token is treated as untrusted input. `undo` validates local registry
-provenance and index checksums before restoring the previous index snapshot.
-It does not modify working-tree file contents.
+The token is treated as untrusted input. For `stage_changes`, `undo` validates
+local registry provenance and index checksums before restoring the previous
+index snapshot, and does not modify working-tree file contents. Other actions
+have their own boundaries below; only `history_edit` `drop` undo deliberately
+synchronizes the working tree (as the inverse of its execute).
 
 For `worktree_create` results, `undo` validates the local execution record,
 target worktree identity, lock/prunable state, HEAD/ref drift, and a clean
