@@ -177,16 +177,30 @@ fn inspect_clean_repo_reports_branch_and_no_operation() {
             "revert_skip",
             "revert_abort",
             "bisect_reset",
+            "worktree_create",
+            "history_edit",
         ]
     );
     assert!(!json["data"]
         .as_object()
         .expect("inspect data object")
         .contains_key("allowed_next"));
-    // clean + upstream 없음 → 제안할 행동이 없다.
-    assert!(next_kinds(&json, "allowed").is_empty());
+    // clean + upstream 없음 → 일반 흐름 제안은 없고 preview 진입점 후보만 남는다.
+    assert_eq!(
+        next_kinds(&json, "allowed"),
+        vec!["worktree_create", "history_edit"]
+    );
     assert!(next_kinds(&json, "blocked").is_empty());
     assert!(next_kinds(&json, "needs_human_review").is_empty());
+    // reference_command는 placeholder(<ref>/<base>)를 포함한 preview 진입점이다.
+    assert_eq!(
+        next_action(&json, "allowed", "worktree_create")["reference_command"],
+        serde_json::json!(["super-git", "preview", "worktree-create", "--ref", "<ref>"])
+    );
+    assert_eq!(
+        next_action(&json, "allowed", "history_edit")["reference_command"],
+        serde_json::json!(["super-git", "preview", "history-edit", "--base", "<base>"])
+    );
 }
 
 #[test]
@@ -200,6 +214,16 @@ fn inspect_detached_head() {
     assert_eq!(json["data"]["head"]["detached"], true);
     assert_eq!(json["data"]["head"]["branch"], serde_json::Value::Null);
     assert!(json["data"]["head"]["commit"].is_string());
+    // detached여도 worktree_create는 가능하지만 history_edit는 attached HEAD가 필요하다.
+    assert!(next_kinds(&json, "allowed")
+        .iter()
+        .any(|k| k == "worktree_create"));
+    assert!(!next_kinds(&json, "allowed")
+        .iter()
+        .any(|k| k == "history_edit"));
+    assert!(next_kinds(&json, "blocked")
+        .iter()
+        .any(|k| k == "history_edit"));
 }
 
 #[test]
@@ -240,6 +264,11 @@ fn inspect_reports_merging_during_conflict() {
     assert!(allowed.iter().any(|k| k == "merge_abort"));
     let blocked = next_kinds(&json, "blocked");
     assert!(blocked.iter().any(|k| k == "continue_operation"));
+    // 진행 중 작업/충돌에서는 resolve 흐름이 우선이다:
+    // history_edit는 blocked로 사유를 보여주고 worktree_create는 노출하지 않는다.
+    assert!(blocked.iter().any(|k| k == "history_edit"));
+    assert!(!allowed.iter().any(|k| k == "worktree_create"));
+    assert!(!blocked.iter().any(|k| k == "worktree_create"));
 }
 
 #[test]
@@ -830,6 +859,13 @@ fn inspect_reports_unborn_head_on_fresh_init() {
     assert_eq!(json["data"]["head"]["commit"], serde_json::Value::Null);
     assert_eq!(json["data"]["working_tree"]["untracked"], 1);
     assert_eq!(json["data"]["working_tree"]["clean"], false);
+    // unborn HEAD: 편집할 history도, worktree를 시작할 ref도 아직 없다.
+    let blocked = next_kinds(&json, "blocked");
+    assert!(blocked.iter().any(|k| k == "history_edit"));
+    assert!(blocked.iter().any(|k| k == "worktree_create"));
+    let allowed = next_kinds(&json, "allowed");
+    assert!(!allowed.iter().any(|k| k == "history_edit"));
+    assert!(!allowed.iter().any(|k| k == "worktree_create"));
 }
 
 #[test]

@@ -8,8 +8,9 @@ use super_git_core::config::store::{
 };
 use super_git_core::config::template::ConfigValidationReport;
 use super_git_core::model::{
-    ExecuteResult, HistoryEditPlan, PreviewPlan, RepoState, RiskLevel, StatusOutput, UndoResult,
-    WorktreeCreatePlan, WorktreeInfo, WorktreeKind, WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
+    ConflictPrediction, ExecuteResult, HistoryEditPlan, PreviewPlan, RebasePrediction, RepoState,
+    RiskLevel, StatusOutput, UndoResult, WorktreeCreatePlan, WorktreeInfo, WorktreeKind,
+    WorktreeRemovePlan, INSPECT_SCHEMA_VERSION,
 };
 use super_git_core::SuperGitError;
 
@@ -457,6 +458,89 @@ pub fn print_inspect(mode: OutputMode, state: &RepoState) -> Result<()> {
                 for next in &state.next.needs_human_review {
                     println!("  - {} ({})", next.kind, next.reason);
                 }
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_conflict_prediction(mode: OutputMode, prediction: &ConflictPrediction) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(prediction),
+        OutputMode::Human => {
+            println!("Repository: {}", prediction.repository.display());
+            let inputs = &prediction.inputs;
+            println!(
+                "Prediction: merging {} into {} would be {}",
+                inputs.theirs.rev, inputs.ours.rev, prediction.prediction.status
+            );
+            println!("  ours:   {} ({})", inputs.ours.rev, inputs.ours.commit);
+            println!("  theirs: {} ({})", inputs.theirs.rev, inputs.theirs.commit);
+            if let Some(base) = &inputs.merge_base {
+                println!("  merge base: {base}");
+            }
+            if !prediction.prediction.conflicted_files.is_empty() {
+                println!("Predicted conflicts:");
+                for file in &prediction.prediction.conflicted_files {
+                    // stage 부재가 충돌 모양을 말해주므로 사람에게도 같이 보여준다.
+                    let stages: Vec<String> = file
+                        .stages
+                        .iter()
+                        .map(|stage| stage.stage.to_string())
+                        .collect();
+                    println!("  - {} (stages {})", file.path, stages.join(","));
+                }
+            }
+            println!("Limitations:");
+            for limitation in &prediction.limitations {
+                println!("  - {limitation}");
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn print_rebase_prediction(mode: OutputMode, prediction: &RebasePrediction) -> Result<()> {
+    match mode {
+        OutputMode::Json => emit_success(prediction),
+        OutputMode::Human => {
+            println!("Repository: {}", prediction.repository.display());
+            let inputs = &prediction.inputs;
+            let summary = &prediction.summary;
+            println!(
+                "Prediction: replaying {} onto {} would be {}",
+                inputs.range, inputs.onto.rev, summary.status
+            );
+            println!("  base: {} ({})", inputs.base.rev, inputs.base.commit);
+            println!("  onto: {} ({})", inputs.onto.rev, inputs.onto.commit);
+            println!("  head: {} ({})", inputs.head.rev, inputs.head.commit);
+            println!(
+                "Steps predicted: {}/{}",
+                summary.predicted_steps, summary.total_steps
+            );
+            for step in &prediction.steps {
+                println!("  - {} {}", step.commit, step.prediction.status);
+                for file in &step.prediction.conflicted_files {
+                    let stages: Vec<String> = file
+                        .stages
+                        .iter()
+                        .map(|stage| stage.stage.to_string())
+                        .collect();
+                    println!("      {} (stages {})", file.path, stages.join(","));
+                }
+            }
+            if let Some(commit) = &summary.first_conflict_commit {
+                println!("First conflict: {commit}");
+            }
+            if !summary.steps_not_predicted.is_empty() {
+                println!("Not predicted (after the first conflict):");
+                for commit in &summary.steps_not_predicted {
+                    println!("  - {commit}");
+                }
+            }
+            println!("Limitations:");
+            for limitation in &prediction.limitations {
+                println!("  - {limitation}");
             }
             Ok(())
         }

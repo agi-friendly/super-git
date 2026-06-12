@@ -94,6 +94,12 @@ pub enum SuperGitError {
         worktree_list_entry_present: bool,
     },
 
+    #[error("execute {0}")]
+    ExecuteSyncPartialFailure(Box<SyncPartialFailureError>),
+
+    #[error("undo {0}")]
+    UndoSyncPartialFailure(Box<SyncPartialFailureError>),
+
     #[error("undo token invalid: {code} ({message})")]
     UndoTokenInvalid { code: String, message: String },
 
@@ -111,6 +117,23 @@ pub enum SuperGitError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+/// ref가 이미 목표 tip으로 움직인 뒤(sync/record 단계)의 실패 페이로드.
+/// execute(새 tip으로)와 undo(pre-execute tip으로)가 같은 모양을 공유한다.
+/// SuperGitError 전체가 커지지 않도록 박싱해 담는다(clippy::result_large_err).
+#[derive(Debug, Error)]
+#[error(
+    "partial failure for {action}: {message}; branch_ref={branch_ref}; observed_tip={observed_tip}; sync_completed={sync_completed}; execution_record_path={execution_record_path}; safe_next={safe_next}"
+)]
+pub struct SyncPartialFailureError {
+    pub action: String,
+    pub message: String,
+    pub branch_ref: String,
+    pub observed_tip: String,
+    pub sync_completed: bool,
+    pub execution_record_path: PathBuf,
+    pub safe_next: String,
 }
 
 impl SuperGitError {
@@ -137,6 +160,11 @@ impl SuperGitError {
             Self::ExecutePreconditionMismatch { .. } => "execute_precondition_mismatch",
             Self::ExecuteRollbackFailed { .. } => "execute_rollback_failed",
             Self::ExecutePartialFailure { .. } => "execute_partial_failure",
+            // worktree_create의 partial failure와 같은 코드: 에이전트 계약은
+            // "ref/대상은 이미 움직였고 자동 복구가 없다"는 한 가지다. 구분은
+            // action 필드가 한다.
+            Self::ExecuteSyncPartialFailure { .. } => "execute_partial_failure",
+            Self::UndoSyncPartialFailure { .. } => "undo_partial_failure",
             Self::UndoTokenInvalid { code, .. } => code,
             Self::UndoPreconditionMismatch { .. } => "undo_precondition_mismatch",
             Self::Io(_) => "io_error",

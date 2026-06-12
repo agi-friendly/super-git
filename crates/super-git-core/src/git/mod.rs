@@ -1,4 +1,5 @@
 pub mod command;
+pub mod conflict_prediction;
 pub mod execute;
 pub mod execute_history_edit;
 pub mod execute_worktree;

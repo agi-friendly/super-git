@@ -191,6 +191,15 @@ The snapshot includes:
 `inspect` is read-only. Its next-action fields are not permission to execute raw
 Git commands. Use `preview` before any write.
 
+When the repository state allows it, `next.allowed` also lists the
+preview-gated write flows (`worktree_create`, `history_edit`) as preview
+candidates. Their `reference_command` points at the matching `super-git
+preview` entrypoint with placeholder arguments such as `<ref>` and `<base>`:
+the placeholders must be replaced before the command can run, which keeps the
+hint documentation-only. When a flow's preview would refuse (in-progress
+operation, conflicts, detached or unborn HEAD), `next.blocked` carries the
+reason instead.
+
 ## `preview stage-changes`
 
 Builds a read-only plan for staging current unstaged and untracked changes.
@@ -247,9 +256,10 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 ## `preview history-edit`
 
 Builds a read-only `super-git.plan.v0.4` plan for editing commit history on the
-branch checked out in the current worktree. The first op set is `pick`,
-`reword`, `squash`, and `fixup`, which preserve every tree object, so the
-planned edit can never produce a content conflict.
+branch checked out in the current worktree. The op set is `pick`, `reword`,
+`squash`, `fixup`, and `drop`. The first four preserve every tree object, so
+those edits can never produce a content conflict; `drop` removes a commit's
+patch from the final history and is gated by conflict prediction (below).
 
 ```bash
 super-git preview history-edit --base <ref>
@@ -271,11 +281,131 @@ example a detached HEAD, an in-progress operation, a merge commit in range, or
 an instruction list that does not cover the range) returns
 `execution.status: "blocked"` with structured, repairable reason codes.
 
-Staged and unstaged changes are allowed with a `working_tree_dirty` warning
-because the mechanism never touches the working tree or the index. Only
-malformed or wrong-schema instruction input fails with `{ ok: false, error }`;
-content problems become blocked plans instead. Preview performs no writes;
-`reference_commands` are documentation only.
+Staged and unstaged changes are allowed with a `working_tree_dirty` warning;
+preview is always read-only. Only malformed or wrong-schema instruction input
+fails with `{ ok: false, error }`; content problems become blocked plans
+instead. `reference_commands` are documentation only.
+
+### Dropping commits
+
+A `drop` op marks a commit whose patch should be removed from the final
+history. Drop does not delete commit objects or "delete history": the branch
+ref moves to a newly built chain in which the kept commits are replayed and
+the dropped ones are absent. The full flow:
+
+```bash
+super-git preview history-edit --base main                          # survey
+# edit the instruction template: change one op to "drop"
+super-git preview history-edit --base main --instructions edit.json # plan
+# the plan carries confirmation.required_phrase — a human types it into a
+# super-git.confirmation.v0.1 artifact acknowledging the plan's reason codes
+super-git execute --plan plan.json --confirmation confirm.json
+super-git undo --token result.json                                  # if needed
+```
+
+Drop-specific contract, visible in the plan itself:
+
+- The preview replays the kept commits internally (the Stage 7 predictor). A
+  predicted conflict returns `execution.status: "blocked"` with reason code
+  `predicted_conflict` and per-file stage evidence; nothing is ever resolved
+  automatically. A clean prediction embeds `prediction.final_tree`, the exact
+  tree execute must land on — the prediction is bound by `plan_id`, so it
+  cannot be forged.
+- Drop is always confirmation-gated (`preview_only`), regardless of published
+  state, with reason code `tree_changing_drop` and the deterministic phrase
+  `drop <N> commit(s) from <branch_ref> at <tip_commit>`. When the range is
+  also published, the reason codes name both, but the phrase stays the drop
+  phrase.
+- `drop` may be mixed with `pick` and `reword` only; mixing with
+  `squash`/`fixup` blocks as `drop_with_fold_unsupported`. Dropping every
+  commit in the range is allowed and moves the branch to `base` itself.
+- Execute requires a clean working tree (untracked counts as dirty) and
+  synchronizes the index and working tree to the new tip afterwards — the
+  first history-edit family that touches the working tree. The plan states
+  this as the non-volatile precondition
+  `working_tree_clean_required_at_execute`.
+
+## `predict merge --theirs <rev> [--ours <rev>]`
+
+Predicts what a merge of two commits would do, without planning or running
+anything. Contract:
+`docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md`.
+
+```bash
+super-git predict merge --theirs feature            # ours defaults to HEAD
+super-git predict merge --ours main --theirs feature
+```
+
+`predict` is a read verb, not a plan: the `super-git.conflict-prediction.v0.1`
+result has no `plan_id`, nothing to execute, and nothing to undo. A predicted
+conflict is a successful prediction, not an error:
+
+```json
+{ "prediction": { "status": "conflicted", "conflicted_files": [] } }
+```
+
+Per-file conflicts carry the index stages (1 = base, 2 = ours, 3 = theirs);
+missing stages identify the conflict shape mechanically, such as a
+modify/delete conflict having no stage 3. `notes[].kind` and `notes[].paths`
+are stable across locales; `notes[].message` is localized free text for
+display only.
+
+Only inputs that cannot be predicted over fail with `{ ok: false, error }`:
+`error.code` is `rev_not_found`, `no_merge_base`, `merge_tree_unsupported`
+(Git older than 2.38), or `merge_tree_output_unrecognized`.
+
+Prediction is commit-level and ignores the index and working tree, so a dirty
+tree does not block it; the result always carries a `limitations` list,
+including that a single merge prediction is not a rebase transcript. The
+underlying `git merge-tree --write-tree` never touches refs, the index, or the
+working tree, but may write unreferenced, gc-collectable objects into the
+object database.
+
+## `predict rebase --base <rev> --onto <rev>`
+
+Predicts where replaying the linear `base..HEAD` range onto a new tip would
+conflict, one step at a time. Same family and rules as `predict merge`: a
+read verb with no `plan_id`, nothing to execute, nothing to undo, and a
+predicted conflict is a successful prediction.
+
+```bash
+super-git predict rebase --base main --onto origin/main
+```
+
+The `super-git.rebase-prediction.v0.1` result carries one entry per replayed
+commit in `steps` (oldest first), each embedding the same per-file conflict
+shape as `predict merge` — the three-way roles rotate per step: the merge
+base is the replayed commit's own parent, ours is the tip synthesized so
+far, theirs is the replayed commit.
+
+Prediction stops at the first conflicted step: composing further steps on
+top of a conflicted tree would be meaningless, and the real resolution
+changes every later step. `summary` makes the reach explicit:
+
+```json
+{
+  "summary": {
+    "status": "conflicted",
+    "total_steps": 3,
+    "predicted_steps": 2,
+    "first_conflict_commit": "<oid>",
+    "steps_not_predicted": ["<oid>"]
+  }
+}
+```
+
+When every step is clean, `summary.final_tree` is the predicted post-rebase
+tree. `--onto` does not need any common ancestor with the range (the
+per-step base is explicit, matching `git rebase --onto` semantics).
+
+Structured errors (`{ ok: false, error }`): `rev_not_found`, `empty_range`
+(nothing to replay), `merge_commit_in_range` and `root_commit_in_range`
+(only linear single-parent ranges can be replayed), plus the shared
+`merge_tree_unsupported` and `merge_tree_output_unrecognized`.
+
+Each clean step wraps its result tree in an unreferenced, gc-collectable
+synthetic commit, extending the `predict merge` object-database nuance to
+commits; refs, the index, and the working tree are never touched.
 
 ## `execute --plan <file|-> [--confirmation <file|->]`
 
@@ -297,20 +427,33 @@ repository state.
 For `history_edit`, execute re-derives the plan from fresh state and requires an
 identical plan id before writing, then rebuilds the commit chain with Git
 plumbing (`commit-tree`), moves the branch ref by compare-and-swap, and
-post-verifies that the final tree is unchanged. Leading unchanged picks keep
-their original object ids; author identity is preserved on every rewritten
-commit; the working tree and index are never touched. Successful results carry a
-`restore_branch_tip_snapshot` undo token.
+post-verifies the final tree. Leading unchanged picks keep their original
+object ids; author identity is preserved on every rewritten commit. For the
+tree-preserving ops the final tree must be byte-identical to the pre-execute
+tree and the working tree and index are never touched; successful results
+carry a `restore_branch_tip_snapshot` undo token.
+
+For plans containing `drop`, execute additionally requires a clean working
+tree (untracked counts as dirty, surfacing as `working_tree_clean`), blocks
+ignored files sitting on paths the new tip tracks
+(`ignored_path_collision`), verifies the rebuilt tip against the plan's
+predicted `final_tree` before the ref moves, and after the compare-and-swap
+synchronizes the index and working tree to the new tip with
+`git read-tree -u --reset`. A failure after the ref moved surfaces as
+`execute_partial_failure` (the branch ref is already correct; the record
+stays in `intent` state so undo and re-execute fail closed). Successful drop
+results carry a `restore_branch_tip_and_worktree` undo token.
 
 Unpublished ranges (`execution.status: "executable"`) execute directly and must
-not carry a confirmation artifact. Published ranges
+not carry a confirmation artifact. Published ranges and all drop plans
 (`execution.status: "preview_only"`) require a separate
 `super-git.confirmation.v0.1` artifact whose target, reason codes, undo
-strategy, and CLI phrase
-(`rewrite published history on <branch.ref> at <branch.tip_commit>`) match the
-plan; the confirmation is authorization only and never replaces fresh
-revalidation. The undo token still restores the local branch tip but cannot
-un-publish anything already pushed.
+strategy, and CLI phrase match the plan — the published phrase is
+`rewrite published history on <branch.ref> at <branch.tip_commit>`, the drop
+phrase is `drop <N> commit(s) from <branch.ref> at <branch.tip_commit>`; the
+confirmation is authorization only and never replaces fresh revalidation. The
+undo token still restores the local branch tip but cannot un-publish anything
+already pushed.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;
@@ -347,13 +490,26 @@ branch refs or history, and removes a parent directory created by `super-git`
 only when that parent is empty.
 
 For `history_edit` results, `undo` validates the local execution record's
-provenance (its embedded token must match), that the branch still points at the
-post-execute tip (otherwise it refuses with `branch_advanced_since_execute`),
-that the pre-execute tip commit still exists in the object store, and that no
-Git operation is in progress. It then moves the branch ref back to the
-pre-execute tip by compare-and-swap. It never edits working-tree files, the
-index, or branch history; the rewritten commits simply become unreachable
-objects that normal Git maintenance collects later.
+provenance (its embedded token must match, so a forged or downgraded token
+kind is refused), that the branch still points at the post-execute tip
+(otherwise it refuses with `branch_advanced_since_execute`), that the
+pre-execute tip commit still exists in the object store, and that no Git
+operation is in progress. It then moves the branch ref back to the
+pre-execute tip by compare-and-swap. For tree-preserving edits
+(`restore_branch_tip_snapshot`) it never edits working-tree files or the
+index. For drop results (`restore_branch_tip_and_worktree`) it is the
+symmetric inverse of drop execute: before any write it requires a clean
+working tree (untracked counts as dirty) and no ignored files on paths the
+pre-execute tip tracks (`ignored_path_collision`), and after the ref restore
+it synchronizes the index and working tree back to the pre-execute tip. A
+sync failure after the ref was restored surfaces as `undo_partial_failure`
+(the ref is correct; only the working-tree sync is unfinished).
+
+A successful undo consumes the execution record, so the identical plan and
+confirmation can be executed again — without that, the state-based plan id
+would lock the same edit out of the branch forever. Either way the rewritten
+commits simply become unreachable objects that normal Git maintenance
+collects later; undo never deletes branch refs or history.
 
 ## `status [path]`
 

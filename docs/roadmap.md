@@ -216,10 +216,29 @@ Slicing direction:
 
 - start with `reword` plus `squash`/`fixup`, which cannot produce content
   conflicts
-- `drop` and reordering land after conflict prediction exists (Stage 7)
+- `drop` landed as the C8-drop series (contract checkpoint:
+  `docs/internal/plans/2026-06-12-c8-drop-history-edit-contract.md`):
+  C8-drop-A (contract), C8-drop-B (prediction-gated preview), C8-drop-C
+  (execute with the `final_tree` oracle, always-on confirmation,
+  `read-tree -u --reset` working-tree sync, and the ignored-path collision
+  gate), and C8-drop-D (`restore_branch_tip_and_worktree` undo with the
+  symmetric clean/collision gates, record consumption so an undone plan can
+  re-execute, public docs, and lifecycle hardening). The full
+  preview→confirm→execute→undo→re-execute drop lifecycle is covered by tests.
+- reordering is the remaining replay consumer; it reuses the same machinery
+  and gets its own checkpoint once drop has soaked
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
+
+Contract checkpoint:
+`docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md` (C9-0).
+Done so far: the C9-A merge prediction core
+(`super-git.conflict-prediction.v0.1`), the C9-B `predict merge` CLI verb,
+the C9-C rebase-chain prediction core
+(`super-git.rebase-prediction.v0.1`, per-step replay that stops at the first
+predicted conflict), and the C9-D `predict rebase` CLI verb. Inspect
+integration and the Stage 6 `drop`/reorder consumer are open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits

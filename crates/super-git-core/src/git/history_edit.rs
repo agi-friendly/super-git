@@ -156,6 +156,8 @@ pub struct HistoryEditResultSummary {
     pub commits_after: u32,
     pub messages_changed: u32,
     pub commits_folded: u32,
+    /// 최종 history에서 patch가 제거되는 커밋 수 (C8-drop).
+    pub commits_dropped: u32,
     /// Leading original commits that keep their object ids because nothing
     /// before or at their position changes. C8-C reuses them as-is.
     pub unchanged_prefix_commits: u32,
@@ -278,7 +280,7 @@ pub fn validate_instructions(
 ) -> InstructionValidation {
     let mut blocks = Vec::new();
 
-    let supported_ops = ["pick", "reword", "squash", "fixup"];
+    let supported_ops = ["pick", "reword", "squash", "fixup", "drop"];
     let unsupported: Vec<&str> = document
         .items
         .iter()
@@ -291,6 +293,14 @@ pub fn validate_instructions(
             "instruction_op_unsupported",
             Some(json!({ "ops": dedup_preserving_order(&unsupported) })),
         );
+    }
+
+    // C8-drop v0 경계: fold(squash/fixup)는 원래 트리를 재사용하고 drop은
+    // kept 커밋들을 새 트리로 replay한다. 한 리스트에 두 rebuild 모델을
+    // 섞으면 검증 표면이 곱으로 늘어 일단 막는다(나중에 풀 수 있는 확장).
+    let has_drop = document.items.iter().any(|item| item.op == "drop");
+    if has_drop && document.items.iter().any(|item| is_fold_op(&item.op)) {
+        push_block(&mut blocks, "drop_with_fold_unsupported", None);
     }
 
     let resolutions: Vec<Option<&HistoryEditCommit>> = document
@@ -421,6 +431,10 @@ fn build_program(
 ) -> HistoryEditProgram {
     let mut steps = Vec::new();
     let mut groups: Vec<HistoryEditGroup> = Vec::new();
+    let mut commits_dropped: u32 = 0;
+    // 첫 drop 이후의 커밋들은 replay로 새 oid를 받으므로, unchanged prefix는
+    // 첫 drop 앞에서 끝난다. fold 기준 prefix와 별도로 추적해 min을 취한다.
+    let mut groups_before_first_drop: Option<usize> = None;
 
     for item in &document.items {
         let commit = resolve_range_commit(range_commits, &item.commit)
@@ -433,6 +447,13 @@ fn build_program(
         });
 
         match item.op.as_str() {
+            // drop은 결과 그룹을 만들지 않는다: 이 커밋의 patch가 최종
+            // history에서 빠진다. (커밋 오브젝트 삭제가 아니다 — branch가
+            // 새 chain을 가리킬 뿐이다.)
+            "drop" => {
+                commits_dropped += 1;
+                groups_before_first_drop.get_or_insert(groups.len());
+            }
             "pick" | "reword" => {
                 let message_changed = item.op == "reword";
                 groups.push(HistoryEditGroup {
@@ -466,17 +487,20 @@ fn build_program(
     let unchanged_prefix_commits = groups
         .iter()
         .take_while(|group| !group.message_changed && group.folded_commits.is_empty())
-        .count() as u32;
+        .count()
+        .min(groups_before_first_drop.unwrap_or(usize::MAX))
+        as u32;
 
     let summary = HistoryEditResultSummary {
         commits_before: range_commits.len() as u32,
         commits_after: groups.len() as u32,
         messages_changed,
         commits_folded,
+        commits_dropped,
         unchanged_prefix_commits,
-        // The supported op set reuses original tree objects only, so the
-        // branch tip tree is identical by construction.
-        final_tree_unchanged: true,
+        // pick/reword/squash/fixup은 원래 트리 오브젝트만 재사용하므로 트리가
+        // 보존되지만, drop이 하나라도 있으면 최종 트리가 달라진다.
+        final_tree_unchanged: commits_dropped == 0,
     };
 
     HistoryEditProgram {
@@ -1438,10 +1462,11 @@ mod tests {
         let (repo, oids) = repo_with_feature_range(temp_dir.path());
         let scan = scan_history_edit_range(&repo, "main").expect("scan");
 
+        // "edit"은 의도적으로 미지원으로 남아 있는 op다 (drop은 C8-drop-B부터 지원).
         let document = parse_instructions(&instructions_json(&format!(
             r#"[
               {{ "commit": "{}", "op": "pick", "message": "unexpected" }},
-              {{ "commit": "{}", "op": "drop" }},
+              {{ "commit": "{}", "op": "edit" }},
               {{ "commit": "{}", "op": "reword", "message": "fine" }}
             ]"#,
             oids[0], oids[1], oids[2],

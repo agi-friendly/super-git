@@ -11,11 +11,13 @@ use super_git_core::config::store::{default_app_home, ConfigStore};
 use super_git_core::config::template::WorktreeTemplateUpdate;
 use super_git_core::git::command::Git;
 use super_git_core::git::{
-    execute, preview, preview_history_edit, preview_worktree, preview_worktree_remove, state,
-    status, undo, worktree,
+    conflict_prediction, execute, preview, preview_history_edit, preview_worktree,
+    preview_worktree_remove, state, status, undo, worktree,
 };
 
-use crate::args::{Cli, Commands, ConfigCommands, PreviewCommands, RepoCommands, WorktreeCommands};
+use crate::args::{
+    Cli, Commands, ConfigCommands, PredictCommands, PreviewCommands, RepoCommands, WorktreeCommands,
+};
 use crate::output::OutputMode;
 
 fn main() -> ExitCode {
@@ -80,6 +82,7 @@ fn run(mode: OutputMode, command: Commands) -> Result<()> {
         Commands::Status { path } => run_status(mode, path),
         Commands::Inspect { path } => run_inspect(mode, path),
         Commands::Preview { command } => run_preview(mode, command),
+        Commands::Predict { command } => run_predict(mode, command),
         Commands::Execute { plan, confirmation } => run_execute(mode, plan, confirmation),
         Commands::Undo { token } => run_undo(mode, token),
         Commands::Wt { command } => run_worktree(mode, command),
@@ -176,6 +179,25 @@ fn run_inspect(mode: OutputMode, path: Option<PathBuf>) -> Result<()> {
         .with_context(|| format!("could not inspect {}", path.display()))?;
 
     output::print_inspect(mode, &state)
+}
+
+fn run_predict(mode: OutputMode, command: PredictCommands) -> Result<()> {
+    match command {
+        PredictCommands::Merge { ours, theirs } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            // 현재 브랜치 기준 "이걸 합치면?"이 압도적 다수 케이스라 HEAD가 기본이다.
+            let ours = ours.unwrap_or_else(|| "HEAD".to_string());
+            let prediction = conflict_prediction::predict_merge(&path, &ours, &theirs)
+                .context("could not predict merge conflicts")?;
+            output::print_conflict_prediction(mode, &prediction)
+        }
+        PredictCommands::Rebase { base, onto } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let prediction = conflict_prediction::predict_rebase_chain(&path, &base, &onto)
+                .context("could not predict rebase conflicts")?;
+            output::print_rebase_prediction(mode, &prediction)
+        }
+    }
 }
 
 fn run_preview(mode: OutputMode, command: PreviewCommands) -> Result<()> {
