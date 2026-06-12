@@ -216,7 +216,9 @@ Slicing direction:
 
 - start with `reword` plus `squash`/`fixup`, which cannot produce content
   conflicts
-- `drop` and reordering land after conflict prediction exists (Stage 7)
+- `drop` and reordering land after conflict prediction exists (Stage 7);
+  prediction now exists, and the `drop` contract checkpoint is
+  `docs/internal/plans/2026-06-12-c8-drop-history-edit-contract.md`
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
