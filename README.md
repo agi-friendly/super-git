@@ -72,6 +72,13 @@ Implemented today:
     never any automatic conflict resolution
   - touches no refs, index, or working-tree state (it may write unreferenced,
     gc-collectable objects into the object database)
+- `super-git predict rebase --base <rev> --onto <rev>`
+  - predicts where replaying the linear `base..HEAD` range onto a new tip
+    would conflict, step by step, stopping at the first predicted conflict
+  - reports per-step conflicts in the same shape as `predict merge`, plus a
+    summary with the predicted reach and (when fully clean) the final tree
+  - same read-verb rules: no plan, no execute/undo, no automatic conflict
+    resolution, no ref/index/working-tree writes
 - `super-git execute --plan <file|-> [--confirmation <file|->]`
   - re-validates the plan and state before writing
   - executes only internal allowlisted actions: `stage_changes`, executable

@@ -174,6 +174,18 @@ pub enum PredictCommands {
         #[arg(long)]
         theirs: String,
     },
+
+    /// Predict where replaying base..HEAD onto a new tip would conflict,
+    /// step by step. Stops at the first predicted conflict.
+    Rebase {
+        /// Last commit that stays untouched; the replayed range is base..HEAD.
+        #[arg(long)]
+        base: String,
+
+        /// New starting point the commits are replayed onto.
+        #[arg(long)]
+        onto: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

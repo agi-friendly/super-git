@@ -225,10 +225,10 @@ Contract checkpoint:
 `docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md` (C9-0).
 Done so far: the C9-A merge prediction core
 (`super-git.conflict-prediction.v0.1`), the C9-B `predict merge` CLI verb,
-and the C9-C rebase-chain prediction core
+the C9-C rebase-chain prediction core
 (`super-git.rebase-prediction.v0.1`, per-step replay that stops at the first
-predicted conflict). The rebase CLI verb, inspect integration, and the
-`drop`/reorder consumer are open.
+predicted conflict), and the C9-D `predict rebase` CLI verb. Inspect
+integration and the Stage 6 `drop`/reorder consumer are open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits

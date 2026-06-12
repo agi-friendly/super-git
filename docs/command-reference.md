@@ -322,6 +322,52 @@ underlying `git merge-tree --write-tree` never touches refs, the index, or the
 working tree, but may write unreferenced, gc-collectable objects into the
 object database.
 
+## `predict rebase --base <rev> --onto <rev>`
+
+Predicts where replaying the linear `base..HEAD` range onto a new tip would
+conflict, one step at a time. Same family and rules as `predict merge`: a
+read verb with no `plan_id`, nothing to execute, nothing to undo, and a
+predicted conflict is a successful prediction.
+
+```bash
+super-git predict rebase --base main --onto origin/main
+```
+
+The `super-git.rebase-prediction.v0.1` result carries one entry per replayed
+commit in `steps` (oldest first), each embedding the same per-file conflict
+shape as `predict merge` — the three-way roles rotate per step: the merge
+base is the replayed commit's own parent, ours is the tip synthesized so
+far, theirs is the replayed commit.
+
+Prediction stops at the first conflicted step: composing further steps on
+top of a conflicted tree would be meaningless, and the real resolution
+changes every later step. `summary` makes the reach explicit:
+
+```json
+{
+  "summary": {
+    "status": "conflicted",
+    "total_steps": 3,
+    "predicted_steps": 2,
+    "first_conflict_commit": "<oid>",
+    "steps_not_predicted": ["<oid>"]
+  }
+}
+```
+
+When every step is clean, `summary.final_tree` is the predicted post-rebase
+tree. `--onto` does not need any common ancestor with the range (the
+per-step base is explicit, matching `git rebase --onto` semantics).
+
+Structured errors (`{ ok: false, error }`): `rev_not_found`, `empty_range`
+(nothing to replay), `merge_commit_in_range` and `root_commit_in_range`
+(only linear single-parent ranges can be replayed), plus the shared
+`merge_tree_unsupported` and `merge_tree_output_unrecognized`.
+
+Each clean step wraps its result tree in an unreferenced, gc-collectable
+synthetic commit, extending the `predict merge` object-database nuance to
+commits; refs, the index, and the working tree are never touched.
+
 ## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.

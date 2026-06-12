@@ -191,6 +191,12 @@ fn run_predict(mode: OutputMode, command: PredictCommands) -> Result<()> {
                 .context("could not predict merge conflicts")?;
             output::print_conflict_prediction(mode, &prediction)
         }
+        PredictCommands::Rebase { base, onto } => {
+            let path = std::env::current_dir().context("could not read current directory")?;
+            let prediction = conflict_prediction::predict_rebase_chain(&path, &base, &onto)
+                .context("could not predict rebase conflicts")?;
+            output::print_rebase_prediction(mode, &prediction)
+        }
     }
 }
 

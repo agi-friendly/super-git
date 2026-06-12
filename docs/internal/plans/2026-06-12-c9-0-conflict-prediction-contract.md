@@ -310,5 +310,9 @@ Decisions fixed by this contract:
       (per-step composition, stop at first conflict, synthetic unreferenced
       tips, `super-git.rebase-prediction.v0.1`). Internal function + tests
       only; no CLI verb yet.
-- [ ] CLI verb for rebase prediction (C9-D candidate), inspect integration,
-      history-edit drop/reorder consumption: later slices.
+- [x] C9-D: `super-git predict rebase --base <rev> --onto <rev>` CLI verb
+      (current repository + HEAD only), JSON/human output, integration tests
+      for clean/conflicted/stop-at-first-conflict and every structured error
+      code reachable from the CLI.
+- [ ] Inspect integration and history-edit drop/reorder consumption: later
+      slices.
