@@ -1023,3 +1023,95 @@ fn stale_drop_plan_after_new_commit_is_rejected() {
     );
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
 }
+
+/// A repo split into an `inside/` cone and an `outside/` tree, with the middle
+/// commit (inside/b.txt) droppable. Returns (repo, oids oldest-first).
+fn sparse_repo(temp: &Path) -> (std::path::PathBuf, Vec<String>) {
+    let repo = temp.join("repo");
+    init_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "feature/login"]);
+    std::fs::create_dir_all(repo.join("inside")).expect("mkdir inside");
+    std::fs::create_dir_all(repo.join("outside")).expect("mkdir outside");
+    std::fs::write(repo.join("inside/keep.txt"), "keep\n").expect("write");
+    std::fs::write(repo.join("outside/x.txt"), "x\n").expect("write");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "seed inside and outside"]);
+    // c1 (kept) touches the outside tree; c2 (dropped) and c3 (kept) the cone.
+    commit_file(&repo, "outside/y.txt", "y\n", "outside change");
+    commit_file(&repo, "inside/b.txt", "b\n", "inside b to drop");
+    commit_file(&repo, "inside/c.txt", "c\n", "inside c to keep");
+    let oids = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (repo, oids)
+}
+
+#[test]
+fn drop_execute_respects_the_sparse_checkout_cone() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = sparse_repo(tmp.path());
+    // Restrict the working tree to the `inside/` cone before previewing.
+    git(&repo, &["sparse-checkout", "set", "inside"]);
+    assert!(
+        !repo.join("outside/x.txt").exists(),
+        "the cone must hide outside paths before the drop"
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        "",
+        "a sparse checkout is clean, so the drop gate passes"
+    );
+
+    // Drop the middle commit (inside/b.txt); c1 (outside) and c3 (inside) stay.
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2], oids[3]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+    assert_eq!(json["ok"], true);
+
+    // In-cone effects materialize: the dropped file is gone, the kept one stays.
+    assert!(
+        !repo.join("inside/b.txt").exists(),
+        "the dropped in-cone patch must vanish from the working tree"
+    );
+    assert!(repo.join("inside/c.txt").exists());
+    // The cone is respected: kept outside paths are tracked in the new tip but
+    // never materialized on disk, and they keep their skip-worktree bit.
+    assert!(!repo.join("outside/x.txt").exists());
+    assert!(!repo.join("outside/y.txt").exists());
+    let tracked = git_stdout(&repo, &["ls-tree", "-r", "--name-only", "HEAD"]);
+    assert!(
+        tracked.contains("outside/y.txt"),
+        "kept outside path stays tracked"
+    );
+    assert!(
+        !tracked.contains("inside/b.txt"),
+        "dropped path left the tree"
+    );
+    let skipped = git_stdout(&repo, &["ls-files", "-t"]);
+    assert!(
+        skipped
+            .lines()
+            .any(|line| line.starts_with("S ") && line.contains("outside/")),
+        "outside paths keep skip-worktree, not silently lost: {skipped}"
+    );
+    // The sync ends clean: no spurious dirty/untracked from the cone.
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+}

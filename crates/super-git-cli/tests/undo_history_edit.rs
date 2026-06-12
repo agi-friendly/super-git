@@ -607,3 +607,54 @@ fn undo_consumes_the_record_so_the_same_plan_re_executes() {
     let rerun = execute(&repo, &plan);
     assert_eq!(rerun["ok"], true);
 }
+
+#[test]
+fn drop_undo_respects_the_sparse_checkout_cone() {
+    // Undo's reverse sync uses the same read-tree -u --reset primitive as
+    // execute, so it must respect a sparse cone too: the revived in-cone file
+    // comes back while tracked outside paths stay non-materialized.
+    let tmp = tempfile::tempdir().expect("temp");
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "feature/login"]);
+    std::fs::create_dir_all(repo.join("inside")).expect("mkdir inside");
+    std::fs::create_dir_all(repo.join("outside")).expect("mkdir outside");
+    std::fs::write(repo.join("inside/keep.txt"), "keep\n").expect("write");
+    std::fs::write(repo.join("outside/x.txt"), "x\n").expect("write");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "seed"]);
+    commit_file(&repo, "outside/y.txt", "y\n", "outside change");
+    commit_file(&repo, "inside/b.txt", "b\n", "inside b to drop");
+    commit_file(&repo, "inside/c.txt", "c\n", "inside c to keep");
+    let oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    git(&repo, &["sparse-checkout", "set", "inside"]);
+
+    let items = instructions_doc(&format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2], oids[3]
+    ));
+    let plan = preview_plan(&repo, "main", &items);
+    let result = json_output(execute_confirmed(&repo, &plan));
+    assert!(!repo.join("inside/b.txt").exists());
+
+    let undone = json_output(undo(&repo, &result));
+    assert_eq!(undone["ok"], true);
+    assert!(
+        repo.join("inside/b.txt").exists(),
+        "undo revives the dropped in-cone file"
+    );
+    assert!(
+        !repo.join("outside/x.txt").exists(),
+        "the cone stays respected through undo's reverse sync"
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+}
