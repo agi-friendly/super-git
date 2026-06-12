@@ -272,6 +272,18 @@ Drop-specific deltas:
   working tree back to the previous tip. The undo token uses a new kind
   (`restore_branch_tip_and_worktree`), so older binaries fail closed with
   `unsupported_undo_kind` instead of half-restoring.
+- The ignored-path collision gate applies symmetrically (decided in
+  C8-drop-D): undo's sync target is the **pre-execute** tip, so an ignored
+  untracked file sitting where that tip tracks a path (for example, a fresh
+  file created where the dropped commit's force-added path is about to
+  revive) hard-blocks before any write, with the same three collision
+  shapes as execute. Failures after the ref restore report as
+  `undo_partial_failure` — the same honesty split as execute's
+  partial-failure window.
+- A successful undo consumes the execution record. The record's purpose is
+  preventing the same effect from applying twice; once the effect is
+  reverted, the identical plan (plan ids are state-based) must be able to
+  execute again, or the edit would be locked out of that branch forever.
 - Documentation must state plainly: **undo restores the branch ref (and
   working tree); the dropped content's original commits may remain in the
   object database, and undo neither depends on deleting them nor attempts
@@ -318,6 +330,19 @@ Drop-specific deltas:
       `execute_partial_failure` envelopes after the ref moved
       (record stays `intent`, undo/re-execute fail closed). Undoing a drop
       execution fails closed with `unsupported_undo_kind` until C8-drop-D.
-- [ ] **C8-drop-D** — undo (`restore_branch_tip_and_worktree`), public docs
-      (README / safety-model write boundary / command-reference), and
-      hardening tests across the drop lifecycle.
+- [x] **C8-drop-D** — undo (`restore_branch_tip_and_worktree`): the
+      symmetric inverse of drop execute — clean-tree gate (untracked counts
+      as dirty) and ignored-path collision gate against the **pre-execute**
+      tip, both before any write; CAS ref restore; `read-tree -u --reset`
+      sync back to the pre-execute tip; sync failures after the ref restore
+      report as `undo_partial_failure` (never called a rollback). A
+      successful undo **consumes the execution record** so the identical
+      plan/confirmation can re-execute — without that, state-based plan ids
+      would lock the same edit out of the branch forever (this applies to
+      the tree-preserving family too). Empty-ignored-directory policy: not
+      blocked — invisible to `ls-files -o`, nothing to lose, and
+      `read-tree -u` removes it with normal checkout semantics; a directory
+      with content is always caught via its files' prefixes. Public docs
+      (README, command-reference drop flow, safety-model) updated; lifecycle
+      hardening covers execute→undo→re-execute, dirty/untracked/collision
+      refusals in both directions, and token-kind downgrade rejection.

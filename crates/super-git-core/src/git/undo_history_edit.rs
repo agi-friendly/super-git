@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::config::store::repository_id;
 use crate::git::command::Git;
-use crate::git::{state, undo_registry};
+use crate::git::{execute_history_edit, state, undo_registry};
 use crate::model::{
     HistoryEditExecutionRecord, HistoryEditUndoToken, Operation, UndoResult,
     HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION, HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
@@ -14,11 +14,15 @@ use crate::{Result, SuperGitError};
 
 const ACTION_HISTORY_EDIT: &str = "history_edit";
 const UNDO_RESTORE_BRANCH_TIP: &str = "restore_branch_tip_snapshot";
+const UNDO_RESTORE_BRANCH_TIP_AND_WORKTREE: &str = "restore_branch_tip_and_worktree";
 
 /// Undo a history edit by moving the branch ref back to the pre-execute tip.
-/// Only the branch pointer moves: working-tree files, the index, and every
-/// other ref are left untouched. Because the new and old tips share one tree
-/// (the C8-C invariant), restoring the pointer cannot change file content.
+/// `restore_branch_tip_snapshot` (tree-preserving ops) moves only the branch
+/// pointer: the new and old tips share one tree (the C8-C invariant), so file
+/// content cannot change. `restore_branch_tip_and_worktree` (drop, C8-drop-D)
+/// is the symmetric inverse of drop execute: it requires a clean working tree,
+/// checks ignored-path collisions against the pre-execute tip, restores the
+/// ref, then synchronizes the index and working tree back to it.
 pub fn undo_history_edit_token(
     current_path: &Path,
     token: HistoryEditUndoToken,
@@ -28,6 +32,7 @@ pub fn undo_history_edit_token(
     validate_execution_record(&token)?;
 
     let git = Git::default();
+    let restores_worktree = token.kind == UNDO_RESTORE_BRANCH_TIP_AND_WORKTREE;
 
     // The branch must still point exactly where execute left it. A moved tip
     // (new commits, another edit) means undo cannot safely reclaim history.
@@ -46,6 +51,16 @@ pub fn undo_history_edit_token(
     let operation = state::detect_operation(&git, &worktree_root)?;
     if operation != Operation::None {
         return mismatch("operation", "none", operation.as_str());
+    }
+
+    // drop undo는 execute와 대칭으로 워킹트리를 동기화하므로, 어떤 write보다
+    // 먼저 같은 두 게이트를 통과해야 한다: clean(untracked 포함) 게이트와,
+    // 이번에는 pre-execute tip이 tracked로 갖는 경로 기준의 ignored 충돌
+    // 게이트(execute가 새 tip 기준으로 막는 것의 역방향 — drop이 지웠던
+    // ignored 경로 자리에 사용자가 새 파일을 만들어 뒀을 수 있다).
+    if restores_worktree {
+        ensure_clean_working_tree(&git, &worktree_root)?;
+        ensure_no_ignored_path_collisions(&git, &worktree_root, &token.previous_tip)?;
     }
 
     // Compare-and-swap from new_tip back to previous_tip: a concurrent move
@@ -68,17 +83,104 @@ pub fn undo_history_edit_token(
 
     post_verify(&git, &worktree_root, &token)?;
 
+    // drop undo: index/워킹트리를 pre-execute tip으로 동기화한다. ref는 이미
+    // 올바르게 복원됐으므로 여기서부터의 실패는 rollback이 아니라 partial
+    // failure다(execute와 같은 철학) — record는 provenance로 남는다.
+    if restores_worktree {
+        if let Err(err) =
+            execute_history_edit::sync_working_tree(&git, &worktree_root, &token.previous_tip)
+        {
+            return Err(sync_partial_failure(&git, &worktree_root, &token, err));
+        }
+    }
+
+    // 효과가 되돌려졌으니 replay 가드도 푼다: record를 소비해 같은 plan을
+    // 다시 실행할 수 있게 한다. plan_id는 상태 기반이라 새 preview를 받아도
+    // 같은 record 경로로 떨어지므로, 소비하지 않으면 같은 편집이 그 브랜치에서
+    // 영구히 막힌다. best-effort: 제거 실패가 성공한 undo를 실패로 만들면
+    // 안 된다.
+    let _ = fs::remove_file(&token.execution_record_path);
+
     Ok(UndoResult {
         schema_version: UNDO_RESULT_SCHEMA_VERSION.to_string(),
         action: ACTION_HISTORY_EDIT.to_string(),
         repository: worktree_root,
-        plan_id: token.plan_id,
+        plan_id: token.plan_id.clone(),
         undone: true,
-        effects: vec![format!(
+        effects: undo_effects(&token, restores_worktree),
+    })
+}
+
+fn undo_effects(token: &HistoryEditUndoToken, restores_worktree: bool) -> Vec<String> {
+    let mut effects = if restores_worktree {
+        vec![
+            format!(
+                "Restored {} to {} (the pre-execute tip) and synchronized the index and working tree to it.",
+                token.branch_ref, token.previous_tip
+            ),
+            "The dropped commits' patches are back in the final history; their objects were never deleted.".to_string(),
+        ]
+    } else {
+        vec![format!(
             "Restored {} to {} (the pre-execute tip); working-tree files and the index are unchanged.",
             token.branch_ref, token.previous_tip
-        )],
-    })
+        )]
+    };
+    effects.push("Consumed the execution record; the same plan can be executed again.".to_string());
+    effects
+}
+
+/// drop undo의 clean 게이트: execute와 같은 이유(untracked 포함 — sync가
+/// pre-execute tip의 경로를 부활시키며 덮어쓸 수 있다), undo 에러 채널.
+fn ensure_clean_working_tree(git: &Git, worktree_root: &Path) -> Result<()> {
+    let status = execute_history_edit::read_status_signature(git, worktree_root)?;
+    if status.is_empty() {
+        return Ok(());
+    }
+    mismatch(
+        "working_tree_clean",
+        "clean working tree and index (including untracked)",
+        &format!("{} dirty or untracked path(s)", status.lines().count()),
+    )
+}
+
+fn ensure_no_ignored_path_collisions(
+    git: &Git,
+    worktree_root: &Path,
+    previous_tip: &str,
+) -> Result<()> {
+    let collisions =
+        execute_history_edit::ignored_path_collisions(git, worktree_root, previous_tip)?;
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    mismatch(
+        "ignored_path_collision",
+        "no ignored paths colliding with paths tracked at the pre-execute tip",
+        &execute_history_edit::describe_collisions(&collisions),
+    )
+}
+
+/// ref가 이미 pre-execute tip으로 복원된 뒤의 sync 실패 보고. ref 롤백은
+/// 하지 않는다 — ref는 올바르고, 미완인 것은 워킹트리 동기화뿐이다. record는
+/// 소비되지 않고 provenance로 남는다(undo가 완결되지 않았으므로).
+fn sync_partial_failure(
+    git: &Git,
+    worktree_root: &Path,
+    token: &HistoryEditUndoToken,
+    original: SuperGitError,
+) -> SuperGitError {
+    let observed_tip = read_ref_oid(git, worktree_root, &token.branch_ref)
+        .unwrap_or_else(|_| "unreadable".to_string());
+    SuperGitError::UndoSyncPartialFailure(Box::new(crate::error::SyncPartialFailureError {
+        action: ACTION_HISTORY_EDIT.to_string(),
+        message: original.to_string(),
+        branch_ref: token.branch_ref.clone(),
+        observed_tip,
+        sync_completed: false,
+        execution_record_path: token.execution_record_path.clone(),
+        safe_next: "the branch ref is correctly restored to the pre-execute tip; the index and working tree may be partially synchronized — verify the working-tree state and finish synchronizing to the recorded previous_tip; re-running undo will refuse because the branch no longer points at the post-execute tip".to_string(),
+    }))
 }
 
 fn validate_static_token(token: &HistoryEditUndoToken) -> Result<()> {
@@ -88,10 +190,10 @@ fn validate_static_token(token: &HistoryEditUndoToken) -> Result<()> {
             "history_edit undo supports only super-git.history-edit-undo.v0.1",
         );
     }
-    if token.kind != UNDO_RESTORE_BRANCH_TIP {
+    if token.kind != UNDO_RESTORE_BRANCH_TIP && token.kind != UNDO_RESTORE_BRANCH_TIP_AND_WORKTREE {
         return invalid_token(
             "unsupported_undo_kind",
-            "history_edit undo supports only restore_branch_tip_snapshot",
+            "history_edit undo supports only restore_branch_tip_snapshot and restore_branch_tip_and_worktree",
         );
     }
     if token.action != ACTION_HISTORY_EDIT {
@@ -331,4 +433,105 @@ fn invalid_token<T>(code: &str, message: &str) -> Result<T> {
         code: code.to_string(),
         message: message.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use crate::git::command::Git;
+    use crate::model::HistoryEditUndoToken;
+    use crate::SuperGitError;
+
+    fn run_git(dir: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .expect("run git")
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(run_git(dir, args).status.success(), "git {args:?} failed");
+    }
+
+    fn rev(dir: &Path, reference: &str) -> String {
+        String::from_utf8(run_git(dir, &["rev-parse", reference]).stdout)
+            .expect("utf8")
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn sync_partial_failure_reports_restored_tip_without_touching_the_record() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a").expect("write");
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "c1"]);
+        let previous_tip = rev(&repo, "HEAD");
+        std::fs::write(repo.join("b.txt"), "b").expect("write");
+        git(&repo, &["add", "b.txt"]);
+        git(&repo, &["commit", "-q", "-m", "c2"]);
+        let new_tip = rev(&repo, "HEAD");
+        // The failure window starts after the CAS restored the ref.
+        git(&repo, &["update-ref", "refs/heads/main", &previous_tip]);
+        let record_path = repo.join(".git/super-git/executions/record.json");
+        std::fs::create_dir_all(record_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&record_path, "{}").expect("record");
+        let token = HistoryEditUndoToken {
+            schema_version: "super-git.history-edit-undo.v0.1".to_string(),
+            kind: "restore_branch_tip_and_worktree".to_string(),
+            repository: repo.clone(),
+            action: "history_edit".to_string(),
+            plan_id: "sha256:test".to_string(),
+            branch_ref: "refs/heads/main".to_string(),
+            previous_tip: previous_tip.clone(),
+            new_tip,
+            git_common_dir: repo.join(".git"),
+            family_id: "family".to_string(),
+            execution_record_path: record_path.clone(),
+            deletes_branch: false,
+            deletes_history: false,
+        };
+        let original = SuperGitError::ExecutePlanInvalid {
+            code: "original".to_string(),
+            message: "sync broke".to_string(),
+        };
+
+        let err = super::sync_partial_failure(&Git::default(), &repo, &token, original);
+
+        assert_eq!(err.code(), "undo_partial_failure");
+        match err {
+            SuperGitError::UndoSyncPartialFailure(details) => {
+                assert_eq!(details.action, "history_edit");
+                assert_eq!(
+                    details.observed_tip, previous_tip,
+                    "the envelope reports the live (already restored) ref tip"
+                );
+                assert!(!details.sync_completed);
+                assert_eq!(details.execution_record_path, PathBuf::from(&record_path));
+                assert!(details.safe_next.contains("previous_tip"));
+            }
+            other => panic!("expected UndoSyncPartialFailure, got {other:?}"),
+        }
+        assert!(
+            record_path.exists(),
+            "an unfinished undo must keep the record as provenance"
+        );
+        assert_eq!(
+            rev(&repo, "refs/heads/main"),
+            previous_tip,
+            "the helper must not roll the ref back"
+        );
+    }
 }

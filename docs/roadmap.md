@@ -216,15 +216,17 @@ Slicing direction:
 
 - start with `reword` plus `squash`/`fixup`, which cannot produce content
   conflicts
-- `drop` and reordering land after conflict prediction exists (Stage 7);
-  prediction now exists, and the `drop` contract checkpoint is
-  `docs/internal/plans/2026-06-12-c8-drop-history-edit-contract.md`. Done so
-  far: C8-drop-A (contract), C8-drop-B (prediction-gated preview), C8-drop-C
-  (execute with the `final_tree` oracle, always-on confirmation, and
-  `read-tree -u --reset` working-tree sync). C8-drop-D (undo for
-  `restore_branch_tip_and_worktree`, public docs, hardening) is open — until
-  it lands, undoing a drop execution fails closed with
-  `unsupported_undo_kind`.
+- `drop` landed as the C8-drop series (contract checkpoint:
+  `docs/internal/plans/2026-06-12-c8-drop-history-edit-contract.md`):
+  C8-drop-A (contract), C8-drop-B (prediction-gated preview), C8-drop-C
+  (execute with the `final_tree` oracle, always-on confirmation,
+  `read-tree -u --reset` working-tree sync, and the ignored-path collision
+  gate), and C8-drop-D (`restore_branch_tip_and_worktree` undo with the
+  symmetric clean/collision gates, record consumption so an undone plan can
+  re-execute, public docs, and lifecycle hardening). The full
+  preview→confirm→execute→undo→re-execute drop lifecycle is covered by tests.
+- reordering is the remaining replay consumer; it reuses the same machinery
+  and gets its own checkpoint once drop has soaked
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction

@@ -61,9 +61,14 @@ Implemented today:
   - without `--instructions`, returns a read-only survey of the editable
     `base..HEAD` range (commits, published state, signatures, hard blocks)
   - with a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
-    `fixup` per commit), builds a tree-preserving rewrite plan
+    `fixup`/`drop` per commit), builds a rewrite plan; the first four ops are
+    tree-preserving, `drop` removes a commit's patch from the final history
   - unpublished ranges produce an executable plan; published ranges produce a
     `preview_only` plan that requires a separate human confirmation artifact
+  - `drop` plans are always confirmation-gated, embed a kept-commit replay
+    prediction (a predicted conflict blocks the plan; nothing is ever
+    auto-resolved), and carry the predicted `final_tree` that execute must
+    land on
 - `super-git predict merge --theirs <rev> [--ours <rev>]`
   - predicts merge conflicts between two commits via `git merge-tree`,
     reporting per-file conflicts by index stage; a predicted conflict is a
@@ -89,8 +94,14 @@ Implemented today:
     artifact and returns no automatic undo token
   - for `history_edit`, rebuilds commits with `commit-tree` (author identity
     preserved), moves the branch ref with compare-and-swap, verifies the final
-    tree is unchanged, and requires the confirmation artifact when the range
-    is published
+    tree against the expected one, and requires the confirmation artifact when
+    the range is published
+  - for `history_edit` plans containing `drop`, additionally requires a clean
+    working tree (untracked counts as dirty), blocks ignored files sitting on
+    paths the new tip tracks, verifies the rebuilt tip against the predicted
+    `final_tree` before the ref moves, and synchronizes the index and working
+    tree to the new tip afterwards — the typed phrase
+    `drop <N> commit(s) from <branch_ref> at <tip>` is always required
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current
@@ -102,8 +113,14 @@ Implemented today:
   - for `history_edit`, validates local execution-record provenance and that
     the branch still points at the post-execute tip, then restores the
     pre-execute branch tip with compare-and-swap (local only; it cannot
-    un-publish pushed history)
-  - never edits working-tree file contents or deletes branch refs/history
+    un-publish pushed history); a successful undo consumes the execution
+    record so the same plan can be executed again
+  - for `history_edit` drop results (`restore_branch_tip_and_worktree`),
+    symmetrically requires a clean working tree and no ignored-path
+    collisions against the pre-execute tip, then synchronizes the index and
+    working tree back to it after the ref restore
+  - never deletes branch refs or history; working-tree files change only in
+    the drop family's documented synchronization, never by content editing
 - Supporting commands: `doctor`, `config path`, `config show`,
   `config validate`, `config set-worktree-template`, `repo save`, `repo add`,
   `repo list`, `repo forget`, `status`, `wt list`

@@ -166,13 +166,26 @@ record stays in `intent` state so undo and re-execute both fail closed.
 Undo restores the pre-execute branch tip from the execution record, again via
 compare-and-swap, and refuses if the branch has advanced since execute. For
 tree-preserving edits it moves only the branch pointer: the working tree and
-index are untouched. Drop executions record the new undo kind
-`restore_branch_tip_and_worktree`, which older binaries (and, until it lands,
-the current undo surface) refuse with `unsupported_undo_kind` instead of
-half-restoring the ref without the working tree. Local undo cannot un-publish
-history that was already pushed, and dropped commits' objects may remain in
-the object database — drop changes what the branch points at, not what
-exists.
+index are untouched. Drop executions record the undo kind
+`restore_branch_tip_and_worktree`, the symmetric inverse of drop execute:
+before any write it requires a clean working tree (untracked counts as dirty)
+and blocks ignored-path collisions against the pre-execute tip (the exact
+mirror of the execute-side gate — the user may have created a new ignored
+file where the dropped commit's path is about to revive), then restores the
+ref and synchronizes the index and working tree back to the pre-execute tip.
+A sync failure after the ref was restored is reported honestly as
+`undo_partial_failure`, never as a rollback. Older binaries refuse the kind
+with `unsupported_undo_kind` instead of half-restoring the ref without the
+working tree, and the record's embedded token must match exactly, so a
+token downgraded to the ref-only kind is refused rather than skipping the
+working-tree restore.
+
+A successful undo consumes the execution record: the replay guard exists to
+prevent applying the same effect twice, and once the effect is reverted the
+identical plan (plan ids are state-based) must be executable again instead of
+being locked out of the branch forever. Local undo cannot un-publish history
+that was already pushed, and dropped commits' objects may remain in the
+object database — drop changes what the branch points at, not what exists.
 
 Future actions must earn their way into the allowlist with tests and docs.
 

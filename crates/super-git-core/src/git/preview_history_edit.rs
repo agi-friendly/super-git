@@ -631,12 +631,8 @@ fn undo_preview(has_drop: bool, executable: bool) -> HistoryEditUndoPreview {
     if has_drop {
         HistoryEditUndoPreview {
             kind: "restore_branch_tip_and_worktree".to_string(),
-            // execute는 열렸지만 이 undo kind의 구현은 C8-drop-D다. 지키지
-            // 못할 약속을 plan에 싣지 않는다 — 토큰은 기록되고, undo 표면은
-            // unsupported_undo_kind로 fail-closed다.
-            available_after_execute: false,
+            available_after_execute: executable,
             limitations: vec![
-                "Undo for drop executions lands in C8-drop-D; until then the recorded undo token fails closed with unsupported_undo_kind.".to_string(),
                 "Undo refuses if the branch tip moved after execute.".to_string(),
                 "Undo requires the previous tip commit to still exist locally (reflog/gc window)."
                     .to_string(),
@@ -1141,17 +1137,11 @@ mod tests {
         assert_eq!(summary.commits_after, 2);
         assert!(!summary.final_tree_unchanged);
 
-        // undo는 워킹트리 동기화 포함 kind를 광고하되(구버전 fail-closed),
-        // 그 kind의 undo 구현은 C8-drop-D 전까지 없으므로 가용을 약속하지
-        // 않는다.
+        // undo는 워킹트리 동기화 포함 kind를 광고한다(구버전 fail-closed,
+        // C8-drop-D부터 구현됨).
         assert_eq!(plan.undo_strategy.kind, "restore_branch_tip_and_worktree");
         assert_eq!(plan.undo_preview.kind, "restore_branch_tip_and_worktree");
-        assert!(!plan.undo_preview.available_after_execute);
-        assert!(plan
-            .undo_preview
-            .limitations
-            .iter()
-            .any(|limitation| limitation.contains("C8-drop-D")));
+        assert!(plan.undo_preview.available_after_execute);
 
         let precondition_status = |code: &str| {
             plan.preconditions

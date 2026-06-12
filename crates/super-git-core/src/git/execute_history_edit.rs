@@ -960,7 +960,7 @@ fn count_range_commits(git: &Git, worktree_root: &Path, base: &str, tip: &str) -
         })
 }
 
-fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
+pub(crate) fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
     // Pin the untracked mode so the drift comparison is independent of
     // status.showUntrackedFiles config.
     let output = git.run_in(
@@ -990,23 +990,45 @@ fn ensure_clean_working_tree(git: &Git, worktree_root: &Path) -> Result<()> {
 /// tracked로 부활시키는 경로 위의 ignored untracked 파일을 조용히 덮어쓴다
 /// (예: 한 커밋이 force-add했던 ignored 파일을 지운 커밋을 drop하는 경우 —
 /// 스파이크 실측). 모든 ignored를 막으면 node_modules 같은 정상 사용이
-/// 깨지므로, 새 tip의 tracked 경로와 충돌하는 ignored 경로만 hard block한다:
-/// 경로 일치, ignored 파일이 새 tracked 디렉터리 자리를 차지하는 경우,
-/// ignored 디렉터리가 새 tracked 파일 자리를 차지하는 경우. 반드시 CAS ref
-/// move 전에 실행되어 실패가 어떤 상태도 바꾸지 않는다.
+/// 깨지므로, 새 tip의 tracked 경로와 충돌하는 ignored 경로만 hard block한다.
+/// 반드시 CAS ref move 전에 실행되어 실패가 어떤 상태도 바꾸지 않는다.
 fn ensure_no_ignored_path_collisions(git: &Git, worktree_root: &Path, new_tip: &str) -> Result<()> {
+    let collisions = ignored_path_collisions(git, worktree_root, new_tip)?;
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    mismatch(
+        "ignored_path_collision",
+        "no ignored paths colliding with paths tracked in the new tip",
+        &describe_collisions(&collisions),
+    )
+}
+
+/// 대상 tip의 tracked 경로와 충돌하는 ignored untracked 경로들(표시용 lossy
+/// 문자열, 정렬). drop execute(새 tip 기준)와 drop undo(pre-execute tip 기준)
+/// 가 같은 검사를 공유한다. 충돌의 세 모양: 경로 일치, ignored 파일이 대상
+/// tracked 디렉터리 자리를 차지, ignored 디렉터리가 대상 tracked 파일 자리를
+/// 차지. **빈** ignored 디렉터리는 의도적으로 잡지 않는다: `ls-files -o`에
+/// 나타나지 않고, 내용물이 없어 잃을 데이터가 없으며, `read-tree -u`가 git의
+/// 일반 checkout 의미론대로 자유로이 제거한다(스파이크 실측) — 내용이 생기는
+/// 순간 그 파일들이 prefix 규칙에 걸린다.
+pub(crate) fn ignored_path_collisions(
+    git: &Git,
+    worktree_root: &Path,
+    target_tip: &str,
+) -> Result<Vec<String>> {
     let ignored_raw = git.run_bytes_in(
         worktree_root,
         ["ls-files", "-i", "-o", "--exclude-standard", "-z"],
     )?;
     let ignored = split_nul(&ignored_raw.stdout);
     if ignored.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let tracked_raw = git.run_bytes_in(
         worktree_root,
-        ["ls-tree", "-r", "-z", "--name-only", new_tip],
+        ["ls-tree", "-r", "-z", "--name-only", target_tip],
     )?;
     let tracked: HashSet<&[u8]> = split_nul(&tracked_raw.stdout).into_iter().collect();
     let mut tracked_dirs: HashSet<&[u8]> = HashSet::new();
@@ -1014,29 +1036,27 @@ fn ensure_no_ignored_path_collisions(git: &Git, worktree_root: &Path, new_tip: &
         tracked_dirs.extend(dir_prefixes(path));
     }
 
-    let mut collisions: Vec<&[u8]> = ignored
+    let mut collisions: Vec<String> = ignored
         .into_iter()
         .filter(|path| {
             tracked.contains(path)
                 || tracked_dirs.contains(path)
                 || dir_prefixes(path).any(|prefix| tracked.contains(prefix))
         })
+        .map(|path| String::from_utf8_lossy(path).into_owned())
         .collect();
-    if collisions.is_empty() {
-        return Ok(());
-    }
     collisions.sort();
+    Ok(collisions)
+}
+
+pub(crate) fn describe_collisions(collisions: &[String]) -> String {
     let shown = collisions
         .iter()
         .take(5)
-        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    mismatch(
-        "ignored_path_collision",
-        "no ignored paths colliding with paths tracked in the new tip",
-        &format!("{} colliding path(s): {shown}", collisions.len()),
-    )
+    format!("{} colliding path(s): {shown}", collisions.len())
 }
 
 /// "a/b/c" → "a", "a/b" (경로의 모든 디렉터리 prefix, 바이트 단위 — `-z`
@@ -1058,7 +1078,7 @@ fn split_nul(bytes: &[u8]) -> Vec<&[u8]> {
 /// C8-drop 계약의 sync primitive: `read-tree -u --reset`은 ref를 건드리지
 /// 않고(hook도 없음) index와 워킹트리만 새 tip으로 맞춘다. 끝난 뒤 status가
 /// 비어 있는지까지가 sync다 — 부분 동기화를 성공으로 보고하지 않는다.
-fn sync_working_tree(git: &Git, worktree_root: &Path, new_tip: &str) -> Result<()> {
+pub(crate) fn sync_working_tree(git: &Git, worktree_root: &Path, new_tip: &str) -> Result<()> {
     git.run_write_in(worktree_root, ["read-tree", "-u", "--reset", new_tip])?;
     let status = read_status_signature(git, worktree_root)?;
     if !status.is_empty() {
@@ -1089,17 +1109,15 @@ fn sync_partial_failure(
     } else {
         "the branch ref is correctly at the new tip; the index and working tree may be partially synchronized — verify the working-tree state and finish synchronizing to the recorded new_tip (see the execution record); do not re-run execute"
     };
-    SuperGitError::ExecuteSyncPartialFailure(Box::new(
-        crate::error::ExecuteSyncPartialFailureError {
-            action: ACTION_HISTORY_EDIT.to_string(),
-            message: original.to_string(),
-            branch_ref: branch_ref.to_string(),
-            observed_tip,
-            sync_completed,
-            execution_record_path: record_path.to_path_buf(),
-            safe_next: safe_next.to_string(),
-        },
-    ))
+    SuperGitError::ExecuteSyncPartialFailure(Box::new(crate::error::SyncPartialFailureError {
+        action: ACTION_HISTORY_EDIT.to_string(),
+        message: original.to_string(),
+        branch_ref: branch_ref.to_string(),
+        observed_tip,
+        sync_completed,
+        execution_record_path: record_path.to_path_buf(),
+        safe_next: safe_next.to_string(),
+    }))
 }
 
 fn execution_record_path(plan: &HistoryEditPlan, branch_ref: &str) -> PathBuf {

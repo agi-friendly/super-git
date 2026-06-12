@@ -904,6 +904,46 @@ fn drop_allows_ignored_files_off_the_new_tip_paths() {
 }
 
 #[test]
+fn drop_allows_an_empty_ignored_directory_on_a_revived_path() {
+    // 정책(C8-drop-D에서 고정): 빈 ignored 디렉터리는 막지 않는다. ls-files
+    // -o에 나타나지 않고, 내용물이 없어 잃을 데이터가 없으며, read-tree -u가
+    // git checkout과 같은 의미론으로 제거하고 tracked 파일을 실체화한다
+    // (스파이크 실측). 내용이 생기는 순간 그 안의 파일들이 prefix 규칙에
+    // 걸려 hard block된다 — 바로 위의 디렉터리 충돌 테스트가 그 경우다.
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = ignored_revival_repo(tmp.path());
+    std::fs::create_dir(repo.join("ignored.txt")).expect("empty ignored dir");
+    let plan = preview_plan(
+        &repo,
+        "main",
+        &instructions_doc(&drop_delete_commit_items(&oids)),
+    );
+
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert_eq!(json["ok"], true);
+    assert!(
+        repo.join("ignored.txt").is_file(),
+        "the empty directory is replaced by the revived tracked file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("ignored.txt")).expect("read"),
+        "tracked precious\n"
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+}
+
+#[test]
 fn drop_refuses_when_an_ignored_directory_squats_on_a_revived_file() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = ignored_revival_repo(tmp.path());

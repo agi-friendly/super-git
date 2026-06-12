@@ -78,12 +78,14 @@ fn parse_token_value(value: &Value) -> Result<ExecuteUndoToken> {
         Some("remove_created_worktree_if_clean") => Ok(ExecuteUndoToken::Worktree(Box::new(
             serde_json::from_value::<WorktreeUndoToken>(value.clone())?,
         ))),
-        Some("restore_branch_tip_snapshot") => Ok(ExecuteUndoToken::HistoryEdit(Box::new(
-            serde_json::from_value::<HistoryEditUndoToken>(value.clone())?,
-        ))),
+        Some("restore_branch_tip_snapshot") | Some("restore_branch_tip_and_worktree") => {
+            Ok(ExecuteUndoToken::HistoryEdit(Box::new(
+                serde_json::from_value::<HistoryEditUndoToken>(value.clone())?,
+            )))
+        }
         Some(_) => invalid_token(
             "unsupported_undo_kind",
-            "undo supports restore_index_snapshot, remove_created_worktree_if_clean, and restore_branch_tip_snapshot",
+            "undo supports restore_index_snapshot, remove_created_worktree_if_clean, restore_branch_tip_snapshot, and restore_branch_tip_and_worktree",
         ),
         None => Ok(ExecuteUndoToken::Index(Box::new(serde_json::from_value(
             value.clone(),
