@@ -157,13 +157,33 @@ Order of operations:
 7. Synchronize index and working tree to the new tip.
 8. Complete the execution record.
 
-Rollback policy extends the existing one: any failure after the ref moved
-rolls the branch ref back to the pre-execute tip; because the working tree
-was clean and is only synchronized after a successful ref move, rollback
-restores the pre-execute state without inventing new recovery machinery. A
-failure in step 7 (sync) after a successful ref move is reported as the
-partial-failure envelope with explicit observed state and a safe-next hint,
-mirroring the worktree_remove precedent.
+Rollback policy — stated precisely, because the working tree changes what
+"rollback" can honestly promise:
+
+- **Failure after the ref moved but before sync (step 7) started:** the
+  branch ref is rolled back to the pre-execute tip with compare-and-swap.
+  The working tree and index were never touched, so this genuinely is the
+  pre-execute state.
+- **Failure once sync has started:** the index and working tree may be
+  partially mutated, so a ref rollback alone must **not** be described as
+  restoring the pre-execute state. This case is an `ExecutePartialFailure`
+  contract, not a rollback: the envelope reports the observed branch ref,
+  whether index/working-tree sync was attempted and how far it got, whether
+  automatic undo is available (it is not, in this state), and a `safe_next`
+  recovery hint (the new tip is correct in the ref; the remaining repair is
+  finishing or cleanly redoing the sync). This mirrors the worktree_remove
+  partial-failure precedent.
+
+In short: rollback restores the branch ref when possible; sync failures
+after working-tree mutation become partial-failure recovery cases.
+
+**Open requirement for C8-drop-C:** before implementation, the sync
+primitive must be chosen and its failure semantics pinned (candidates:
+`git reset --hard <new tip>`, `git checkout -f`, or plumbing
+`read-tree -u --reset` — they differ in hook behavior, sparse/partial
+checkout handling, and what a mid-flight failure leaves behind). The choice
+and its observed failure states are part of the C8-drop-C slice's contract
+work, not an implementation detail.
 
 ## Confirmation Policy
 
