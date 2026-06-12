@@ -84,6 +84,10 @@ pub fn preview_history_edit(
 /// drop을 제외한 kept 커밋들을 base 위에 replay 예측한다 (C8-drop 계약).
 /// step별 3-way base는 각 kept 커밋의 원래 parent다 — 드랍된 커밋일 수 있고,
 /// 그것이 올바른 cherry-pick 의미다(재생되는 patch는 parent..commit).
+///
+/// `predict_replay_onto`에 위임하므로 preview의 read-only 경계는 정밀하다:
+/// refs/index/워킹트리/설정은 안 건드리지만, clean step마다 참조되지 않는
+/// (gc 회수 가능) synthetic commit을 object DB에 쓴다(`predict rebase`와 동일).
 fn predict_kept_replay(
     scan: &HistoryEditScan,
     program: &HistoryEditProgram,

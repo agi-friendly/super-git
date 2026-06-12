@@ -281,10 +281,15 @@ example a detached HEAD, an in-progress operation, a merge commit in range, or
 an instruction list that does not cover the range) returns
 `execution.status: "blocked"` with structured, repairable reason codes.
 
-Staged and unstaged changes are allowed with a `working_tree_dirty` warning;
-preview is always read-only. Only malformed or wrong-schema instruction input
-fails with `{ ok: false, error }`; content problems become blocked plans
-instead. `reference_commands` are documentation only.
+Staged and unstaged changes are allowed with a `working_tree_dirty` warning.
+Preview never touches refs, the index, the working tree, or config. A
+tree-preserving preview reads only; a `drop` preview additionally runs the
+kept-commit replay prediction, which — like `predict rebase` — may write
+unreferenced, gc-collectable objects into the object database (each clean
+replay step wraps its result tree in a synthetic commit). Only malformed or
+wrong-schema instruction input fails with `{ ok: false, error }`; content
+problems become blocked plans instead. `reference_commands` are documentation
+only.
 
 ### Dropping commits
 
