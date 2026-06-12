@@ -177,13 +177,46 @@ Rollback policy — stated precisely, because the working tree changes what
 In short: rollback restores the branch ref when possible; sync failures
 after working-tree mutation become partial-failure recovery cases.
 
-**Open requirement for C8-drop-C:** before implementation, the sync
-primitive must be chosen and its failure semantics pinned (candidates:
-`git reset --hard <new tip>`, `git checkout -f`, or plumbing
-`read-tree -u --reset` — they differ in hook behavior, sparse/partial
-checkout handling, and what a mid-flight failure leaves behind). The choice
-and its observed failure states are part of the C8-drop-C slice's contract
-work, not an implementation detail.
+### Sync Primitive (decided 2026-06-12, C8-drop-C)
+
+The sync step is **`git read-tree -u --reset <new tip>`**, chosen over
+`reset --hard` and `checkout -f`:
+
+- **Ref isolation.** `read-tree` never touches refs, so the CAS ref move
+  stays the only ref write in the whole execute path. `reset --hard` would
+  re-write the branch ref through HEAD (a second, non-CAS ref touch plus an
+  extra reflog entry); `checkout -f` adds the branch-switching surface and
+  runs the `post-checkout` hook. `read-tree` runs no hooks.
+- **Spike-verified behavior** (git 2.x, temp repos): file deletions and
+  revivals both materialize exactly (a dropped "add" vanishes from the
+  working tree; a dropped "delete" revives the file); after sync,
+  `status --porcelain --untracked-files=all` is empty. With
+  `sparse-checkout` active, paths outside the sparse cone are not
+  materialized and keep their skip-worktree bits — same behavior as
+  `reset --hard`.
+- **Failure semantics.** An `index.lock` conflict fails before anything
+  changes (index and working tree both untouched — verified). Later
+  failures (disk errors mid-update) can leave a partially synchronized
+  index/working tree; that is precisely the partial-failure window above.
+  Execute verifies the sync by requiring an empty
+  `status --porcelain --untracked-files=all` afterwards.
+
+The clean-working-tree gate is checked with the same status read
+(`--untracked-files=all`): untracked files count as dirty, because a
+dropped commit that deleted a path revives that path on sync and would
+silently overwrite an untracked file sitting there. Ignored files are not
+checked (they are invisible to `read-tree -u`, which only realizes tracked
+paths). The execute-side rejection surfaces as an
+`execute_precondition_mismatch` on field `working_tree_clean`.
+
+Failure envelope: once the ref has moved, any failure in sync or in
+completing the execution record surfaces as code
+`execute_partial_failure` carrying the observed branch tip, whether sync
+completed, the execution-record path, and a `safe_next` hint. The record
+stays in `intent` state on a sync failure, so undo (which requires a
+`completed` record) and re-execute (`execution_already_attempted`) both
+fail closed; the branch ref is already correct at the new tip and the
+remaining repair is finishing the sync.
 
 ## Confirmation Policy
 
