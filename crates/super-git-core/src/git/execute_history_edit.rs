@@ -14,9 +14,10 @@ use crate::git::preview_history_edit;
 use crate::git::preview_history_edit::{compute_history_edit_plan_id, preview_history_edit};
 use crate::model::{
     ExecuteResult, ExecuteUndoToken, HistoryEditConfirmation, HistoryEditExecutionRecord,
-    HistoryEditPlan, HistoryEditPlanCommit, HistoryEditUndoToken, CONFIRMATION_SCHEMA_VERSION,
-    EXECUTE_SCHEMA_VERSION, HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION,
-    HISTORY_EDIT_PLAN_SCHEMA_VERSION, HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
+    HistoryEditPlan, HistoryEditPlanCommit, HistoryEditPrediction, HistoryEditPredictionStep,
+    HistoryEditUndoToken, CONFIRMATION_SCHEMA_VERSION, EXECUTE_SCHEMA_VERSION,
+    HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION, HISTORY_EDIT_PLAN_SCHEMA_VERSION,
+    HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION,
 };
 use crate::{Result, SuperGitError};
 
@@ -69,6 +70,18 @@ pub fn execute_history_edit_plan(
     let branch_ref = branch.ref_name.clone();
     let previous_tip = branch.tip_commit.clone();
 
+    // drop 분류는 fresh 기준이다(static contract가 plan과의 동치를 검증했고,
+    // plan_id 일치가 둘이 같음을 증명한다).
+    let drop_prediction = fresh.prediction.clone();
+
+    // drop: ref 이동 후의 read-tree 동기화가 사용자 변경을 덮어쓰지 않도록,
+    // 어떤 write보다 먼저 clean 워킹트리를 하드 요구한다. untracked도 dirty다 —
+    // 드랍된 delete는 sync에서 경로를 부활시키며 그 자리의 untracked 파일을
+    // 덮어쓸 수 있다.
+    if drop_prediction.is_some() {
+        ensure_clean_working_tree(&git, &worktree_root)?;
+    }
+
     // The live tip is the compare-and-swap old value. The fresh binding already
     // proved it matches the plan, but re-reading closes the tiny window between
     // revalidation and the ref move.
@@ -77,16 +90,46 @@ pub fn execute_history_edit_plan(
         return mismatch("branch.tip_commit", &previous_tip, &live_tip);
     }
     let old_tree = read_tree_oid(&git, &worktree_root, &previous_tip)?;
+    // post-verify 오라클: drop은 fresh 예측의 final_tree, tree-preserving은
+    // 원래 tip의 tree(트리 보존 불변식).
+    let expected_tree = match &drop_prediction {
+        Some(prediction) => prediction
+            .final_tree
+            .clone()
+            .expect("validated drop plan carries a final_tree"),
+        None => old_tree.clone(),
+    };
     // Status reads are best-effort: a failure reading status after the ref has
     // moved must not turn a completed, verified rewrite into a reported failure.
-    let status_before = read_status_signature(&git, &worktree_root).ok();
+    // drop은 sync가 워킹트리를 바꾸는 것이 계약이라 드리프트 비교가 무의미하다.
+    let status_before = if drop_prediction.is_none() {
+        read_status_signature(&git, &worktree_root).ok()
+    } else {
+        None
+    };
 
-    let groups = build_groups(&fresh)?;
-    let new_tip = rebuild_commits(&git, &worktree_root, &fresh.range.base_commit, &groups)?;
+    let (groups, groups_before_first_drop) = build_groups(&fresh)?;
+    let new_tip = match &drop_prediction {
+        Some(prediction) => rebuild_replayed_commits(
+            &git,
+            &worktree_root,
+            &fresh.range.base_commit,
+            &groups,
+            &prediction.steps,
+            groups_before_first_drop,
+        )?,
+        None => rebuild_commits(&git, &worktree_root, &fresh.range.base_commit, &groups)?,
+    };
     if new_tip == previous_tip {
         // The supported op set always changes at least one commit, so an
         // unchanged tip means the rebuild logic is wrong; never move the ref.
         return mismatch("rebuilt_tip", "different_from_previous_tip", &new_tip);
+    }
+    // ref가 움직이기 전의 마지막 안전망: 재구축된 tip의 실제 tree가 오라클과
+    // 일치해야 한다. 불일치는 구현 버그이고, 아무것도 움직이지 않은 채 멈춘다.
+    let new_tree = read_tree_oid(&git, &worktree_root, &new_tip)?;
+    if new_tree != expected_tree {
+        return mismatch("pre_move_verify.final_tree", &expected_tree, &new_tree);
     }
 
     let record_path = execution_record_path(&fresh, &branch_ref);
@@ -100,7 +143,7 @@ pub fn execute_history_edit_plan(
         branch_ref: branch_ref.clone(),
         previous_tip: previous_tip.clone(),
         new_tip: new_tip.clone(),
-        final_tree: old_tree.clone(),
+        final_tree: expected_tree.clone(),
         commits_before: fresh.range.commit_count as u32,
         commits_after,
         undo_token: None,
@@ -122,9 +165,11 @@ pub fn execute_history_edit_plan(
         &worktree_root,
         &fresh,
         &new_tip,
-        &old_tree,
+        &expected_tree,
         commits_after,
     ) {
+        // sync는 아직 시작 전이므로 워킹트리는 미접촉이고, ref 롤백이
+        // 정직하게 pre-execute 상태를 복원한다(drop 포함).
         return Err(rollback(
             &git,
             &worktree_root,
@@ -136,7 +181,27 @@ pub fn execute_history_edit_plan(
         ));
     }
 
-    let status_after = read_status_signature(&git, &worktree_root).ok();
+    // drop: index/워킹트리를 새 tip으로 동기화한다(rebase 의미론). ref는 이미
+    // 올바른 새 tip이므로 여기서부터의 실패는 rollback이 아니라 partial
+    // failure다 — record가 intent로 남아 undo와 재실행 모두 fail-closed가 된다.
+    if drop_prediction.is_some() {
+        if let Err(err) = sync_working_tree(&git, &worktree_root, &new_tip) {
+            return Err(sync_partial_failure(
+                &git,
+                &worktree_root,
+                &branch_ref,
+                &record_path,
+                false,
+                err,
+            ));
+        }
+    }
+
+    let status_after = if drop_prediction.is_none() {
+        read_status_signature(&git, &worktree_root).ok()
+    } else {
+        None
+    };
     let mut effects = success_effects(&fresh, &branch_ref, &new_tip);
     // The drift note only fires when both reads succeed and disagree.
     if let (Some(before), Some(after)) = (&status_before, &status_after) {
@@ -149,7 +214,12 @@ pub fn execute_history_edit_plan(
 
     let undo_token = HistoryEditUndoToken {
         schema_version: HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION.to_string(),
-        kind: "restore_branch_tip_snapshot".to_string(),
+        kind: if drop_prediction.is_some() {
+            "restore_branch_tip_and_worktree"
+        } else {
+            "restore_branch_tip_snapshot"
+        }
+        .to_string(),
         repository: worktree_root.clone(),
         action: ACTION_HISTORY_EDIT.to_string(),
         plan_id: fresh.plan_id.clone(),
@@ -169,17 +239,24 @@ pub fn execute_history_edit_plan(
     };
     // A failure here means the ref already moved but no completed record (and so
     // no safe undo path) exists. Roll the ref back rather than leave an
-    // un-undoable rewrite that misreports as a generic error.
+    // un-undoable rewrite that misreports as a generic error. drop은 예외다:
+    // ref와 워킹트리가 이미 새 tip에 일치하므로, ref만 되돌리면 워킹트리와
+    // 어긋난 더 나쁜 상태가 된다 — partial failure로 정직하게 보고한다.
     if let Err(err) = write_record_replace(&record_path, &completed) {
-        return Err(rollback(
-            &git,
-            &worktree_root,
-            &branch_ref,
-            &previous_tip,
-            &new_tip,
-            &record_path,
-            err,
-        ));
+        return Err(match &drop_prediction {
+            Some(_) => {
+                sync_partial_failure(&git, &worktree_root, &branch_ref, &record_path, true, err)
+            }
+            None => rollback(
+                &git,
+                &worktree_root,
+                &branch_ref,
+                &previous_tip,
+                &new_tip,
+                &record_path,
+                err,
+            ),
+        });
     }
 
     Ok(ExecuteResult {
@@ -216,20 +293,27 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
             "history_edit execute requires execution.status of executable or preview_only",
         );
     }
-    // C8-drop-B: drop plan은 preview까지만 지원된다. execute는 C8-drop-C가
-    // fresh 예측 재검증 + final_tree post-verify + 워킹트리 동기화 계약을
-    // 구현할 때 열린다. execute_supported=false로도 걸리지만, 이 명시적
-    // 검사가 에이전트에게 이유 있는 코드를 준다.
-    let has_drop = plan.prediction.is_some()
-        || plan
-            .instructions
-            .as_ref()
-            .is_some_and(|instructions| instructions.items.iter().any(|item| item.op == "drop"));
-    if has_drop {
-        return invalid_plan(
-            "tree_changing_execute_unsupported",
-            "history_edit execute does not support drop plans yet (C8-drop-C)",
-        );
+    // drop(tree-changing) plan은 replay 예측을 반드시 동반한다: prediction이
+    // execute의 final_tree 오라클이므로, 둘 중 하나만 있는 plan은 위조다.
+    let has_drop_instruction = plan
+        .instructions
+        .as_ref()
+        .is_some_and(|instructions| instructions.items.iter().any(|item| item.op == "drop"));
+    match (&plan.prediction, has_drop_instruction) {
+        (None, false) => {}
+        (Some(prediction), true) => validate_drop_contract(prediction, status)?,
+        (Some(_), false) => {
+            return invalid_plan(
+                "prediction_unexpected",
+                "history_edit plans without a drop instruction must not carry a replay prediction",
+            );
+        }
+        (None, true) => {
+            return invalid_plan(
+                "prediction_required",
+                "history_edit drop plans must carry the kept-commit replay prediction",
+            );
+        }
     }
     if !plan.execution.execute_supported
         || plan.execution.raw_git_allowed
@@ -240,10 +324,18 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
             "history_edit execute requires an unblocked super-git-only plan",
         );
     }
-    if plan.undo_strategy.kind != "restore_branch_tip_snapshot" {
+    // drop execute는 워킹트리를 동기화하므로 undo도 대칭 kind를 요구한다.
+    let expected_undo_kind = if plan.prediction.is_some() {
+        "restore_branch_tip_and_worktree"
+    } else {
+        "restore_branch_tip_snapshot"
+    };
+    if plan.undo_strategy.kind != expected_undo_kind {
         return invalid_plan(
             "unsupported_undo_strategy",
-            "history_edit execute requires restore_branch_tip_snapshot undo strategy",
+            &format!(
+                "history_edit execute requires {expected_undo_kind} undo strategy for this plan"
+            ),
         );
     }
     if plan.branch.is_none() {
@@ -259,6 +351,38 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
         );
     }
     validate_tier_contract(plan, status)
+}
+
+/// drop plan이 execute에 들어올 수 있는 유일한 모양: clean replay 예측과
+/// final_tree 오라클을 갖춘 항상-confirmation-gated(preview_only) plan.
+/// conflicted/오라클 없는 plan은 fail-closed — preview가 그런 plan을 만들지
+/// 않지만, execute는 plan 파일을 신뢰하지 않는다.
+fn validate_drop_contract(prediction: &HistoryEditPrediction, status: &str) -> Result<()> {
+    if prediction.kind != "kept_commit_replay" {
+        return invalid_plan(
+            "prediction_kind_unsupported",
+            "history_edit execute supports only kept_commit_replay predictions",
+        );
+    }
+    if prediction.status != "clean" {
+        return invalid_plan(
+            "prediction_not_clean",
+            "a drop plan with a predicted conflict can never execute; resolve the instruction list instead",
+        );
+    }
+    if prediction.final_tree.is_none() {
+        return invalid_plan(
+            "prediction_final_tree_missing",
+            "a tree-changing plan without a final_tree oracle is never executable",
+        );
+    }
+    if status != "preview_only" {
+        return invalid_plan(
+            "unsupported_execution_contract",
+            "drop plans are always confirmation-gated preview_only plans",
+        );
+    }
+    Ok(())
 }
 
 /// Risk and confirmation expectations differ by tier: unpublished plans are
@@ -406,12 +530,21 @@ fn validate_confirmation(
             "history_edit confirmation acknowledgement method must be cli_typed_phrase",
         );
     }
-    let expected_phrase =
-        preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit);
+    // 한 plan에 phrase는 하나(preview와 같은 규칙): drop이 있으면 drop phrase가
+    // published phrase를 대신한다. dropped 수는 plan_id가 바인딩하는 prediction
+    // 에서 온다.
+    let expected_phrase = match &plan.prediction {
+        Some(prediction) => preview_history_edit::drop_confirmation_phrase(
+            prediction.dropped_commits.len(),
+            &branch.ref_name,
+            &branch.tip_commit,
+        ),
+        None => preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit),
+    };
     if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
         return invalid_plan(
             "confirmation_phrase_mismatch",
-            "history_edit confirmation phrase must match the deterministic published-rewrite phrase",
+            "history_edit confirmation phrase must match the plan's deterministic phrase",
         );
     }
     Ok(())
@@ -438,6 +571,17 @@ fn validate_fresh_binding(current_path: &Path, plan: &HistoryEditPlan) -> Result
             &plan.execution.status,
             &fresh.execution.status,
         );
+    }
+    // drop: fresh replay 예측이 plan의 오라클과 달라졌으면 plan_id mismatch에
+    // 묻히기 전에 정확한 진단을 준다(예: git 버전 교체로 병합 결과 드리프트).
+    if let (Some(planned), Some(fresh_prediction)) = (&plan.prediction, &fresh.prediction) {
+        if fresh_prediction.final_tree != planned.final_tree {
+            return mismatch(
+                "fresh_prediction.final_tree",
+                planned.final_tree.as_deref().unwrap_or("none"),
+                fresh_prediction.final_tree.as_deref().unwrap_or("none"),
+            );
+        }
     }
     ensure_match("plan_id", &plan.plan_id, &fresh.plan_id)?;
     Ok(fresh)
@@ -487,7 +631,9 @@ struct RebuildGroup {
     changed: bool,
 }
 
-fn build_groups(plan: &HistoryEditPlan) -> Result<Vec<RebuildGroup>> {
+/// Returns the rebuild groups plus the group count before the first `drop`
+/// (None when nothing is dropped) — the unchanged-prefix cap for replay.
+fn build_groups(plan: &HistoryEditPlan) -> Result<(Vec<RebuildGroup>, Option<usize>)> {
     let instructions = plan
         .instructions
         .as_ref()
@@ -500,6 +646,7 @@ fn build_groups(plan: &HistoryEditPlan) -> Result<Vec<RebuildGroup>> {
         .collect();
 
     let mut groups: Vec<RebuildGroup> = Vec::new();
+    let mut groups_before_first_drop: Option<usize> = None;
     for item in &instructions.items {
         let commit = by_oid.get(item.commit.as_str()).copied().ok_or_else(|| {
             SuperGitError::ExecutePlanInvalid {
@@ -540,6 +687,12 @@ fn build_groups(plan: &HistoryEditPlan) -> Result<Vec<RebuildGroup>> {
                 group.last_commit = commit.commit.clone();
                 group.changed = true;
             }
+            // drop은 결과 그룹을 만들지 않는다: 이 커밋의 patch가 최종
+            // history에서 빠진다. fold와의 혼용은 preview가 차단하고 fresh
+            // binding이 재확인하므로 여기서는 위치만 기록한다.
+            "drop" => {
+                groups_before_first_drop.get_or_insert(groups.len());
+            }
             other => {
                 return invalid_plan(
                     "unsupported_instruction_op",
@@ -548,7 +701,7 @@ fn build_groups(plan: &HistoryEditPlan) -> Result<Vec<RebuildGroup>> {
             }
         }
     }
-    Ok(groups)
+    Ok((groups, groups_before_first_drop))
 }
 
 fn last_group(groups: &mut [RebuildGroup]) -> Result<&mut RebuildGroup> {
@@ -587,6 +740,60 @@ fn rebuild_commits(
     for group in &groups[unchanged_prefix..] {
         let tree = read_tree_oid(git, worktree_root, &group.last_commit)?;
         parent = commit_tree(git, worktree_root, &tree, &parent, group)?;
+    }
+    Ok(parent)
+}
+
+/// drop 경로의 chain 재구축: 각 kept 커밋의 tree는 원래 tree가 아니라 fresh
+/// 예측이 검증한 step별 merged_tree에서 온다(merge 계산을 반복하지 않는다).
+/// 전부 drop이면 새 tip은 base 그 자체다.
+fn rebuild_replayed_commits(
+    git: &Git,
+    worktree_root: &Path,
+    base_commit: &str,
+    groups: &[RebuildGroup],
+    steps: &[HistoryEditPredictionStep],
+    groups_before_first_drop: Option<usize>,
+) -> Result<String> {
+    // 예측 step과 kept 그룹은 1:1이어야 한다(fold는 drop과 혼용 불가이므로
+    // 그룹 = 단일 커밋). 어긋나면 위조된 plan이거나 구현 버그다.
+    if steps.len() != groups.len() {
+        return invalid_plan(
+            "prediction_steps_mismatch",
+            &format!(
+                "prediction has {} steps but the plan keeps {} commits",
+                steps.len(),
+                groups.len()
+            ),
+        );
+    }
+    for (group, step) in groups.iter().zip(steps) {
+        if step.commit != group.primary || step.status != "clean" {
+            return invalid_plan(
+                "prediction_steps_mismatch",
+                &format!(
+                    "prediction step for {} does not match kept commit {} with a clean status",
+                    step.commit, group.primary
+                ),
+            );
+        }
+    }
+
+    // 첫 drop 앞의 unchanged pick들만 원래 oid를 유지한다: 첫 drop부터는
+    // parent가 달라지므로 이후 전부가 새 커밋이다.
+    let unchanged_prefix = groups
+        .iter()
+        .take_while(|group| !group.changed)
+        .count()
+        .min(groups_before_first_drop.unwrap_or(usize::MAX));
+    let mut parent = if unchanged_prefix == 0 {
+        base_commit.to_string()
+    } else {
+        groups[unchanged_prefix - 1].primary.clone()
+    };
+
+    for (group, step) in groups.iter().zip(steps).skip(unchanged_prefix) {
+        parent = commit_tree(git, worktree_root, &step.merged_tree, &parent, group)?;
     }
     Ok(parent)
 }
@@ -640,7 +847,7 @@ fn post_verify(
     worktree_root: &Path,
     plan: &HistoryEditPlan,
     new_tip: &str,
-    old_tree: &str,
+    expected_tree: &str,
     commits_after: u32,
 ) -> Result<()> {
     let current_tip = read_ref_oid(git, worktree_root, &plan.branch.as_ref().unwrap().ref_name)?;
@@ -648,9 +855,10 @@ fn post_verify(
         return mismatch("post_verify.branch_tip", new_tip, &current_tip);
     }
     let new_tree = read_tree_oid(git, worktree_root, new_tip)?;
-    if new_tree != old_tree {
-        // The supported op set must preserve the final tree exactly.
-        return mismatch("post_verify.tree_identity", old_tree, &new_tree);
+    if new_tree != expected_tree {
+        // tree-preserving ops must keep the original tree; drop must land
+        // exactly on the predicted final_tree oracle.
+        return mismatch("post_verify.tree_identity", expected_tree, &new_tree);
     }
     let count = count_range_commits(git, worktree_root, &plan.range.base_commit, new_tip)?;
     if count != commits_after {
@@ -694,6 +902,20 @@ fn success_effects(plan: &HistoryEditPlan, branch_ref: &str, new_tip: &str) -> V
         .result_summary
         .as_ref()
         .expect("validated executable plan carries a result summary");
+    if let Some(prediction) = &plan.prediction {
+        return vec![
+            format!(
+                "Rewrote {} commits on {} into {} commits at {}, removing {} commit's patch(es) from the final history.",
+                summary.commits_before,
+                branch_ref,
+                summary.commits_after,
+                new_tip,
+                prediction.dropped_commits.len()
+            ),
+            "Preserved every author identity on the kept commits.".to_string(),
+            "Synchronized the index and working tree to the new tip.".to_string(),
+        ];
+    }
     vec![
         format!(
             "Rewrote {} commits on {} into {} commits at {}.",
@@ -741,6 +963,68 @@ fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
         ["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
     Ok(output.stdout)
+}
+
+/// drop execute의 하드 게이트(C8-drop 계약): sync가 사용자 변경을 덮어쓸 수
+/// 없도록 tracked 변경과 untracked 모두 없어야 한다. ignored는 보지 않는다 —
+/// read-tree -u는 ignored 경로를 실체화하지 않는다.
+fn ensure_clean_working_tree(git: &Git, worktree_root: &Path) -> Result<()> {
+    let status = read_status_signature(git, worktree_root)?;
+    if status.is_empty() {
+        return Ok(());
+    }
+    mismatch(
+        "working_tree_clean",
+        "clean working tree and index (including untracked)",
+        &format!("{} dirty or untracked path(s)", status.lines().count()),
+    )
+}
+
+/// C8-drop 계약의 sync primitive: `read-tree -u --reset`은 ref를 건드리지
+/// 않고(hook도 없음) index와 워킹트리만 새 tip으로 맞춘다. 끝난 뒤 status가
+/// 비어 있는지까지가 sync다 — 부분 동기화를 성공으로 보고하지 않는다.
+fn sync_working_tree(git: &Git, worktree_root: &Path, new_tip: &str) -> Result<()> {
+    git.run_write_in(worktree_root, ["read-tree", "-u", "--reset", new_tip])?;
+    let status = read_status_signature(git, worktree_root)?;
+    if !status.is_empty() {
+        return mismatch(
+            "sync_verify.working_tree_clean",
+            "a clean working tree at the new tip",
+            &format!("{} path(s) still differ", status.lines().count()),
+        );
+    }
+    Ok(())
+}
+
+/// ref가 이미 새 tip으로 움직인 뒤의 실패 보고. ref 롤백은 하지 않는다 —
+/// ref는 올바르고, 미완인 것은 sync 또는 record뿐이다(계약 문서의
+/// partial-failure 창). record가 intent로 남아 undo와 재실행이 fail-closed다.
+fn sync_partial_failure(
+    git: &Git,
+    worktree_root: &Path,
+    branch_ref: &str,
+    record_path: &Path,
+    sync_completed: bool,
+    original: SuperGitError,
+) -> SuperGitError {
+    let observed_tip =
+        read_ref_oid(git, worktree_root, branch_ref).unwrap_or_else(|_| "unreadable".to_string());
+    let safe_next = if sync_completed {
+        "the branch ref and working tree are already at the new tip; only the execution record is incomplete, so automatic undo is unavailable — inspect the execution record before any manual repair"
+    } else {
+        "the branch ref is correctly at the new tip; the index and working tree may be partially synchronized — verify the working-tree state and finish synchronizing to the recorded new_tip (see the execution record); do not re-run execute"
+    };
+    SuperGitError::ExecuteSyncPartialFailure(Box::new(
+        crate::error::ExecuteSyncPartialFailureError {
+            action: ACTION_HISTORY_EDIT.to_string(),
+            message: original.to_string(),
+            branch_ref: branch_ref.to_string(),
+            observed_tip,
+            sync_completed,
+            execution_record_path: record_path.to_path_buf(),
+            safe_next: safe_next.to_string(),
+        },
+    ))
 }
 
 fn execution_record_path(plan: &HistoryEditPlan, branch_ref: &str) -> PathBuf {
@@ -923,6 +1207,70 @@ mod tests {
             matches!(returned, SuperGitError::ExecutePlanInvalid { .. }),
             "original error is surfaced after a successful rollback"
         );
+    }
+
+    #[test]
+    fn sync_working_tree_fails_before_changing_anything_on_index_lock() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let (repo, c1, _c2, _c3) = repo_with_three(tmp.path());
+        // 다른 프로세스가 index를 잡은 상황: read-tree는 락 단계에서 실패하고
+        // index/워킹트리는 그대로여야 한다(계약 문서의 스파이크 실측 모드).
+        std::fs::write(repo.join(".git/index.lock"), "").expect("lock");
+
+        let err = super::sync_working_tree(&Git::default(), &repo, &c1).expect_err("must refuse");
+
+        assert!(matches!(err, SuperGitError::GitCommandFailed { .. }));
+        let status = run_git(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        );
+        let stdout = String::from_utf8_lossy(&status.stdout);
+        // index.lock 자체는 status에 안 잡힌다; 비어 있으면 부분 sync가 없다.
+        assert_eq!(stdout.trim(), "", "no partial sync on lock failure");
+        assert!(repo.join("c.txt").exists(), "working tree untouched");
+    }
+
+    #[test]
+    fn sync_partial_failure_reports_observed_tip_without_rolling_back() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let (repo, _c1, c2, _c3) = repo_with_three(tmp.path());
+        // Simulate execute having moved the branch to new_tip = c2 already.
+        git(&repo, &["update-ref", "refs/heads/main", &c2]);
+        let record = write_record(&repo, "intent.json");
+        let original = SuperGitError::ExecutePlanInvalid {
+            code: "original".to_string(),
+            message: "sync broke".to_string(),
+        };
+
+        let err = super::sync_partial_failure(
+            &Git::default(),
+            &repo,
+            "refs/heads/main",
+            &record,
+            false,
+            original,
+        );
+
+        assert_eq!(err.code(), "execute_partial_failure");
+        match err {
+            SuperGitError::ExecuteSyncPartialFailure(details) => {
+                assert_eq!(details.action, "history_edit");
+                assert_eq!(
+                    details.observed_tip, c2,
+                    "envelope reports the live ref tip"
+                );
+                assert!(!details.sync_completed);
+                assert_eq!(details.execution_record_path, record);
+                assert!(details.safe_next.contains("do not re-run execute"));
+            }
+            other => panic!("expected ExecuteSyncPartialFailure, got {other:?}"),
+        }
+        assert_eq!(
+            rev(&repo, "refs/heads/main"),
+            c2,
+            "partial failure must not roll the ref back"
+        );
+        assert!(record.exists(), "record stays as the provenance anchor");
     }
 
     #[test]

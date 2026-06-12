@@ -289,9 +289,18 @@ Drop-specific deltas:
       clean-working-tree execute requirement is a non-volatile
       precondition (`working_tree_clean_required_at_execute:
       enforced_at_execute`) so plan_id does not wobble with dirty state.
-- [ ] **C8-drop-C** — execute: fresh-prediction re-derivation, always-on
-      confirmation, chain rebuild, `final_tree` post-verify, CAS ref move,
-      working-tree synchronization, rollback and partial-failure paths.
+- [x] **C8-drop-C** — execute: fresh-prediction re-derivation (the fresh
+      preview embeds a fresh replay prediction, and the plan_id match plus an
+      explicit `fresh_prediction.final_tree` comparison reject drift),
+      always-on confirmation with the drop phrase, chain rebuild from the
+      prediction's per-step `merged_tree`s (unchanged prefix before the first
+      drop keeps original ids), `final_tree` verified both before the ref
+      moves and in post-verify, CAS ref move, `read-tree -u --reset`
+      working-tree synchronization with a clean-tree hard gate
+      (untracked counts as dirty), rollback before sync starts, and
+      `execute_partial_failure` envelopes after the ref moved
+      (record stays `intent`, undo/re-execute fail closed). Undoing a drop
+      execution fails closed with `unsupported_undo_kind` until C8-drop-D.
 - [ ] **C8-drop-D** — undo (`restore_branch_tip_and_worktree`), public docs
       (README / safety-model write boundary / command-reference), and
       hardening tests across the drop lifecycle.

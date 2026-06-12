@@ -207,17 +207,10 @@ fn build_plan(
     };
 
     let requires_confirmation_artifact = status == "preview_only";
-    // C8-drop-B: drop plan은 confirmation 게이트까지 완성되지만 execute는
-    // C8-drop-C(fresh 예측 재검증 + final_tree post-verify + 워킹트리 동기화)
-    // 전까지 지원되지 않는다.
-    let executable = (status == "executable" || status == "preview_only") && !has_drop;
+    let executable = status == "executable" || status == "preview_only";
 
     let blocked_reasons = blocked_reasons(&scan, &instruction_blocks, &prediction_blocks);
-    let suggested_super_git_command = if has_drop {
-        None
-    } else {
-        suggested_command(status, base)
-    };
+    let suggested_super_git_command = suggested_command(status, base);
     let execution = HistoryEditExecution {
         status: status.to_string(),
         execute_supported: executable,
@@ -612,7 +605,6 @@ fn limitations(has_drop: bool) -> Vec<String> {
     ];
     if has_drop {
         limitations.extend([
-            "Drop plans cannot execute yet: C8-drop-C lands execute with final-tree post-verification and working-tree synchronization.".to_string(),
             "The dropped commits' objects may remain in the object database; drop changes what the branch points at, not what exists.".to_string(),
             "The replay prediction is commit-level and ignores the index and working tree.".to_string(),
         ]);
@@ -639,8 +631,12 @@ fn undo_preview(has_drop: bool, executable: bool) -> HistoryEditUndoPreview {
     if has_drop {
         HistoryEditUndoPreview {
             kind: "restore_branch_tip_and_worktree".to_string(),
-            available_after_execute: executable,
+            // execute는 열렸지만 이 undo kind의 구현은 C8-drop-D다. 지키지
+            // 못할 약속을 plan에 싣지 않는다 — 토큰은 기록되고, undo 표면은
+            // unsupported_undo_kind로 fail-closed다.
+            available_after_execute: false,
             limitations: vec![
+                "Undo for drop executions lands in C8-drop-D; until then the recorded undo token fails closed with unsupported_undo_kind.".to_string(),
                 "Undo refuses if the branch tip moved after execute.".to_string(),
                 "Undo requires the previous tip commit to still exist locally (reflog/gc window)."
                     .to_string(),
@@ -1106,9 +1102,13 @@ mod tests {
         // drop은 published 여부와 무관하게 항상 confirmation-gated.
         assert_eq!(plan.execution.status, "preview_only");
         assert!(plan.execution.requires_confirmation_artifact);
-        // C8-drop-B에서는 execute 미지원: 정직하게 광고한다.
-        assert!(!plan.execution.execute_supported);
-        assert!(plan.execution.suggested_super_git_command.is_none());
+        // C8-drop-C부터 execute가 지원된다: confirmation을 동반한 execute 안내.
+        assert!(plan.execution.execute_supported);
+        let suggested = plan
+            .execution
+            .suggested_super_git_command
+            .expect("suggested command");
+        assert!(suggested.contains(&"--confirmation".to_string()));
         assert_eq!(plan.risk.severity, "high");
         assert!(plan.risk.requires_human_confirmation);
 
@@ -1141,10 +1141,17 @@ mod tests {
         assert_eq!(summary.commits_after, 2);
         assert!(!summary.final_tree_unchanged);
 
-        // undo는 워킹트리 동기화 포함 kind를 광고한다(구버전 fail-closed).
+        // undo는 워킹트리 동기화 포함 kind를 광고하되(구버전 fail-closed),
+        // 그 kind의 undo 구현은 C8-drop-D 전까지 없으므로 가용을 약속하지
+        // 않는다.
         assert_eq!(plan.undo_strategy.kind, "restore_branch_tip_and_worktree");
         assert_eq!(plan.undo_preview.kind, "restore_branch_tip_and_worktree");
         assert!(!plan.undo_preview.available_after_execute);
+        assert!(plan
+            .undo_preview
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("C8-drop-D")));
 
         let precondition_status = |code: &str| {
             plan.preconditions
@@ -1337,26 +1344,6 @@ mod tests {
             .dropped_commits
             .clear();
         assert_ne!(original, compute_history_edit_plan_id(&tampered));
-    }
-
-    #[test]
-    fn execute_rejects_drop_plans_until_c8_drop_c() {
-        let temp = tempfile::tempdir().expect("temp");
-        let (repo, oids) = feature_repo(temp.path());
-        let items = format!(
-            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
-            oids[0], oids[1], oids[2]
-        );
-        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
-
-        let err = crate::git::execute_history_edit::execute_history_edit_plan(&repo, plan, None)
-            .unwrap_err();
-        match err {
-            crate::SuperGitError::ExecutePlanInvalid { code, .. } => {
-                assert_eq!(code, "tree_changing_execute_unsupported");
-            }
-            other => panic!("expected ExecutePlanInvalid, got {other:?}"),
-        }
     }
 
     #[test]

@@ -285,3 +285,76 @@ fn undo_is_idempotent_refusing_a_second_run() {
     assert!(cause_contains(&json, "branch_advanced_since_execute"));
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
 }
+
+// ---- C8-drop-C: drop undo stays fail-closed until C8-drop-D ----
+
+/// Builds the valid confirmation for a confirmation-gated plan by echoing the
+/// plan's own reason codes and deterministic required phrase.
+fn confirmation_for(plan: &serde_json::Value) -> serde_json::Value {
+    let data = &plan["data"];
+    serde_json::json!({
+        "schema_version": "super-git.confirmation.v0.1",
+        "kind": "destructive_action_confirmation",
+        "action": "history_edit",
+        "plan_schema_version": data["schema_version"],
+        "plan_id": data["plan_id"],
+        "target": {
+            "branch_ref": data["branch"]["ref"],
+            "git_common_dir": data["repository"]["git_common_dir"],
+            "tip_commit": data["branch"]["tip_commit"]
+        },
+        "acknowledged_reason_codes": data["confirmation"]["reason_codes"],
+        "acknowledged_undo_strategy": data["undo_strategy"]["kind"],
+        "acknowledgement": {
+            "method": "cli_typed_phrase",
+            "phrase": data["confirmation"]["required_phrase"]
+        }
+    })
+}
+
+#[test]
+fn drop_undo_token_fails_closed_until_c8_drop_d() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = instructions_doc(&format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    ));
+    let plan = preview_plan(&repo, "main", &items);
+    // Artifacts live outside the repo: drop's clean-tree gate counts untracked.
+    let artifacts = repo.parent().expect("repo has a parent dir");
+    let plan_file = artifacts.join("plan.json");
+    let confirmation_file = artifacts.join("confirmation.json");
+    std::fs::write(&plan_file, serde_json::to_vec(&plan).expect("plan")).expect("write plan");
+    std::fs::write(
+        &confirmation_file,
+        serde_json::to_vec(&confirmation_for(&plan)).expect("confirmation"),
+    )
+    .expect("write confirmation");
+    let output = super_git(&repo)
+        .arg("execute")
+        .arg("--plan")
+        .arg(&plan_file)
+        .arg("--confirmation")
+        .arg(&confirmation_file)
+        .output()
+        .expect("run execute");
+    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("json");
+    assert_eq!(result["ok"], true, "drop execute must succeed: {result}");
+    let tip_after_execute = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    // restore_branch_tip_and_worktree lands in C8-drop-D; until then the undo
+    // surface must refuse the new kind instead of half-restoring (ref without
+    // working tree). Nothing may move on refusal.
+    let json = error_json(undo(&repo, &result));
+
+    assert!(
+        cause_contains(&json, "unsupported_undo_kind"),
+        "drop undo must fail closed: {json}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_after_execute);
+    assert!(
+        !repo.join("b.txt").exists(),
+        "refused undo must not resurrect the dropped patch"
+    );
+}

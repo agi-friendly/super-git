@@ -1,7 +1,8 @@
-//! `super-git execute` integration tests for `history_edit` plans (C8-C).
-//! Execute must rebuild commits with plumbing, move the branch ref by
-//! compare-and-swap, preserve the final tree and author identity, and never
-//! touch the working tree.
+//! `super-git execute` integration tests for `history_edit` plans (C8-C,
+//! C8-drop-C). Execute must rebuild commits with plumbing, move the branch
+//! ref by compare-and-swap, and verify the final tree. Tree-preserving plans
+//! never touch the working tree; drop plans require a clean tree and
+//! synchronize it to the new tip afterwards.
 
 use std::io::Write;
 use std::path::Path;
@@ -180,6 +181,77 @@ fn subjects(repo: &Path, range: &str) -> Vec<String> {
         .lines()
         .map(str::to_string)
         .collect()
+}
+
+/// f.txt에 의존적 편집을 가진 체인: c2와 c3가 같은 줄을 잇달아 바꾼다.
+/// c2를 drop하면 c3 replay가 충돌해 plan이 blocked가 된다.
+fn dependent_repo(temp: &Path) -> (std::path::PathBuf, Vec<String>) {
+    let repo = temp.join("repo");
+    init_repo(&repo);
+    std::fs::write(repo.join("f.txt"), "a\nb\nc\n").expect("write");
+    git(&repo, &["add", "f.txt"]);
+    git(&repo, &["commit", "-q", "-m", "add f"]);
+    git(&repo, &["checkout", "-q", "-b", "feature/dep"]);
+    commit_file(&repo, "a.txt", "a\n", "c1 unrelated");
+    std::fs::write(repo.join("f.txt"), "X\nb\nc\n").expect("write");
+    git(&repo, &["commit", "-q", "-am", "c2 line1 X"]);
+    std::fs::write(repo.join("f.txt"), "Y\nb\nc\n").expect("write");
+    git(&repo, &["commit", "-q", "-am", "c3 line1 Y"]);
+    let oids = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (repo, oids)
+}
+
+/// Builds the valid confirmation for a confirmation-gated plan by echoing the
+/// plan's own reason codes and deterministic required phrase.
+fn confirmation_for(plan: &serde_json::Value) -> serde_json::Value {
+    let data = &plan["data"];
+    serde_json::json!({
+        "schema_version": "super-git.confirmation.v0.1",
+        "kind": "destructive_action_confirmation",
+        "action": "history_edit",
+        "plan_schema_version": data["schema_version"],
+        "plan_id": data["plan_id"],
+        "target": {
+            "branch_ref": data["branch"]["ref"],
+            "git_common_dir": data["repository"]["git_common_dir"],
+            "tip_commit": data["branch"]["tip_commit"]
+        },
+        "acknowledged_reason_codes": data["confirmation"]["reason_codes"],
+        "acknowledged_undo_strategy": data["undo_strategy"]["kind"],
+        "acknowledgement": {
+            "method": "cli_typed_phrase",
+            "phrase": data["confirmation"]["required_phrase"]
+        }
+    })
+}
+
+fn execute_with_confirmation(
+    dir: &Path,
+    plan: &serde_json::Value,
+    confirmation: &serde_json::Value,
+) -> Output {
+    // Artifacts live outside the repo: drop's clean-tree gate counts untracked
+    // files, so writing them into the working tree would block execute.
+    let artifacts = dir.parent().expect("repo has a parent dir");
+    let plan_file = artifacts.join("plan.json");
+    let confirmation_file = artifacts.join("confirmation.json");
+    std::fs::write(&plan_file, serde_json::to_vec(plan).expect("plan")).expect("write plan");
+    std::fs::write(
+        &confirmation_file,
+        serde_json::to_vec(confirmation).expect("confirmation"),
+    )
+    .expect("write confirmation");
+    super_git(dir)
+        .arg("execute")
+        .arg("--plan")
+        .arg(&plan_file)
+        .arg("--confirmation")
+        .arg(&confirmation_file)
+        .output()
+        .expect("run execute")
 }
 
 #[test]
@@ -418,4 +490,333 @@ fn execute_writes_completed_execution_record_with_undo_token() {
     assert_eq!(record["undo_token"]["kind"], "restore_branch_tip_snapshot");
     assert_eq!(record["commits_before"], 3);
     assert_eq!(record["commits_after"], 2);
+}
+
+// ---- C8-drop-C: drop execute ----
+
+#[test]
+fn drop_executes_synchronizes_working_tree_and_lands_on_the_predicted_tree() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let predicted_tree = plan["data"]["prediction"]["final_tree"]
+        .as_str()
+        .expect("prediction final_tree")
+        .to_string();
+
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert_eq!(json["ok"], true);
+    let data = &json["data"];
+    assert_eq!(data["executed"], true);
+    assert_eq!(
+        data["undo_token"]["kind"], "restore_branch_tip_and_worktree",
+        "drop undo must advertise the worktree-restoring kind"
+    );
+
+    // The dropped patch vanishes from history and from the working tree.
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec!["feat(login): add form".to_string(), "wip".to_string()]
+    );
+    assert!(
+        !repo.join("b.txt").exists(),
+        "dropped patch must vanish from the working tree"
+    );
+    assert!(repo.join("c.txt").exists(), "kept patch must survive");
+    // The new tip lands exactly on the prediction's final_tree oracle, and the
+    // index/working tree are fully synchronized to it.
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        predicted_tree
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+    assert_eq!(
+        git_stdout(&repo, &["symbolic-ref", "HEAD"]),
+        "refs/heads/feature/login"
+    );
+    // The kept pick before the first drop keeps its object id; the replayed
+    // commit after the drop is new.
+    let new_oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(new_oids[0], oids[0], "unchanged prefix keeps its object id");
+    assert_ne!(new_oids[1], oids[2], "replayed commit gets a new id");
+    let authors = git_stdout(&repo, &["log", "--format=%an <%ae>", "main..HEAD"]);
+    assert!(authors
+        .lines()
+        .all(|line| line == "Jane Author <jane@example.com>"));
+
+    // The execution record carries the oracle tree and the new undo kind.
+    let execution_dir = repo.join(".git/super-git/executions");
+    let records: Vec<_> = std::fs::read_dir(&execution_dir)
+        .expect("execution dir")
+        .collect::<Result<_, _>>()
+        .expect("read records");
+    assert_eq!(records.len(), 1);
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(records[0].path()).expect("read record"))
+            .expect("record json");
+    assert_eq!(record["status"], "completed");
+    assert_eq!(record["final_tree"], predicted_tree.as_str());
+    assert_eq!(
+        record["undo_token"]["kind"],
+        "restore_branch_tip_and_worktree"
+    );
+    assert_eq!(record["commits_before"], 3);
+    assert_eq!(record["commits_after"], 2);
+}
+
+#[test]
+fn drop_with_reword_replays_the_kept_commit_with_the_new_message() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"reword","message":"chore: keep c"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+
+    json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "feat(login): add form".to_string(),
+            "chore: keep c".to_string()
+        ]
+    );
+    assert!(!repo.join("b.txt").exists());
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+}
+
+#[test]
+fn drop_execute_without_confirmation_is_rejected() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert!(cause_contains(&json, "confirmation_required"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert!(repo.join("b.txt").exists(), "nothing may change on refusal");
+}
+
+#[test]
+fn drop_execute_with_the_published_phrase_is_rejected() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    // The most plausible wrong phrase: the published-rewrite phrase instead of
+    // the drop phrase. One plan, one phrase — this must not authorize a drop.
+    let mut confirmation = confirmation_for(&plan);
+    let branch_ref = plan["data"]["branch"]["ref"].as_str().expect("ref");
+    confirmation["acknowledgement"]["phrase"] = serde_json::json!(format!(
+        "rewrite published history on {branch_ref} at {tip_before}"
+    ));
+
+    let json = error_json(execute_with_confirmation(&repo, &plan, &confirmation));
+
+    assert!(cause_contains(&json, "confirmation_phrase_mismatch"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+#[test]
+fn drop_execute_requires_a_clean_tree_and_succeeds_after_cleanup() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    // The plan is built on a dirty tree on purpose: cleanliness is volatile
+    // state, so it must gate execute without invalidating the plan itself.
+    std::fs::write(repo.join("a.txt"), "local edit\n").expect("dirty edit");
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+    assert!(
+        cause_contains(&json, "working_tree_clean"),
+        "tracked edits must refuse: {json}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).expect("read"),
+        "local edit\n",
+        "a refused execute must not touch the user's edit"
+    );
+
+    // Untracked files count as dirty too: a dropped delete could revive a
+    // path over them during sync.
+    git(&repo, &["checkout", "-q", "--", "a.txt"]);
+    std::fs::write(repo.join("scratch.txt"), "untracked\n").expect("untracked");
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+    assert!(cause_contains(&json, "working_tree_clean"));
+
+    // After cleanup the very same plan executes: the dirty preview did not
+    // poison the plan_id (non-volatile precondition design).
+    std::fs::remove_file(repo.join("scratch.txt")).expect("cleanup");
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+    assert_eq!(json["ok"], true);
+    assert!(!repo.join("b.txt").exists());
+}
+
+#[test]
+fn drop_with_predicted_conflict_cannot_execute() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = dependent_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    assert_eq!(plan["data"]["execution"]["status"], "blocked");
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert!(cause_contains(&json, "not_executable"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+#[test]
+fn drop_everything_moves_the_branch_to_base() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"drop"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let phrase = plan["data"]["confirmation"]["required_phrase"]
+        .as_str()
+        .expect("phrase");
+    assert!(phrase.starts_with("drop 3 commit(s) from "));
+
+    json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    // Abandoning the whole range: the branch lands on base itself.
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD"]),
+        git_stdout(&repo, &["rev-parse", "main"])
+    );
+    for file in ["a.txt", "b.txt", "c.txt"] {
+        assert!(!repo.join(file).exists(), "{file} must vanish");
+    }
+    assert!(repo.join("README.md").exists(), "base content survives");
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        ""
+    );
+}
+
+#[test]
+fn tampered_prediction_final_tree_is_rejected_without_moving_ref() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let mut plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    // The final_tree is the execute oracle; forging it must break the plan_id
+    // binding rather than steer the post-verify.
+    plan["data"]["prediction"]["final_tree"] =
+        serde_json::json!("0000000000000000000000000000000000000000");
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert!(cause_contains(&json, "plan_id"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert!(repo.join("b.txt").exists());
+}
+
+#[test]
+fn stale_drop_plan_after_new_commit_is_rejected() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    commit_file(&repo, "d.txt", "d\n", "later commit");
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    // A moved tip changes the fresh range and the fresh replay prediction;
+    // whichever check fires first, nothing may move.
+    assert!(
+        cause_contains(&json, "fresh_prediction")
+            || cause_contains(&json, "plan_id")
+            || cause_contains(&json, "fresh_execution_status"),
+        "stale drop plan must be rejected: {json}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
 }
