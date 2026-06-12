@@ -40,6 +40,7 @@ pub const UNDO_RESULT_SCHEMA_VERSION: &str = "super-git.undo-result.v0.1";
 pub const WORKTREE_EXECUTION_RECORD_SCHEMA_VERSION: &str = "super-git.worktree-execution.v0.1";
 pub const WORKTREE_REMOVE_EXECUTION_RECORD_SCHEMA_VERSION: &str =
     "super-git.worktree-remove-execution.v0.1";
+pub const CONFLICT_PREDICTION_SCHEMA_VERSION: &str = "super-git.conflict-prediction.v0.1";
 pub const HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION: &str = "super-git.history-edit-undo.v0.1";
 pub const HISTORY_EDIT_EXECUTION_RECORD_SCHEMA_VERSION: &str =
     "super-git.history-edit-execution.v0.1";
@@ -1081,4 +1082,71 @@ pub struct UndoResult {
     pub plan_id: String,
     pub undone: bool,
     pub effects: Vec<String>,
+}
+
+/// Stage 7 충돌 예측 결과. 계약: docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md
+/// plan이 아니라 read 결과다: plan_id도, execute/undo 대상도 없다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictPrediction {
+    pub schema_version: String,
+    /// 지금은 "merge"만. rebase-step 재사용 시 같은 shape에 kind만 늘어난다.
+    pub prediction_kind: String,
+    pub repository: PathBuf,
+    pub inputs: ConflictPredictionInputs,
+    pub prediction: ConflictPredictionOutcome,
+    /// 과장 방지용 고정 문구(예: merge 예측 ≠ rebase 트랜스크립트). advisory.
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictPredictionInputs {
+    pub ours: ResolvedRev,
+    pub theirs: ResolvedRev,
+    /// `git merge-base`의 best ancestor 하나. merge-tree 내부 recursive 병합은
+    /// 여러 base를 합칠 수 있으므로 informational이다.
+    pub merge_base: Option<String>,
+}
+
+/// 호출자가 준 rev 표기와 그것이 풀린 commit oid를 함께 보존한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolvedRev {
+    pub rev: String,
+    pub commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictPredictionOutcome {
+    /// "clean" | "conflicted". 충돌 예측은 성공한 예측이지 에러가 아니다.
+    pub status: String,
+    /// 병합 결과 트리 oid. conflicted면 충돌 마커가 들어간 트리다.
+    pub merged_tree: String,
+    pub conflicted_files: Vec<PredictedConflictFile>,
+    pub notes: Vec<ConflictPredictionNote>,
+}
+
+/// 한 경로의 충돌을 index stage 존재 여부로 기계 판별 가능하게 묶는다.
+/// stage 1=base, 2=ours, 3=theirs. 빠진 stage가 충돌 모양을 말해준다
+/// (예: modify/delete는 한쪽 stage가 없다). 소비자는 메시지가 아니라
+/// stage 존재 여부로 분기해야 한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PredictedConflictFile {
+    pub path: String,
+    pub stages: Vec<PredictedConflictStage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PredictedConflictStage {
+    pub stage: u8,
+    pub mode: String,
+    pub object: String,
+}
+
+/// merge-tree informational stanza. kind 토큰("CONFLICT (contents)" 등)과
+/// paths는 로케일과 무관하게 안정적이고, message는 번역되는 자유 텍스트라
+/// 표시 전용이다. 어떤 코드도 message를 파싱/해시/분기에 쓰면 안 된다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictPredictionNote {
+    pub kind: String,
+    pub paths: Vec<String>,
+    pub message: String,
 }
