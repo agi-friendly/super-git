@@ -303,6 +303,27 @@ fn rebase_conflict_is_ok_true_and_stops_at_first_conflict() {
 }
 
 #[test]
+fn rebase_root_commit_in_range_is_structured_error() {
+    // The core rejects a root commit in the replay range (it has no parent to
+    // model a 3-way step against). An orphan HEAD whose root is not reachable
+    // from --base puts exactly that root into base..HEAD. Pin the surfaced JSON.
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let _ = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
+    git(tmp.path(), &["checkout", "-q", "--orphan", "island"]);
+    git(tmp.path(), &["rm", "-rfq", "."]);
+    write(tmp.path(), "other.txt", "island\n");
+    git(tmp.path(), &["add", "."]);
+    git(tmp.path(), &["commit", "-q", "-m", "island root"]);
+
+    // base=onto is unrelated to the island root, so onto..HEAD is just that root.
+    let (json, success) = predict_rebase_json(tmp.path(), &["--base", "onto", "--onto", "onto"]);
+
+    assert!(!success);
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "root_commit_in_range");
+}
+
+#[test]
 fn rebase_unknown_onto_is_structured_rev_not_found() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let base = repo_with_chain(tmp.path(), (3, "ONTO"), &[(1, "C1")]);
