@@ -148,11 +148,17 @@ published state: the preview embeds a kept-commit replay prediction (Stage 7
 machinery) that is plan_id-bound, a predicted conflict blocks the plan, and a
 clean prediction still always requires the confirmation artifact with the
 typed phrase `drop <N> commit(s) from <branch_ref> at <tip>`. Drop execute
-requires a clean working tree (untracked counts as dirty), verifies the
-rebuilt tip's tree against the prediction's `final_tree` oracle before the ref
-moves, and after the CAS ref move synchronizes the index and working tree to
-the new tip with `git read-tree -u --reset` (no hooks, no ref writes, sparse
-cones respected). A failure after the ref moved but in or after that sync is
+requires a clean working tree (untracked counts as dirty), and because
+ignored files are invisible to that status-based gate while
+`read-tree -u --reset` would silently overwrite an ignored file on a path
+the new tip tracks, it additionally hard-blocks ignored-path collisions
+(exact match or file/directory squatting, field `ignored_path_collision`)
+before the ref moves — non-colliding ignored files such as build output stay
+allowed. It verifies the rebuilt tip's tree against the prediction's
+`final_tree` oracle before the ref moves, and after the CAS ref move
+synchronizes the index and working tree to the new tip with
+`git read-tree -u --reset` (no hooks, no ref writes, sparse cones
+respected). A failure after the ref moved but in or after that sync is
 not called a rollback: it surfaces as `execute_partial_failure` with the
 observed ref tip, sync progress, and a `safe_next` hint, and the execution
 record stays in `intent` state so undo and re-execute both fail closed.

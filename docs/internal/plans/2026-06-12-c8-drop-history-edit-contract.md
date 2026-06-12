@@ -204,10 +204,25 @@ The sync step is **`git read-tree -u --reset <new tip>`**, chosen over
 The clean-working-tree gate is checked with the same status read
 (`--untracked-files=all`): untracked files count as dirty, because a
 dropped commit that deleted a path revives that path on sync and would
-silently overwrite an untracked file sitting there. Ignored files are not
-checked (they are invisible to `read-tree -u`, which only realizes tracked
-paths). The execute-side rejection surfaces as an
-`execute_precondition_mismatch` on field `working_tree_clean`.
+silently overwrite an untracked file sitting there. The execute-side
+rejection surfaces as an `execute_precondition_mismatch` on field
+`working_tree_clean`.
+
+**Ignored files are a separate gate, not a free pass.** The status read
+does not list ignored files, but `read-tree -u --reset` silently overwrites
+an ignored untracked file whose path the new tip tracks (spike-verified:
+force-add an ignored file in commit A, delete it in commit B, drop B with a
+local ignored file at that path — the local content is replaced). Blocking
+every ignored file would break normal workflows (`node_modules`, build
+output), so execute instead runs a targeted collision check after `new_tip`
+is built and **before the CAS ref move**: ignored untracked paths
+(`ls-files -i -o --exclude-standard -z`) are compared against the new tip's
+tracked paths (`ls-tree -r -z --name-only`), and an exact path match, an
+ignored file squatting on a new tracked directory, or an ignored directory
+squatting on a new tracked file all hard-block as
+`execute_precondition_mismatch` on field `ignored_path_collision`. A
+refusal changes nothing — no ref, index, or working-tree write has happened
+yet.
 
 Failure envelope: once the ref has moved, any failure in sync or in
 completing the execution record surfaces as code
@@ -297,7 +312,9 @@ Drop-specific deltas:
       drop keeps original ids), `final_tree` verified both before the ref
       moves and in post-verify, CAS ref move, `read-tree -u --reset`
       working-tree synchronization with a clean-tree hard gate
-      (untracked counts as dirty), rollback before sync starts, and
+      (untracked counts as dirty) plus the ignored-path collision gate
+      (safety follow-up — see the sync-primitive section), rollback before
+      sync starts, and
       `execute_partial_failure` envelopes after the ref moved
       (record stays `intent`, undo/re-execute fail closed). Undoing a drop
       execution fails closed with `unsupported_undo_kind` until C8-drop-D.

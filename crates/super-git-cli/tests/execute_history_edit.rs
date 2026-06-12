@@ -792,6 +792,147 @@ fn tampered_prediction_final_tree_is_rejected_without_moving_ref() {
     assert!(repo.join("b.txt").exists());
 }
 
+/// C8-drop-C safety follow-up의 재현 shape: .gitignore에 등록된 파일이 한
+/// 커밋에서 force-add됐다가 다음 커밋에서 삭제된 체인. 삭제 커밋을 drop하면
+/// 새 tip이 그 ignored 경로를 tracked로 부활시키므로, 같은 자리에 로컬
+/// ignored 파일이 있으면 status 기반 clean gate를 통과한 채 sync가 덮어쓸
+/// 수 있다 — collision 검사가 막아야 한다.
+fn ignored_revival_repo(temp: &Path) -> (std::path::PathBuf, Vec<String>) {
+    let repo = temp.join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.name", "committer"]);
+    git(&repo, &["config", "user.email", "committer@example.com"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(repo.join(".gitignore"), "ignored.txt\nscratch.log\n").expect("gitignore");
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-q", "-m", "initial"]);
+    git(&repo, &["checkout", "-q", "-b", "feature/login"]);
+    std::fs::write(repo.join("ignored.txt"), "tracked precious\n").expect("write");
+    git(&repo, &["add", "-f", "ignored.txt"]);
+    git(&repo, &["commit", "-q", "-m", "force-add ignored.txt"]);
+    commit_file(&repo, "a.txt", "a\n", "unrelated");
+    git(&repo, &["rm", "-q", "ignored.txt"]);
+    git(&repo, &["commit", "-q", "-m", "delete ignored.txt"]);
+    let oids = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (repo, oids)
+}
+
+fn drop_delete_commit_items(oids: &[String]) -> String {
+    format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}}]"#,
+        oids[0], oids[1], oids[2]
+    )
+}
+
+#[test]
+fn drop_refuses_when_an_ignored_file_squats_on_a_revived_path() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = ignored_revival_repo(tmp.path());
+    // The user's local ignored file: invisible to the status-based clean gate.
+    std::fs::write(repo.join("ignored.txt"), "LOCAL PRECIOUS DATA\n").expect("local file");
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        ),
+        "",
+        "the ignored file must be invisible to the status gate for this regression to bite"
+    );
+    let plan = preview_plan(
+        &repo,
+        "main",
+        &instructions_doc(&drop_delete_commit_items(&oids)),
+    );
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert!(
+        cause_contains(&json, "ignored_path_collision"),
+        "collision must be named: {json}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD"]),
+        tip_before,
+        "refusal must happen before the ref moves"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("ignored.txt")).expect("read"),
+        "LOCAL PRECIOUS DATA\n",
+        "the local ignored file must survive byte-identical"
+    );
+}
+
+#[test]
+fn drop_allows_ignored_files_off_the_new_tip_paths() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = ignored_revival_repo(tmp.path());
+    // A normal ignored file (think node_modules): not tracked in the new tip,
+    // so it must not block the drop.
+    std::fs::write(repo.join("scratch.log"), "build noise\n").expect("scratch");
+    let plan = preview_plan(
+        &repo,
+        "main",
+        &instructions_doc(&drop_delete_commit_items(&oids)),
+    );
+
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("scratch.log")).expect("read"),
+        "build noise\n",
+        "non-colliding ignored files survive the sync"
+    );
+    // Dropping the delete commit revives the tracked file content.
+    assert_eq!(
+        std::fs::read_to_string(repo.join("ignored.txt")).expect("read"),
+        "tracked precious\n"
+    );
+}
+
+#[test]
+fn drop_refuses_when_an_ignored_directory_squats_on_a_revived_file() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = ignored_revival_repo(tmp.path());
+    // D/F collision: an ignored directory occupies the path the new tip wants
+    // as a tracked file.
+    std::fs::create_dir(repo.join("ignored.txt")).expect("mkdir");
+    std::fs::write(repo.join("ignored.txt/note.md"), "inside\n").expect("write");
+    let plan = preview_plan(
+        &repo,
+        "main",
+        &instructions_doc(&drop_delete_commit_items(&oids)),
+    );
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert!(cause_contains(&json, "ignored_path_collision"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("ignored.txt/note.md")).expect("read"),
+        "inside\n",
+        "the ignored directory must survive untouched"
+    );
+}
+
 #[test]
 fn stale_drop_plan_after_new_commit_is_rejected() {
     let tmp = tempfile::tempdir().expect("temp");

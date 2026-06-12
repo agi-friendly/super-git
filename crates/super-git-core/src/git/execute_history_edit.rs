@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -130,6 +130,11 @@ pub fn execute_history_edit_plan(
     let new_tree = read_tree_oid(&git, &worktree_root, &new_tip)?;
     if new_tree != expected_tree {
         return mismatch("pre_move_verify.final_tree", &expected_tree, &new_tree);
+    }
+    // 새 tip이 부활시키는 tracked 경로 위의 ignored 파일은 sync가 덮어쓴다 —
+    // new_tip이 정해진 지금, ref가 움직이기 전에 막는다.
+    if drop_prediction.is_some() {
+        ensure_no_ignored_path_collisions(&git, &worktree_root, &new_tip)?;
     }
 
     let record_path = execution_record_path(&fresh, &branch_ref);
@@ -966,8 +971,9 @@ fn read_status_signature(git: &Git, worktree_root: &Path) -> Result<String> {
 }
 
 /// drop execute의 하드 게이트(C8-drop 계약): sync가 사용자 변경을 덮어쓸 수
-/// 없도록 tracked 변경과 untracked 모두 없어야 한다. ignored는 보지 않는다 —
-/// read-tree -u는 ignored 경로를 실체화하지 않는다.
+/// 없도록 tracked 변경과 untracked 모두 없어야 한다. ignored 파일은 status에
+/// 잡히지 않아 이 게이트가 보지 못한다 — 새 tip의 tracked 경로와 충돌하는
+/// ignored 경로는 `ensure_no_ignored_path_collisions`가 따로 막는다.
 fn ensure_clean_working_tree(git: &Git, worktree_root: &Path) -> Result<()> {
     let status = read_status_signature(git, worktree_root)?;
     if status.is_empty() {
@@ -978,6 +984,75 @@ fn ensure_clean_working_tree(git: &Git, worktree_root: &Path) -> Result<()> {
         "clean working tree and index (including untracked)",
         &format!("{} dirty or untracked path(s)", status.lines().count()),
     )
+}
+
+/// drop sync의 ignored-경로 빈틈을 막는다: `read-tree -u --reset`은 새 tip이
+/// tracked로 부활시키는 경로 위의 ignored untracked 파일을 조용히 덮어쓴다
+/// (예: 한 커밋이 force-add했던 ignored 파일을 지운 커밋을 drop하는 경우 —
+/// 스파이크 실측). 모든 ignored를 막으면 node_modules 같은 정상 사용이
+/// 깨지므로, 새 tip의 tracked 경로와 충돌하는 ignored 경로만 hard block한다:
+/// 경로 일치, ignored 파일이 새 tracked 디렉터리 자리를 차지하는 경우,
+/// ignored 디렉터리가 새 tracked 파일 자리를 차지하는 경우. 반드시 CAS ref
+/// move 전에 실행되어 실패가 어떤 상태도 바꾸지 않는다.
+fn ensure_no_ignored_path_collisions(git: &Git, worktree_root: &Path, new_tip: &str) -> Result<()> {
+    let ignored_raw = git.run_bytes_in(
+        worktree_root,
+        ["ls-files", "-i", "-o", "--exclude-standard", "-z"],
+    )?;
+    let ignored = split_nul(&ignored_raw.stdout);
+    if ignored.is_empty() {
+        return Ok(());
+    }
+
+    let tracked_raw = git.run_bytes_in(
+        worktree_root,
+        ["ls-tree", "-r", "-z", "--name-only", new_tip],
+    )?;
+    let tracked: HashSet<&[u8]> = split_nul(&tracked_raw.stdout).into_iter().collect();
+    let mut tracked_dirs: HashSet<&[u8]> = HashSet::new();
+    for path in &tracked {
+        tracked_dirs.extend(dir_prefixes(path));
+    }
+
+    let mut collisions: Vec<&[u8]> = ignored
+        .into_iter()
+        .filter(|path| {
+            tracked.contains(path)
+                || tracked_dirs.contains(path)
+                || dir_prefixes(path).any(|prefix| tracked.contains(prefix))
+        })
+        .collect();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    collisions.sort();
+    let shown = collisions
+        .iter()
+        .take(5)
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    mismatch(
+        "ignored_path_collision",
+        "no ignored paths colliding with paths tracked in the new tip",
+        &format!("{} colliding path(s): {shown}", collisions.len()),
+    )
+}
+
+/// "a/b/c" → "a", "a/b" (경로의 모든 디렉터리 prefix, 바이트 단위 — `-z`
+/// 출력은 인코딩을 보장하지 않으므로 String 변환 없이 비교한다).
+fn dir_prefixes<'a>(path: &'a [u8]) -> impl Iterator<Item = &'a [u8]> + 'a {
+    path.iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte == b'/')
+        .map(move |(index, _)| &path[..index])
+}
+
+fn split_nul(bytes: &[u8]) -> Vec<&[u8]> {
+    bytes
+        .split(|byte| *byte == b'\0')
+        .filter(|path| !path.is_empty())
+        .collect()
 }
 
 /// C8-drop 계약의 sync primitive: `read-tree -u --reset`은 ref를 건드리지
@@ -1206,6 +1281,43 @@ mod tests {
         assert!(
             matches!(returned, SuperGitError::ExecutePlanInvalid { .. }),
             "original error is surfaced after a successful rollback"
+        );
+    }
+
+    #[test]
+    fn ignored_path_collision_catches_a_file_squatting_on_a_tracked_directory() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".gitignore"), "dir\n").expect("gitignore");
+        std::fs::create_dir_all(repo.join("dir")).expect("mkdir");
+        std::fs::write(repo.join("dir/file.txt"), "x").expect("write");
+        git(&repo, &["add", "-f", ".gitignore", "dir/file.txt"]);
+        git(&repo, &["commit", "-q", "-m", "c0"]);
+        let tip = rev(&repo, "HEAD");
+        // 워킹트리에서 tracked 디렉터리를 ignored **파일**로 바꿔치기: 새 tip이
+        // dir/file.txt를 실체화하려면 그 파일이 자리를 비켜야 한다.
+        std::fs::remove_dir_all(repo.join("dir")).expect("remove dir");
+        std::fs::write(repo.join("dir"), "squatter").expect("write squatter");
+
+        let err = super::ensure_no_ignored_path_collisions(&Git::default(), &repo, &tip)
+            .expect_err("a file squatting on a tracked directory must collide");
+
+        match err {
+            SuperGitError::ExecutePreconditionMismatch { field, actual, .. } => {
+                assert_eq!(field, "ignored_path_collision");
+                assert!(
+                    actual.contains("dir"),
+                    "must name the colliding path: {actual}"
+                );
+            }
+            other => panic!("expected ExecutePreconditionMismatch, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(repo.join("dir")).expect("read"),
+            "squatter",
+            "the check must not touch anything"
         );
     }
 
