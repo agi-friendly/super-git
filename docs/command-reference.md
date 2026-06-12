@@ -286,6 +286,42 @@ malformed or wrong-schema instruction input fails with `{ ok: false, error }`;
 content problems become blocked plans instead. Preview performs no writes;
 `reference_commands` are documentation only.
 
+## `predict merge --theirs <rev> [--ours <rev>]`
+
+Predicts what a merge of two commits would do, without planning or running
+anything. Contract:
+`docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md`.
+
+```bash
+super-git predict merge --theirs feature            # ours defaults to HEAD
+super-git predict merge --ours main --theirs feature
+```
+
+`predict` is a read verb, not a plan: the `super-git.conflict-prediction.v0.1`
+result has no `plan_id`, nothing to execute, and nothing to undo. A predicted
+conflict is a successful prediction, not an error:
+
+```json
+{ "prediction": { "status": "conflicted", "conflicted_files": [] } }
+```
+
+Per-file conflicts carry the index stages (1 = base, 2 = ours, 3 = theirs);
+missing stages identify the conflict shape mechanically, such as a
+modify/delete conflict having no stage 3. `notes[].kind` and `notes[].paths`
+are stable across locales; `notes[].message` is localized free text for
+display only.
+
+Only inputs that cannot be predicted over fail with `{ ok: false, error }`:
+`error.code` is `rev_not_found`, `no_merge_base`, `merge_tree_unsupported`
+(Git older than 2.38), or `merge_tree_output_unrecognized`.
+
+Prediction is commit-level and ignores the index and working tree, so a dirty
+tree does not block it; the result always carries a `limitations` list,
+including that a single merge prediction is not a rebase transcript. The
+underlying `git merge-tree --write-tree` never touches refs, the index, or the
+working tree, but may write unreferenced, gc-collectable objects into the
+object database.
+
 ## `execute --plan <file|-> [--confirmation <file|->]`
 
 Executes a previously previewed plan after re-validation.

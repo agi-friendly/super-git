@@ -64,6 +64,14 @@ Implemented today:
     `fixup` per commit), builds a tree-preserving rewrite plan
   - unpublished ranges produce an executable plan; published ranges produce a
     `preview_only` plan that requires a separate human confirmation artifact
+- `super-git predict merge --theirs <rev> [--ours <rev>]`
+  - predicts merge conflicts between two commits via `git merge-tree`,
+    reporting per-file conflicts by index stage; a predicted conflict is a
+    successful prediction, not an error
+  - a read verb, not a plan: no `plan_id`, nothing to execute or undo, and
+    never any automatic conflict resolution
+  - touches no refs, index, or working-tree state (it may write unreferenced,
+    gc-collectable objects into the object database)
 - `super-git execute --plan <file|-> [--confirmation <file|->]`
   - re-validates the plan and state before writing
   - executes only internal allowlisted actions: `stage_changes`, executable

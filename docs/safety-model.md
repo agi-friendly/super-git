@@ -103,6 +103,13 @@ worktree_remove
 history_edit
 ```
 
+`predict merge` is deliberately outside this boundary: it is a read verb with
+no plan, no execute, and no undo, and it never performs automatic conflict
+resolution. Its `git merge-tree --write-tree` backend touches no refs, index,
+working-tree, or config state, though it may write unreferenced,
+gc-collectable objects into the object database — the safety docs state that
+nuance instead of claiming an unqualified "read-only".
+
 `stage_changes` stages the unstaged/untracked pathset captured by `preview`,
 but only after `execute` confirms that the pathset and fingerprint still match.
 

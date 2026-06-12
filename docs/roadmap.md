@@ -224,7 +224,8 @@ Slicing direction:
 Contract checkpoint:
 `docs/internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md` (C9-0).
 The C9-A read-only prediction core (`super-git.conflict-prediction.v0.1`,
-single merge pair) exists in `super-git-core`; everything below it is open.
+single merge pair) and the C9-B `predict merge` CLI verb exist; everything
+below beyond that single pair is open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits

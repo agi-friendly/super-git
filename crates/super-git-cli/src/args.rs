@@ -44,6 +44,12 @@ pub enum Commands {
         command: PreviewCommands,
     },
 
+    /// Predict the outcome of a future operation without planning or running it.
+    Predict {
+        #[command(subcommand)]
+        command: PredictCommands,
+    },
+
     /// Execute a previously previewed plan after re-validation.
     Execute {
         /// Plan file to execute. Use '-' to read from stdin.
@@ -151,6 +157,22 @@ pub enum PreviewCommands {
         /// Omit it to get a read-only survey of the editable range.
         #[arg(long)]
         instructions: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PredictCommands {
+    /// Predict merge conflicts between two commits without touching refs,
+    /// the index, or the working tree. A predicted conflict is a successful
+    /// prediction, not an error.
+    Merge {
+        /// Side 1 of the merge. Defaults to HEAD.
+        #[arg(long)]
+        ours: Option<String>,
+
+        /// Side 2 of the merge: the branch, tag, or commit being merged in.
+        #[arg(long)]
+        theirs: String,
     },
 }
 

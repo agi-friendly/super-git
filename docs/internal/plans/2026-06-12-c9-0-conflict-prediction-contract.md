@@ -254,4 +254,8 @@ checkpoint.
 - [x] Tests: clean merge, textual content conflict (stage shape asserted),
       modify/delete stage-absence shape, unknown rev, unrelated histories
       (`no_merge_base`), localized-fixture parser unit tests.
-- [ ] CLI verb, inspect integration, rebase-chain prediction: later slices.
+- [x] C9-B: `super-git predict merge --theirs <rev> [--ours <rev>]` CLI verb
+      (ours defaults to HEAD; current repository only), JSON/human output,
+      integration tests for both outcome classes and every structured error
+      code reachable from the CLI.
+- [ ] Inspect integration, batch/rebase-chain prediction: later slices.
