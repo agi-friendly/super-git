@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::git::command::Git;
+use crate::git::conflict_prediction;
 use crate::git::history_edit::{
     self, HistoryEditCommit, HistoryEditProgram, HistoryEditScan, InstructionValidation,
 };
@@ -13,10 +15,10 @@ use crate::model::{
     HistoryEditInstructionsTemplate, HistoryEditOptions, HistoryEditPlan, HistoryEditPlanBranch,
     HistoryEditPlanCommit, HistoryEditPlanInstructionItem, HistoryEditPlanInstructions,
     HistoryEditPlanRange, HistoryEditPlanRepository, HistoryEditPlanWarning,
-    HistoryEditPrecondition, HistoryEditPublishedScan, HistoryEditResultSummaryView,
-    HistoryEditUndoPreview, HistoryEditUndoStrategy, PreviewConfirmation,
-    WorktreeReferenceCommands, HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION,
-    HISTORY_EDIT_PLAN_SCHEMA_VERSION,
+    HistoryEditPrecondition, HistoryEditPrediction, HistoryEditPredictionStep,
+    HistoryEditPublishedScan, HistoryEditResultSummaryView, HistoryEditUndoPreview,
+    HistoryEditUndoStrategy, PreviewConfirmation, WorktreeReferenceCommands,
+    HISTORY_EDIT_INSTRUCTIONS_SCHEMA_VERSION, HISTORY_EDIT_PLAN_SCHEMA_VERSION,
 };
 use crate::Result;
 
@@ -35,6 +37,7 @@ const INSTRUCTION_BLOCK_CODES: &[&str] = &[
     "instruction_message_empty",
     "instruction_message_unexpected",
     "instructions_no_effective_change",
+    "drop_with_fold_unsupported",
 ];
 
 pub fn preview_history_edit(
@@ -47,9 +50,11 @@ pub fn preview_history_edit(
     // Only malformed or wrong-schema instruction input is a hard error. Content
     // problems (unknown commit, wrong order) become blocked plans so an agent
     // can repair its list from the plan alone.
+    let mut has_drop = false;
     let validation = match instructions_bytes {
         Some(bytes) => {
             let document = history_edit::parse_instructions(bytes)?;
+            has_drop = document.items.iter().any(|item| item.op == "drop");
             Some(history_edit::validate_instructions(
                 &scan.range.commits,
                 &document,
@@ -58,13 +63,94 @@ pub fn preview_history_edit(
         None => None,
     };
 
-    Ok(build_plan(base, scan, validation))
+    // drop은 tree-changing이라 kept-commit replay 예측이 plan의 일부가 된다.
+    // scan/instruction block이 하나라도 있으면 예측하지 않는다: blocked plan
+    // 위의 예측은 소음이고, merge-in-range 같은 block에서는 parent 매핑
+    // 자체가 성립하지 않는다.
+    let prediction = match (&validation, has_drop) {
+        (Some(validation), true) if scan.blocks.is_empty() && validation.blocks.is_empty() => {
+            validation
+                .program
+                .as_ref()
+                .map(|program| predict_kept_replay(&scan, program))
+                .transpose()?
+        }
+        _ => None,
+    };
+
+    Ok(build_plan(base, scan, validation, has_drop, prediction))
+}
+
+/// drop을 제외한 kept 커밋들을 base 위에 replay 예측한다 (C8-drop 계약).
+/// step별 3-way base는 각 kept 커밋의 원래 parent다 — 드랍된 커밋일 수 있고,
+/// 그것이 올바른 cherry-pick 의미다(재생되는 patch는 parent..commit).
+fn predict_kept_replay(
+    scan: &HistoryEditScan,
+    program: &HistoryEditProgram,
+) -> Result<HistoryEditPrediction> {
+    // 선형 범위(oldest first)에서 i번째 커밋의 parent는 i-1번째, 첫 커밋의
+    // parent는 base다. merge commit은 scan block으로 이미 걸러져 있다.
+    let mut parent_of = std::collections::HashMap::new();
+    let mut previous = scan.range.base_commit.as_str();
+    for commit in &scan.range.commits {
+        parent_of.insert(commit.commit.as_str(), previous.to_string());
+        previous = commit.commit.as_str();
+    }
+
+    let mut dropped_commits = Vec::new();
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for step in &program.steps {
+        let parent = parent_of
+            .get(step.commit.as_str())
+            .expect("validated instruction commit is in range")
+            .clone();
+        if step.op == "drop" {
+            dropped_commits.push(step.commit.clone());
+        } else {
+            kept.push((step.commit.clone(), parent));
+        }
+    }
+
+    let git = Git::default();
+    let outcome = conflict_prediction::predict_replay_onto(
+        &git,
+        &scan.repository.worktree_root,
+        &scan.range.base_commit,
+        &kept,
+    )?;
+
+    let steps = outcome
+        .steps
+        .into_iter()
+        .map(|step| HistoryEditPredictionStep {
+            commit: step.commit,
+            parent: step.parent,
+            status: step.prediction.status,
+            merged_tree: step.prediction.merged_tree,
+            conflicted_files: step.prediction.conflicted_files,
+        })
+        .collect();
+
+    Ok(HistoryEditPrediction {
+        kind: "kept_commit_replay".to_string(),
+        status: if outcome.final_tree.is_some() {
+            "clean"
+        } else {
+            "conflicted"
+        }
+        .to_string(),
+        dropped_commits,
+        final_tree: outcome.final_tree,
+        steps,
+    })
 }
 
 fn build_plan(
     base: &str,
     scan: HistoryEditScan,
     validation: Option<InstructionValidation>,
+    has_drop: bool,
+    prediction: Option<HistoryEditPrediction>,
 ) -> HistoryEditPlan {
     let instructions_provided = validation.is_some();
     let instruction_blocks = validation
@@ -73,14 +159,39 @@ fn build_plan(
         .unwrap_or_default();
     let program = validation.and_then(|validation| validation.program);
 
+    // 충돌 예측은 자동 해결 대상이 아니라 hard block이다. 증거(충돌 커밋과
+    // per-file stage)를 같이 실어 에이전트가 어느 kept 커밋이 어디서
+    // 부딪히는지 plan만으로 보게 한다.
+    let prediction_blocks: Vec<history_edit::HistoryEditBlock> = prediction
+        .as_ref()
+        .filter(|prediction| prediction.status == "conflicted")
+        .map(|prediction| {
+            let conflicting = prediction
+                .steps
+                .last()
+                .expect("conflicted prediction records the conflicting step");
+            vec![history_edit::HistoryEditBlock {
+                code: "predicted_conflict".to_string(),
+                severity: "hard_block".to_string(),
+                details: Some(json!({
+                    "commit": conflicting.commit,
+                    "conflicted_files": conflicting.conflicted_files,
+                })),
+            }]
+        })
+        .unwrap_or_default();
+
     let mut block_codes: HashSet<String> =
         scan.blocks.iter().map(|block| block.code.clone()).collect();
     block_codes.extend(instruction_blocks.iter().map(|block| block.code.clone()));
+    block_codes.extend(prediction_blocks.iter().map(|block| block.code.clone()));
     let has_blocks = !block_codes.is_empty();
 
     let published_in_range = scan.range.commits.iter().any(|commit| commit.published);
 
     // Status is the single switch the rest of the plan reads from.
+    // drop은 published 여부와 무관하게 항상 confirmation-gated다(C8-drop 계약:
+    // content-deletion 의미론은 published와 직교한다).
     let status = if !instructions_provided {
         if scan.blocks.is_empty() {
             "survey"
@@ -89,17 +200,24 @@ fn build_plan(
         }
     } else if has_blocks {
         "blocked"
-    } else if published_in_range {
+    } else if has_drop || published_in_range {
         "preview_only"
     } else {
         "executable"
     };
 
     let requires_confirmation_artifact = status == "preview_only";
-    let executable = status == "executable" || status == "preview_only";
+    // C8-drop-B: drop plan은 confirmation 게이트까지 완성되지만 execute는
+    // C8-drop-C(fresh 예측 재검증 + final_tree post-verify + 워킹트리 동기화)
+    // 전까지 지원되지 않는다.
+    let executable = (status == "executable" || status == "preview_only") && !has_drop;
 
-    let blocked_reasons = blocked_reasons(&scan, &instruction_blocks);
-    let suggested_super_git_command = suggested_command(status, base);
+    let blocked_reasons = blocked_reasons(&scan, &instruction_blocks, &prediction_blocks);
+    let suggested_super_git_command = if has_drop {
+        None
+    } else {
+        suggested_command(status, base)
+    };
     let execution = HistoryEditExecution {
         status: status.to_string(),
         execute_supported: executable,
@@ -110,9 +228,14 @@ fn build_plan(
     };
 
     let risk = ActionRisk {
-        severity: if published_in_range { "high" } else { "medium" }.to_string(),
+        severity: if published_in_range || has_drop {
+            "high"
+        } else {
+            "medium"
+        }
+        .to_string(),
         reversibility: "reversible_if_unchanged".to_string(),
-        requires_human_confirmation: published_in_range,
+        requires_human_confirmation: published_in_range || has_drop,
     };
 
     let branch = scan.branch.as_ref().map(|branch| HistoryEditPlanBranch {
@@ -166,18 +289,43 @@ fn build_plan(
     });
 
     let confirmation = if requires_confirmation_artifact {
-        Some(PreviewConfirmation {
-            required_before_execute: true,
-            reason_codes: vec![
+        let dropped_count = prediction
+            .as_ref()
+            .map(|prediction| prediction.dropped_commits.len())
+            .unwrap_or(0);
+        let mut reason_codes = Vec::new();
+        if has_drop {
+            reason_codes.push("tree_changing_drop".to_string());
+        }
+        if published_in_range {
+            reason_codes.extend([
                 "rewrites_published_commits".to_string(),
                 "remote_branches_will_diverge".to_string(),
                 "local_undo_does_not_unpublish".to_string(),
-            ],
-            human_prompt: format!("Rewrite published history on {branch_label}?"),
-            required_phrase: scan
-                .branch
-                .as_ref()
-                .map(|branch| confirmation_phrase(&branch.ref_name, &branch.tip_commit)),
+            ]);
+        }
+        // 한 plan에 phrase는 하나: drop이 있으면 가장 위험한 의미(drop)를
+        // 이름 붙인 phrase가 published phrase를 대신한다(reason code는 둘 다).
+        let (human_prompt, required_phrase) = if has_drop {
+            (
+                format!("Drop {dropped_count} commit(s) from {branch_label}?"),
+                scan.branch.as_ref().map(|branch| {
+                    drop_confirmation_phrase(dropped_count, &branch.ref_name, &branch.tip_commit)
+                }),
+            )
+        } else {
+            (
+                format!("Rewrite published history on {branch_label}?"),
+                scan.branch
+                    .as_ref()
+                    .map(|branch| confirmation_phrase(&branch.ref_name, &branch.tip_commit)),
+            )
+        };
+        Some(PreviewConfirmation {
+            required_before_execute: true,
+            reason_codes,
+            human_prompt,
+            required_phrase,
         })
     } else {
         None
@@ -214,13 +362,14 @@ fn build_plan(
         instructions,
         instructions_template,
         result_summary,
-        preconditions: preconditions(&block_codes, instructions_provided),
+        prediction,
+        preconditions: preconditions(&block_codes, instructions_provided, has_drop),
         execution,
         risk,
         confirmation,
         warnings,
         effects: effects(status, program.as_ref(), &branch_label),
-        limitations: limitations(),
+        limitations: limitations(has_drop),
         reference_commands: WorktreeReferenceCommands {
             semantics: "documentation_only".to_string(),
             never_execute_directly: true,
@@ -231,23 +380,8 @@ fn build_plan(
                 base.to_string(),
             ]],
         },
-        undo_strategy: HistoryEditUndoStrategy {
-            kind: "restore_branch_tip_snapshot".to_string(),
-            deletes_branch: false,
-            deletes_history: false,
-        },
-        undo_preview: HistoryEditUndoPreview {
-            kind: "restore_branch_tip_snapshot".to_string(),
-            available_after_execute: executable,
-            limitations: vec![
-                "Undo refuses if the branch tip moved after execute.".to_string(),
-                "Undo requires the previous tip commit to still exist locally (reflog/gc window)."
-                    .to_string(),
-                "Undo restores the branch pointer only; it never touches working-tree files."
-                    .to_string(),
-                "Undo does not un-publish anything that was pushed.".to_string(),
-            ],
-        },
+        undo_strategy: undo_strategy(has_drop),
+        undo_preview: undo_preview(has_drop, executable),
     };
     plan.plan_id = compute_history_edit_plan_id(&plan);
     plan
@@ -289,6 +423,7 @@ fn result_summary_view(program: &HistoryEditProgram) -> HistoryEditResultSummary
         commits_after: program.summary.commits_after,
         messages_changed: program.summary.messages_changed,
         commits_folded: program.summary.commits_folded,
+        commits_dropped: program.summary.commits_dropped,
         final_tree_unchanged: program.summary.final_tree_unchanged,
     }
 }
@@ -296,10 +431,12 @@ fn result_summary_view(program: &HistoryEditProgram) -> HistoryEditResultSummary
 fn blocked_reasons(
     scan: &HistoryEditScan,
     instruction_blocks: &[history_edit::HistoryEditBlock],
+    prediction_blocks: &[history_edit::HistoryEditBlock],
 ) -> Vec<HistoryEditBlockedReason> {
     scan.blocks
         .iter()
         .chain(instruction_blocks.iter())
+        .chain(prediction_blocks.iter())
         .map(|block| HistoryEditBlockedReason {
             code: block.code.clone(),
             severity: block.severity.clone(),
@@ -340,6 +477,7 @@ fn suggested_command(status: &str, base: &str) -> Option<Vec<String>> {
 fn preconditions(
     block_codes: &HashSet<String>,
     instructions_provided: bool,
+    has_drop: bool,
 ) -> Vec<HistoryEditPrecondition> {
     let mut preconditions: Vec<HistoryEditPrecondition> = [
         ("head_attached_to_local_branch", &["head_detached"][..]),
@@ -379,6 +517,36 @@ fn preconditions(
         code: "instructions_match_range".to_string(),
         status: instructions_status.to_string(),
     });
+
+    // drop 전용 precondition 두 개. 상태값은 의도적으로 비휘발적이다:
+    // 워킹트리 청결 같은 휘발 상태를 여기 넣으면 plan_id가 흔들려서
+    // "preview는 dirty, execute는 clean" 같은 정상 흐름이 깨진다.
+    let replay_status = if !has_drop {
+        "not_applicable"
+    } else if block_codes.contains("predicted_conflict") {
+        "blocked"
+    } else if block_codes.is_empty() {
+        "passed"
+    } else {
+        // 다른 block 때문에 예측 자체를 돌리지 않았다.
+        "not_applicable"
+    };
+    preconditions.push(HistoryEditPrecondition {
+        code: "replay_predicts_no_conflicts".to_string(),
+        status: replay_status.to_string(),
+    });
+    // tree-preserving op들과 달리 drop execute는 clean 워킹트리를 하드
+    // 요구하고 실행 후 워킹트리를 새 tip으로 동기화한다(C8-drop 계약).
+    // 시점은 execute다 — preview는 read-only라 dirty를 막지 않는다.
+    preconditions.push(HistoryEditPrecondition {
+        code: "working_tree_clean_required_at_execute".to_string(),
+        status: if has_drop {
+            "enforced_at_execute"
+        } else {
+            "not_applicable"
+        }
+        .to_string(),
+    });
     preconditions
 }
 
@@ -395,6 +563,23 @@ fn blocked_or_passed(block_codes: &HashSet<String>, blocking_codes: &[&str]) -> 
 
 fn effects(status: &str, program: Option<&HistoryEditProgram>, branch_label: &str) -> Vec<String> {
     match (status, program) {
+        // tree-changing(drop) plan은 효과 설명도 달라야 한다: 트리가 보존된다는
+        // 문장은 거짓이 되고, execute의 워킹트리 동기화가 새로 등장한다.
+        ("executable" | "preview_only", Some(program)) if program.summary.commits_dropped > 0 => {
+            let summary = &program.summary;
+            vec![
+                format!(
+                    "Rewrite {} commits on {} into {} commits, removing {} commit's patch(es) from the final history.",
+                    summary.commits_before,
+                    branch_label,
+                    summary.commits_after,
+                    summary.commits_dropped
+                ),
+                "Change the final tree: the dropped changes disappear from the branch tip.".to_string(),
+                "Preserve every author name, email, and date on kept commits.".to_string(),
+                "Execute will require a clean working tree and will synchronize it to the new tip.".to_string(),
+            ]
+        }
         ("executable" | "preview_only", Some(program)) => {
             let summary = &program.summary;
             vec![
@@ -419,12 +604,65 @@ fn effects(status: &str, program: Option<&HistoryEditProgram>, branch_label: &st
     }
 }
 
-fn limitations() -> Vec<String> {
-    vec![
+fn limitations(has_drop: bool) -> Vec<String> {
+    let mut limitations = vec![
         "Published detection only sees local remote-tracking refs from the last fetch.".to_string(),
         "Undo depends on the previous tip staying reachable in the local object store.".to_string(),
         "Rewritten commits do not preserve GPG/SSH signatures from the originals.".to_string(),
-    ]
+    ];
+    if has_drop {
+        limitations.extend([
+            "Drop plans cannot execute yet: C8-drop-C lands execute with final-tree post-verification and working-tree synchronization.".to_string(),
+            "The dropped commits' objects may remain in the object database; drop changes what the branch points at, not what exists.".to_string(),
+            "The replay prediction is commit-level and ignores the index and working tree.".to_string(),
+        ]);
+    }
+    limitations
+}
+
+fn undo_strategy(has_drop: bool) -> HistoryEditUndoStrategy {
+    HistoryEditUndoStrategy {
+        // drop execute는 워킹트리를 동기화하므로 undo도 대칭으로 복원해야
+        // 한다. 새 kind라 구버전 바이너리는 fail-closed로 거부한다.
+        kind: if has_drop {
+            "restore_branch_tip_and_worktree"
+        } else {
+            "restore_branch_tip_snapshot"
+        }
+        .to_string(),
+        deletes_branch: false,
+        deletes_history: false,
+    }
+}
+
+fn undo_preview(has_drop: bool, executable: bool) -> HistoryEditUndoPreview {
+    if has_drop {
+        HistoryEditUndoPreview {
+            kind: "restore_branch_tip_and_worktree".to_string(),
+            available_after_execute: executable,
+            limitations: vec![
+                "Undo refuses if the branch tip moved after execute.".to_string(),
+                "Undo requires the previous tip commit to still exist locally (reflog/gc window)."
+                    .to_string(),
+                "Undo requires a clean working tree, restores the branch pointer, and synchronizes the working tree back to the previous tip.".to_string(),
+                "The dropped commits' objects may remain in the object database; undo neither depends on deleting them nor attempts to.".to_string(),
+                "Undo does not un-publish anything that was pushed.".to_string(),
+            ],
+        }
+    } else {
+        HistoryEditUndoPreview {
+            kind: "restore_branch_tip_snapshot".to_string(),
+            available_after_execute: executable,
+            limitations: vec![
+                "Undo refuses if the branch tip moved after execute.".to_string(),
+                "Undo requires the previous tip commit to still exist locally (reflog/gc window)."
+                    .to_string(),
+                "Undo restores the branch pointer only; it never touches working-tree files."
+                    .to_string(),
+                "Undo does not un-publish anything that was pushed.".to_string(),
+            ],
+        }
+    }
 }
 
 /// The deterministic typed phrase a published-range history_edit confirmation
@@ -432,6 +670,12 @@ fn limitations() -> Vec<String> {
 /// (which enforces it), so the two can never drift.
 pub fn confirmation_phrase(branch_ref: &str, tip_commit: &str) -> String {
     format!("rewrite published history on {branch_ref} at {tip_commit}")
+}
+
+/// drop plan의 deterministic confirmation phrase (C8-drop 계약). published
+/// phrase와 같은 anti-drift 패턴: preview가 광고하고 execute가 강제한다.
+pub fn drop_confirmation_phrase(count: usize, branch_ref: &str, tip_commit: &str) -> String {
+    format!("drop {count} commit(s) from {branch_ref} at {tip_commit}")
 }
 
 pub fn compute_history_edit_plan_id(plan: &HistoryEditPlan) -> String {
@@ -467,6 +711,9 @@ pub fn compute_history_edit_plan_id(plan: &HistoryEditPlan) -> String {
         published_scan: &plan.published_scan,
         instructions: plan.instructions.as_ref(),
         result_summary: plan.result_summary.as_ref(),
+        // 예측 증거는 advisory가 아니다: final_tree가 execute의 post-verify
+        // 오라클이므로 통째로 plan_id에 바인딩한다(변조 = plan_id mismatch).
+        prediction: plan.prediction.as_ref(),
         preconditions: &plan.preconditions,
         execution: HistoryEditExecutionHashInput {
             status: &plan.execution.status,
@@ -547,6 +794,7 @@ struct HistoryEditPlanHashInput<'a> {
     published_scan: &'a HistoryEditPublishedScan,
     instructions: Option<&'a HistoryEditPlanInstructions>,
     result_summary: Option<&'a HistoryEditResultSummaryView>,
+    prediction: Option<&'a HistoryEditPrediction>,
     preconditions: &'a [HistoryEditPrecondition],
     execution: HistoryEditExecutionHashInput<'a>,
     risk: &'a ActionRisk,
@@ -818,6 +1066,297 @@ mod tests {
             .map(|reason| reason.code.as_str())
             .collect();
         assert!(codes.contains(&"head_detached"));
+    }
+
+    // ---- C8-drop-B: drop preview ----
+
+    /// f.txt에 의존적 편집을 가진 체인: c2와 c3가 같은 줄을 잇달아 바꾼다.
+    /// c2를 drop하면 c3 replay가 충돌한다.
+    fn dependent_repo(temp: &Path) -> (std::path::PathBuf, Vec<String>) {
+        let repo = temp.join("repo");
+        init_repo(&repo);
+        std::fs::write(repo.join("f.txt"), "a\nb\nc\n").expect("write");
+        git(&repo, &["add", "f.txt"]);
+        git(&repo, &["commit", "-q", "-m", "add f"]);
+        git(&repo, &["checkout", "-q", "-b", "feature/dep"]);
+        commit_file(&repo, "a.txt", "a\n", "c1 unrelated");
+        std::fs::write(repo.join("f.txt"), "X\nb\nc\n").expect("write");
+        git(&repo, &["commit", "-q", "-am", "c2 line1 X"]);
+        std::fs::write(repo.join("f.txt"), "Y\nb\nc\n").expect("write");
+        git(&repo, &["commit", "-q", "-am", "c3 line1 Y"]);
+        let oids = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+        (repo, oids)
+    }
+
+    #[test]
+    fn drop_clean_is_confirmation_gated_preview_only() {
+        let temp = tempfile::tempdir().expect("temp");
+        // feature_repo의 세 커밋은 서로 다른 파일을 만들므로 어떤 drop도 clean이다.
+        let (repo, oids) = feature_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        // drop은 published 여부와 무관하게 항상 confirmation-gated.
+        assert_eq!(plan.execution.status, "preview_only");
+        assert!(plan.execution.requires_confirmation_artifact);
+        // C8-drop-B에서는 execute 미지원: 정직하게 광고한다.
+        assert!(!plan.execution.execute_supported);
+        assert!(plan.execution.suggested_super_git_command.is_none());
+        assert_eq!(plan.risk.severity, "high");
+        assert!(plan.risk.requires_human_confirmation);
+
+        let confirmation = plan.confirmation.expect("confirmation");
+        assert_eq!(confirmation.reason_codes, vec!["tree_changing_drop"]);
+        let tip = git_stdout(&repo, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            confirmation.required_phrase.as_deref(),
+            Some(format!("drop 1 commit(s) from refs/heads/feature/login at {tip}").as_str())
+        );
+
+        // 예측 증거: clean, kept 2 step, final_tree는 드랍된 파일이 없는 트리.
+        let prediction = plan.prediction.expect("prediction");
+        assert_eq!(prediction.kind, "kept_commit_replay");
+        assert_eq!(prediction.status, "clean");
+        assert_eq!(prediction.dropped_commits, vec![oids[1].clone()]);
+        assert_eq!(prediction.steps.len(), 2);
+        // 두 번째 kept 커밋(c.txt)의 3-way base는 원래 parent(드랍된 b 커밋)다.
+        assert_eq!(prediction.steps[1].parent, oids[1]);
+        let final_tree = prediction.final_tree.expect("final tree");
+        let listing = git_stdout(&repo, &["ls-tree", "--name-only", &final_tree]);
+        assert!(listing.contains("c.txt"));
+        assert!(
+            !listing.contains("b.txt"),
+            "dropped patch must vanish: {listing}"
+        );
+
+        let summary = plan.result_summary.expect("summary");
+        assert_eq!(summary.commits_dropped, 1);
+        assert_eq!(summary.commits_after, 2);
+        assert!(!summary.final_tree_unchanged);
+
+        // undo는 워킹트리 동기화 포함 kind를 광고한다(구버전 fail-closed).
+        assert_eq!(plan.undo_strategy.kind, "restore_branch_tip_and_worktree");
+        assert_eq!(plan.undo_preview.kind, "restore_branch_tip_and_worktree");
+        assert!(!plan.undo_preview.available_after_execute);
+
+        let precondition_status = |code: &str| {
+            plan.preconditions
+                .iter()
+                .find(|precondition| precondition.code == code)
+                .map(|precondition| precondition.status.clone())
+                .unwrap_or_else(|| panic!("missing precondition {code}"))
+        };
+        assert_eq!(
+            precondition_status("replay_predicts_no_conflicts"),
+            "passed"
+        );
+        assert_eq!(
+            precondition_status("working_tree_clean_required_at_execute"),
+            "enforced_at_execute"
+        );
+    }
+
+    #[test]
+    fn drop_predicted_conflict_is_blocked_with_step_evidence() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = dependent_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        assert_eq!(plan.execution.status, "blocked");
+        assert!(!plan.execution.execute_supported);
+        assert!(plan.confirmation.is_none());
+        let reason = plan
+            .execution
+            .blocked_reasons
+            .iter()
+            .find(|reason| reason.code == "predicted_conflict")
+            .expect("predicted_conflict block");
+        assert_eq!(reason.details["commit"], oids[2]);
+        assert_eq!(reason.details["conflicted_files"][0]["path"], "f.txt");
+
+        let prediction = plan.prediction.expect("prediction evidence stays visible");
+        assert_eq!(prediction.status, "conflicted");
+        assert!(prediction.final_tree.is_none());
+        // 충돌 step의 per-file stage shape가 그대로 실린다.
+        let conflicting = prediction.steps.last().expect("conflicting step");
+        assert_eq!(conflicting.status, "conflicted");
+        assert!(!conflicting.conflicted_files.is_empty());
+        let precondition = plan
+            .preconditions
+            .iter()
+            .find(|precondition| precondition.code == "replay_predicts_no_conflicts")
+            .expect("precondition");
+        assert_eq!(precondition.status, "blocked");
+    }
+
+    #[test]
+    fn drop_with_fold_is_blocked_without_prediction() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"squash","message":"m"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        assert_eq!(plan.execution.status, "blocked");
+        let codes: Vec<&str> = plan
+            .execution
+            .blocked_reasons
+            .iter()
+            .map(|reason| reason.code.as_str())
+            .collect();
+        assert!(codes.contains(&"drop_with_fold_unsupported"));
+        assert!(plan.prediction.is_none());
+    }
+
+    #[test]
+    fn drop_everything_predicts_the_base_tree() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"drop"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        assert_eq!(plan.execution.status, "preview_only");
+        let prediction = plan.prediction.expect("prediction");
+        assert_eq!(prediction.status, "clean");
+        assert!(prediction.steps.is_empty());
+        // 전체 drop: 예측 최종 트리는 base의 트리 그대로(범위 abandon 의미).
+        let base_tree = git_stdout(&repo, &["rev-parse", "main^{tree}"]);
+        assert_eq!(prediction.final_tree.as_deref(), Some(base_tree.as_str()));
+        let summary = plan.result_summary.expect("summary");
+        assert_eq!(summary.commits_after, 0);
+        assert_eq!(summary.commits_dropped, 3);
+        let confirmation = plan.confirmation.expect("confirmation");
+        assert!(confirmation
+            .required_phrase
+            .expect("phrase")
+            .starts_with("drop 3 commit(s) from "));
+    }
+
+    #[test]
+    fn drop_preview_works_on_dirty_tree_and_marks_execute_precondition() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        std::fs::write(repo.join("a.txt"), "dirty edit\n").expect("write");
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        // preview는 read-only라 dirty를 막지 않는다. execute 요구만 표시한다.
+        assert_eq!(plan.execution.status, "preview_only");
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "working_tree_dirty"));
+        let precondition = plan
+            .preconditions
+            .iter()
+            .find(|precondition| precondition.code == "working_tree_clean_required_at_execute")
+            .expect("precondition");
+        assert_eq!(precondition.status, "enforced_at_execute");
+    }
+
+    #[test]
+    fn drop_on_published_range_names_both_reasons_with_the_drop_phrase() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        git(
+            &repo,
+            &["update-ref", "refs/remotes/origin/feature/login", &oids[2]],
+        );
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        assert_eq!(plan.execution.status, "preview_only");
+        let confirmation = plan.confirmation.expect("confirmation");
+        assert!(confirmation
+            .reason_codes
+            .contains(&"tree_changing_drop".to_string()));
+        assert!(confirmation
+            .reason_codes
+            .contains(&"rewrites_published_commits".to_string()));
+        // phrase는 하나: 가장 위험한 의미(drop)가 이름을 가진다.
+        assert!(confirmation
+            .required_phrase
+            .expect("phrase")
+            .starts_with("drop 1 commit(s) from "));
+    }
+
+    #[test]
+    fn drop_prediction_evidence_is_plan_id_bound() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+        let original = plan.plan_id.clone();
+
+        // final_tree는 execute의 post-verify 오라클: 변조는 plan_id를 바꿔야 한다.
+        let mut tampered: HistoryEditPlan = plan.clone();
+        tampered.prediction.as_mut().unwrap().final_tree =
+            Some("0000000000000000000000000000000000000000".to_string());
+        assert_ne!(original, compute_history_edit_plan_id(&tampered));
+
+        let mut tampered = plan.clone();
+        tampered.prediction.as_mut().unwrap().steps[0].merged_tree =
+            "0000000000000000000000000000000000000000".to_string();
+        assert_ne!(original, compute_history_edit_plan_id(&tampered));
+
+        let mut tampered = plan;
+        tampered
+            .prediction
+            .as_mut()
+            .unwrap()
+            .dropped_commits
+            .clear();
+        assert_ne!(original, compute_history_edit_plan_id(&tampered));
+    }
+
+    #[test]
+    fn execute_rejects_drop_plans_until_c8_drop_c() {
+        let temp = tempfile::tempdir().expect("temp");
+        let (repo, oids) = feature_repo(temp.path());
+        let items = format!(
+            r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"drop"}},{{"commit":"{}","op":"pick"}}]"#,
+            oids[0], oids[1], oids[2]
+        );
+        let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
+
+        let err = crate::git::execute_history_edit::execute_history_edit_plan(&repo, plan, None)
+            .unwrap_err();
+        match err {
+            crate::SuperGitError::ExecutePlanInvalid { code, .. } => {
+                assert_eq!(code, "tree_changing_execute_unsupported");
+            }
+            other => panic!("expected ExecutePlanInvalid, got {other:?}"),
+        }
     }
 
     #[test]

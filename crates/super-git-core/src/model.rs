@@ -721,6 +721,11 @@ pub struct HistoryEditPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions_template: Option<HistoryEditInstructionsTemplate>,
     pub result_summary: Option<HistoryEditResultSummaryView>,
+    /// drop 포함(tree-changing) plan에만 채워지는 replay 예측 증거.
+    /// advisory가 아니라 plan-binding이다: plan_id projection에 포함되고,
+    /// `final_tree`는 C8-drop-C execute의 post-verify 오라클이 된다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prediction: Option<HistoryEditPrediction>,
     pub preconditions: Vec<HistoryEditPrecondition>,
     pub execution: HistoryEditExecution,
     pub risk: ActionRisk,
@@ -837,7 +842,42 @@ pub struct HistoryEditResultSummaryView {
     pub commits_after: u32,
     pub messages_changed: u32,
     pub commits_folded: u32,
+    /// drop 도입 전의 plan과도 호환되도록 default(0).
+    #[serde(default)]
+    pub commits_dropped: u32,
     pub final_tree_unchanged: bool,
+}
+
+/// drop 포함 plan의 kept-commit replay 예측 (C8-drop 계약).
+/// C9 rebase-chain과 같은 per-step shape를 쓰되 plan에 바인딩된다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPrediction {
+    /// 항상 "kept_commit_replay".
+    pub kind: String,
+    /// "clean" | "conflicted".
+    pub status: String,
+    /// 최종 history에서 patch가 제거되는 커밋들(oldest first).
+    pub dropped_commits: Vec<String>,
+    /// 전 step clean일 때 예측된 최종 트리 — execute post-verify 오라클.
+    /// 이 값이 없는 tree-changing plan은 실행될 수 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_tree: Option<String>,
+    /// kept 커밋별 replay 예측(oldest first). 첫 충돌에서 멈춘다.
+    pub steps: Vec<HistoryEditPredictionStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditPredictionStep {
+    pub commit: String,
+    /// 3-way base로 쓴 이 커밋의 원래 parent(드랍된 커밋일 수 있다).
+    pub parent: String,
+    /// "clean" | "conflicted".
+    pub status: String,
+    pub merged_tree: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicted_files: Vec<PredictedConflictFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1128,13 +1168,16 @@ pub struct ConflictPredictionOutcome {
 /// stage 1=base, 2=ours, 3=theirs. 빠진 stage가 충돌 모양을 말해준다
 /// (예: modify/delete는 한쪽 stage가 없다). 소비자는 메시지가 아니라
 /// stage 존재 여부로 분기해야 한다.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Deserialize는 history_edit plan에 임베드될 때의 round-trip용이다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PredictedConflictFile {
     pub path: String,
     pub stages: Vec<PredictedConflictStage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PredictedConflictStage {
     pub stage: u8,
     pub mode: String,

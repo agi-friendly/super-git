@@ -90,40 +90,19 @@ pub fn predict_rebase_chain(
     }
 
     let total_steps = replay.len();
-    let mut steps: Vec<RebasePredictionStep> = Vec::new();
-    let mut tip = onto.commit.clone();
-    let mut first_conflict_commit = None;
-
-    for (commit, parent) in &replay {
-        let run = run_merge_tree(&git, &repository, Some(parent), &tip, commit)?;
-        let conflicted = run.conflicted;
-        let outcome = outcome_from(run);
-        let merged_tree = outcome.merged_tree.clone();
-        steps.push(RebasePredictionStep {
-            commit: commit.clone(),
-            parent: parent.clone(),
-            prediction: outcome,
-        });
-        if conflicted {
-            first_conflict_commit = Some(commit.clone());
-            break;
-        }
-        // 다음 step의 ours가 될 합성 tip. merge-tree의 branch 인자에 tree를
-        // 직접 넘기는 것은 미문서 동작이라, 문서화된 commit-tree로 참조되지
-        // 않는(gc 회수 가능) synthetic commit을 만들어 감싼다.
-        tip = synthesize_tip(&git, &repository, &merged_tree, &tip)?;
-    }
+    let outcome = predict_replay_onto(&git, &repository, &onto.commit, &replay)?;
+    let steps = outcome.steps;
+    let final_tree = outcome.final_tree;
+    let first_conflict_commit = steps
+        .iter()
+        .find(|step| step.prediction.status == "conflicted")
+        .map(|step| step.commit.clone());
 
     let predicted_steps = steps.len();
     let steps_not_predicted: Vec<String> = replay[predicted_steps..]
         .iter()
         .map(|(commit, _)| commit.clone())
         .collect();
-    let final_tree = if first_conflict_commit.is_none() {
-        steps.last().map(|step| step.prediction.merged_tree.clone())
-    } else {
-        None
-    };
 
     Ok(RebasePrediction {
         schema_version: REBASE_PREDICTION_SCHEMA_VERSION.to_string(),
@@ -151,6 +130,62 @@ pub fn predict_rebase_chain(
         },
         limitations: rebase_limitations(),
     })
+}
+
+/// explicit (commit, parent) 리스트 replay 예측의 결과.
+/// `final_tree`는 전 step clean일 때만 Some이다(빈 리스트면 onto의 트리).
+pub(crate) struct ReplayPrediction {
+    pub steps: Vec<RebasePredictionStep>,
+    pub final_tree: Option<String>,
+}
+
+/// 주어진 (commit, parent) 쌍들을 oldest first로 onto 위에 replay 예측한다.
+/// rebase-chain(C9-C)과 history_edit drop(C8-drop)이 공유하는 코어: drop은
+/// kept 커밋만 담은 리스트를 넘긴다. 첫 충돌에서 멈추는 계약은 동일하다.
+pub(crate) fn predict_replay_onto(
+    git: &Git,
+    repository: &Path,
+    onto_commit: &str,
+    replay: &[(String, String)],
+) -> Result<ReplayPrediction> {
+    let mut steps: Vec<RebasePredictionStep> = Vec::new();
+    let mut tip = onto_commit.to_string();
+    let mut conflicted = false;
+
+    for (commit, parent) in replay {
+        let run = run_merge_tree(git, repository, Some(parent), &tip, commit)?;
+        conflicted = run.conflicted;
+        let outcome = outcome_from(run);
+        let merged_tree = outcome.merged_tree.clone();
+        steps.push(RebasePredictionStep {
+            commit: commit.clone(),
+            parent: parent.clone(),
+            prediction: outcome,
+        });
+        if conflicted {
+            break;
+        }
+        // 다음 step의 ours가 될 합성 tip. merge-tree의 branch 인자에 tree를
+        // 직접 넘기는 것은 미문서 동작이라, 문서화된 commit-tree로 참조되지
+        // 않는(gc 회수 가능) synthetic commit을 만들어 감싼다.
+        tip = synthesize_tip(git, repository, &merged_tree, &tip)?;
+    }
+
+    let final_tree = if conflicted {
+        None
+    } else if let Some(last) = steps.last() {
+        Some(last.prediction.merged_tree.clone())
+    } else {
+        // 빈 replay(예: 범위 전체 drop): 최종 트리는 onto의 트리 그대로.
+        Some(read_tree_oid(git, repository, onto_commit)?)
+    };
+
+    Ok(ReplayPrediction { steps, final_tree })
+}
+
+fn read_tree_oid(git: &Git, repository: &Path, commit: &str) -> Result<String> {
+    let result = git.run_in(repository, ["rev-parse", &format!("{commit}^{{tree}}")])?;
+    Ok(result.stdout.trim().to_string())
 }
 
 /// base..head의 (commit, parent) 쌍을 oldest first로 나열한다.

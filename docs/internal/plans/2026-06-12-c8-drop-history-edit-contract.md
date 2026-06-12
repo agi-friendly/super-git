@@ -246,10 +246,16 @@ Drop-specific deltas:
 ## Slice Plan
 
 - [x] **C8-drop-A** — this contract checkpoint (docs only).
-- [ ] **C8-drop-B** — preview accepts `drop`: instruction validation
-      (op mixing rule), internal explicit-list replay prediction, blocked
+- [x] **C8-drop-B** — preview accepts `drop`: instruction validation
+      (op mixing rule), internal explicit-list replay prediction
+      (`conflict_prediction::predict_replay_onto`), blocked
       `predicted_conflict` plans with step evidence, confirmation-gated
-      clean plans with embedded `final_tree`.
+      clean plans with embedded plan_id-bound `final_tree`. Drop plans
+      advertise `execute_supported: false` and execute rejects them with
+      `tree_changing_execute_unsupported` until C8-drop-C. The
+      clean-working-tree execute requirement is a non-volatile
+      precondition (`working_tree_clean_required_at_execute:
+      enforced_at_execute`) so plan_id does not wobble with dirty state.
 - [ ] **C8-drop-C** — execute: fresh-prediction re-derivation, always-on
       confirmation, chain rebuild, `final_tree` post-verify, CAS ref move,
       working-tree synchronization, rollback and partial-failure paths.

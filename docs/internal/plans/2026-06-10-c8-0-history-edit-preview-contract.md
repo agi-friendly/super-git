@@ -77,6 +77,14 @@ path-disjoint `drop` cases that look safe: any drop changes the final tree
 and silently reverts content without a conflict signal, which is exactly the
 class of surprise this op set excludes by construction.
 
+> **Status update (2026-06-12):** Stage 7 prediction exists, and `drop` now
+> has its own contract checkpoint
+> (`2026-06-12-c8-drop-history-edit-contract.md`). As of C8-drop-B,
+> `preview history-edit` accepts `drop` as a prediction-gated, always
+> confirmation-required tree-changing plan; execute still rejects drop
+> plans until C8-drop-C. The tree-preserving invariant in this document is
+> unchanged for `pick`/`reword`/`squash`/`fixup` plans.
+
 ## Non-negotiable Rules
 
 The first history edit implementation must follow these rules:

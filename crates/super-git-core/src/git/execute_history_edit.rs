@@ -216,6 +216,21 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
             "history_edit execute requires execution.status of executable or preview_only",
         );
     }
+    // C8-drop-B: drop plan은 preview까지만 지원된다. execute는 C8-drop-C가
+    // fresh 예측 재검증 + final_tree post-verify + 워킹트리 동기화 계약을
+    // 구현할 때 열린다. execute_supported=false로도 걸리지만, 이 명시적
+    // 검사가 에이전트에게 이유 있는 코드를 준다.
+    let has_drop = plan.prediction.is_some()
+        || plan
+            .instructions
+            .as_ref()
+            .is_some_and(|instructions| instructions.items.iter().any(|item| item.op == "drop"));
+    if has_drop {
+        return invalid_plan(
+            "tree_changing_execute_unsupported",
+            "history_edit execute does not support drop plans yet (C8-drop-C)",
+        );
+    }
     if !plan.execution.execute_supported
         || plan.execution.raw_git_allowed
         || !plan.execution.blocked_reasons.is_empty()
