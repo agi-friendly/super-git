@@ -233,7 +233,7 @@ Slicing direction:
   checkpoint:
   `docs/internal/plans/2026-06-13-c8-reorder-history-edit-contract.md`
   (C8-reorder-A: contract + Git-behavior spikes done; C8-reorder-B preview
-  done with execute fail-closed; C execute open)
+  done; C8-reorder-C execute/undo/public docs done with ref-only semantics)
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
@@ -245,14 +245,14 @@ Done so far: the C9-A merge prediction core
 the C9-C rebase-chain prediction core
 (`super-git.rebase-prediction.v0.1`, per-step replay that stops at the first
 predicted conflict), and the C9-D `predict rebase` CLI verb. The Stage 6
-`drop` consumer has since landed (the C8-drop series); `inspect` integration
-and the `reorder` consumer remain open.
+`drop` and reorder consumers have since landed; `inspect` integration remains
+open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits
 - prediction feeds Stage 6 `drop`/reorder steps and standalone merge or rebase
-  previews; the safe `drop` for wip commits — the highest-demand consumer —
-  has landed, with `reorder` still to follow
+  previews; the safe `drop` for wip commits and the tree-preserving reorder
+  consumer have landed
 - `inspect` gains the branch-relationship context prediction needs, such as
   merge-base and shared-upstream hints
 - safe branch refresh from

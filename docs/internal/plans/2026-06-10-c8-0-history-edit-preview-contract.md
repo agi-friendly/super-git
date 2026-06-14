@@ -77,13 +77,14 @@ path-disjoint `drop` cases that look safe: any drop changes the final tree
 and silently reverts content without a conflict signal, which is exactly the
 class of surprise this op set excludes by construction.
 
-> **Status update (2026-06-12):** Stage 7 prediction exists, and `drop` now
-> has its own contract checkpoint
-> (`2026-06-12-c8-drop-history-edit-contract.md`). As of C8-drop-B,
-> `preview history-edit` accepts `drop` as a prediction-gated, always
-> confirmation-required tree-changing plan; execute still rejects drop
-> plans until C8-drop-C. The tree-preserving invariant in this document is
-> unchanged for `pick`/`reword`/`squash`/`fixup` plans.
+> **Status update (2026-06-14):** Stage 7 prediction exists. `drop` has its
+> own checkpoint (`2026-06-12-c8-drop-history-edit-contract.md`) and is now
+> implemented through preview, execute, and undo. `reorder` has its own
+> checkpoint (`2026-06-13-c8-reorder-history-edit-contract.md`) and is now
+> implemented as a prediction-gated, tree-preserving, ref-only history edit.
+> The tree-preserving invariant in this document remains the baseline for
+> `pick`/`reword`/`squash`/`fixup` and clean reorder plans; `drop` is the
+> explicit tree-changing exception.
 
 ## Non-negotiable Rules
 
@@ -218,8 +219,8 @@ Op support in the first implementation:
 | `reword` | supported | supported |
 | `squash` | supported | supported |
 | `fixup` | supported | supported |
-| `drop` | blocked | blocked until Stage 7 conflict prediction |
-| reorder (list order change) | blocked | blocked until Stage 7 conflict prediction |
+| `drop` | supported via C8-drop checkpoint | supported with confirmation + worktree sync |
+| reorder (list order change) | supported via C8-reorder checkpoint | supported when prediction preserves final tree |
 | `edit` / `split` | blocked | deferred |
 
 ## Published Commit Policy
@@ -815,8 +816,6 @@ Acceptance:
 
 These are product ideas, not part of the first history edit implementation:
 
-- `drop` and reordering (wait for Stage 7 conflict prediction; safe `drop`
-  for wip commits is known high demand and should land early in Stage 7)
 - `edit` and commit `split`
 - autosquash from `fixup!`/`squash!` subjects
 - `--onto` and rebasing onto a moved base

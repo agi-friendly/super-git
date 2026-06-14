@@ -70,15 +70,17 @@ pub fn execute_history_edit_plan(
     let branch_ref = branch.ref_name.clone();
     let previous_tip = branch.tip_commit.clone();
 
-    // drop 분류는 fresh 기준이다(static contract가 plan과의 동치를 검증했고,
-    // plan_id 일치가 둘이 같음을 증명한다).
-    let drop_prediction = fresh.prediction.clone();
+    // 실행 의미론 분류는 fresh 기준이다(static contract가 plan과의 동치를
+    // 검증했고, plan_id 일치가 둘이 같음을 증명한다).
+    let has_drop = has_drop_instruction(&fresh);
+    let has_reorder = instructions_reorder_range(&fresh);
+    let replay_prediction = fresh.prediction.clone();
 
     // drop: ref 이동 후의 read-tree 동기화가 사용자 변경을 덮어쓰지 않도록,
     // 어떤 write보다 먼저 clean 워킹트리를 하드 요구한다. untracked도 dirty다 —
     // 드랍된 delete는 sync에서 경로를 부활시키며 그 자리의 untracked 파일을
     // 덮어쓸 수 있다.
-    if drop_prediction.is_some() {
+    if has_drop {
         ensure_clean_working_tree(&git, &worktree_root)?;
     }
 
@@ -92,31 +94,39 @@ pub fn execute_history_edit_plan(
     let old_tree = read_tree_oid(&git, &worktree_root, &previous_tip)?;
     // post-verify 오라클: drop은 fresh 예측의 final_tree, tree-preserving은
     // 원래 tip의 tree(트리 보존 불변식).
-    let expected_tree = match &drop_prediction {
-        Some(prediction) => prediction
-            .final_tree
-            .clone()
-            .expect("validated drop plan carries a final_tree"),
-        None => old_tree.clone(),
+    let expected_tree = if has_drop {
+        replay_prediction
+            .as_ref()
+            .and_then(|prediction| prediction.final_tree.clone())
+            .expect("validated drop plan carries a final_tree")
+    } else {
+        old_tree.clone()
     };
     // Status reads are best-effort: a failure reading status after the ref has
     // moved must not turn a completed, verified rewrite into a reported failure.
     // drop은 sync가 워킹트리를 바꾸는 것이 계약이라 드리프트 비교가 무의미하다.
-    let status_before = if drop_prediction.is_none() {
+    let status_before = if !has_drop {
         read_status_signature(&git, &worktree_root).ok()
     } else {
         None
     };
 
-    let (groups, groups_before_first_drop) = build_groups(&fresh)?;
-    let new_tip = match &drop_prediction {
+    let (groups, groups_before_first_drop, first_reordered_position) = build_groups(&fresh)?;
+    let replay_unchanged_prefix_cap = if has_drop {
+        groups_before_first_drop
+    } else if has_reorder {
+        first_reordered_position
+    } else {
+        None
+    };
+    let new_tip = match &replay_prediction {
         Some(prediction) => rebuild_replayed_commits(
             &git,
             &worktree_root,
             &fresh.range.base_commit,
             &groups,
             &prediction.steps,
-            groups_before_first_drop,
+            replay_unchanged_prefix_cap,
         )?,
         None => rebuild_commits(&git, &worktree_root, &fresh.range.base_commit, &groups)?,
     };
@@ -133,7 +143,7 @@ pub fn execute_history_edit_plan(
     }
     // 새 tip이 부활시키는 tracked 경로 위의 ignored 파일은 sync가 덮어쓴다 —
     // new_tip이 정해진 지금, ref가 움직이기 전에 막는다.
-    if drop_prediction.is_some() {
+    if has_drop {
         ensure_no_ignored_path_collisions(&git, &worktree_root, &new_tip)?;
     }
 
@@ -189,7 +199,7 @@ pub fn execute_history_edit_plan(
     // drop: index/워킹트리를 새 tip으로 동기화한다(rebase 의미론). ref는 이미
     // 올바른 새 tip이므로 여기서부터의 실패는 rollback이 아니라 partial
     // failure다 — record가 intent로 남아 undo와 재실행 모두 fail-closed가 된다.
-    if drop_prediction.is_some() {
+    if has_drop {
         if let Err(err) = sync_working_tree(&git, &worktree_root, &new_tip) {
             return Err(sync_partial_failure(
                 &git,
@@ -202,7 +212,7 @@ pub fn execute_history_edit_plan(
         }
     }
 
-    let status_after = if drop_prediction.is_none() {
+    let status_after = if !has_drop {
         read_status_signature(&git, &worktree_root).ok()
     } else {
         None
@@ -219,7 +229,7 @@ pub fn execute_history_edit_plan(
 
     let undo_token = HistoryEditUndoToken {
         schema_version: HISTORY_EDIT_UNDO_TOKEN_SCHEMA_VERSION.to_string(),
-        kind: if drop_prediction.is_some() {
+        kind: if has_drop {
             "restore_branch_tip_and_worktree"
         } else {
             "restore_branch_tip_snapshot"
@@ -248,11 +258,10 @@ pub fn execute_history_edit_plan(
     // ref와 워킹트리가 이미 새 tip에 일치하므로, ref만 되돌리면 워킹트리와
     // 어긋난 더 나쁜 상태가 된다 — partial failure로 정직하게 보고한다.
     if let Err(err) = write_record_replace(&record_path, &completed) {
-        return Err(match &drop_prediction {
-            Some(_) => {
-                sync_partial_failure(&git, &worktree_root, &branch_ref, &record_path, true, err)
-            }
-            None => rollback(
+        return Err(if has_drop {
+            sync_partial_failure(&git, &worktree_root, &branch_ref, &record_path, true, err)
+        } else {
+            rollback(
                 &git,
                 &worktree_root,
                 &branch_ref,
@@ -260,7 +269,7 @@ pub fn execute_history_edit_plan(
                 &new_tip,
                 &record_path,
                 err,
-            ),
+            )
         });
     }
 
@@ -273,6 +282,26 @@ pub fn execute_history_edit_plan(
         effects,
         undo_token: Some(ExecuteUndoToken::HistoryEdit(Box::new(undo_token))),
     })
+}
+
+fn has_drop_instruction(plan: &HistoryEditPlan) -> bool {
+    plan.instructions
+        .as_ref()
+        .is_some_and(|instructions| instructions.items.iter().any(|item| item.op == "drop"))
+}
+
+fn instructions_reorder_range(plan: &HistoryEditPlan) -> bool {
+    let Some(instructions) = &plan.instructions else {
+        return false;
+    };
+    if instructions.items.len() != plan.range.commits.len() {
+        return false;
+    }
+    instructions
+        .items
+        .iter()
+        .zip(&plan.range.commits)
+        .any(|(item, commit)| item.commit != commit.commit)
 }
 
 fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
@@ -298,27 +327,44 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
             "history_edit execute requires execution.status of executable or preview_only",
         );
     }
-    // drop(tree-changing) plan은 replay 예측을 반드시 동반한다: prediction이
-    // execute의 final_tree 오라클이므로, 둘 중 하나만 있는 plan은 위조다.
-    let has_drop_instruction = plan
-        .instructions
-        .as_ref()
-        .is_some_and(|instructions| instructions.items.iter().any(|item| item.op == "drop"));
-    match (&plan.prediction, has_drop_instruction) {
-        (None, false) => {}
-        (Some(prediction), true) => validate_drop_contract(prediction, status)?,
-        (Some(_), false) => {
+    // replay-backed plans must carry the prediction shape that matches their
+    // instruction semantics. The non-hashed reorder advisory block is ignored
+    // here on purpose; authority comes from instructions + prediction.
+    let has_drop_instruction = has_drop_instruction(plan);
+    let has_reorder_instruction = instructions_reorder_range(plan);
+    if has_drop_instruction && has_reorder_instruction {
+        return invalid_plan(
+            "unsupported_instruction_mix",
+            "history_edit execute does not support mixing drop and reorder instructions",
+        );
+    }
+    match (
+        &plan.prediction,
+        has_drop_instruction,
+        has_reorder_instruction,
+    ) {
+        (None, false, false) => {}
+        (Some(prediction), true, false) => validate_drop_contract(prediction, status)?,
+        (Some(prediction), false, true) => validate_reorder_contract(prediction)?,
+        (Some(_), false, false) => {
             return invalid_plan(
                 "prediction_unexpected",
-                "history_edit plans without a drop instruction must not carry a replay prediction",
+                "history_edit plans without a drop or reorder instruction must not carry a replay prediction",
             );
         }
-        (None, true) => {
+        (None, true, false) => {
             return invalid_plan(
                 "prediction_required",
                 "history_edit drop plans must carry the kept-commit replay prediction",
             );
         }
+        (None, false, true) => {
+            return invalid_plan(
+                "prediction_required",
+                "history_edit reorder plans must carry the reordered-commit replay prediction",
+            );
+        }
+        (Some(_), true, true) | (None, true, true) => unreachable!("mix rejected above"),
     }
     if !plan.execution.execute_supported
         || plan.execution.raw_git_allowed
@@ -330,7 +376,7 @@ fn validate_static_contract(plan: &HistoryEditPlan) -> Result<()> {
         );
     }
     // drop execute는 워킹트리를 동기화하므로 undo도 대칭 kind를 요구한다.
-    let expected_undo_kind = if plan.prediction.is_some() {
+    let expected_undo_kind = if has_drop_instruction {
         "restore_branch_tip_and_worktree"
     } else {
         "restore_branch_tip_snapshot"
@@ -385,6 +431,40 @@ fn validate_drop_contract(prediction: &HistoryEditPrediction, status: &str) -> R
         return invalid_plan(
             "unsupported_execution_contract",
             "drop plans are always confirmation-gated preview_only plans",
+        );
+    }
+    Ok(())
+}
+
+fn validate_reorder_contract(prediction: &HistoryEditPrediction) -> Result<()> {
+    if prediction.kind != "reordered_commit_replay" {
+        return invalid_plan(
+            "prediction_kind_unsupported",
+            "history_edit reorder execute supports only reordered_commit_replay predictions",
+        );
+    }
+    if prediction.status != "clean" {
+        return invalid_plan(
+            "prediction_not_clean",
+            "a reorder plan with a predicted conflict can never execute; resolve the instruction list instead",
+        );
+    }
+    if !prediction.dropped_commits.is_empty() {
+        return invalid_plan(
+            "prediction_dropped_commits_unexpected",
+            "history_edit reorder predictions must not drop commits",
+        );
+    }
+    if prediction.final_tree.is_none() {
+        return invalid_plan(
+            "prediction_final_tree_missing",
+            "a reorder plan without a final_tree oracle is never executable",
+        );
+    }
+    if prediction.steps.iter().any(|step| step.status != "clean") {
+        return invalid_plan(
+            "prediction_steps_not_clean",
+            "history_edit reorder execute requires every replay step to be clean",
         );
     }
     Ok(())
@@ -538,13 +618,18 @@ fn validate_confirmation(
     // 한 plan에 phrase는 하나(preview와 같은 규칙): drop이 있으면 drop phrase가
     // published phrase를 대신한다. dropped 수는 plan_id가 바인딩하는 prediction
     // 에서 온다.
-    let expected_phrase = match &plan.prediction {
-        Some(prediction) => preview_history_edit::drop_confirmation_phrase(
+    let expected_phrase = if has_drop_instruction(plan) {
+        let prediction = plan
+            .prediction
+            .as_ref()
+            .expect("drop contract validated before confirmation");
+        preview_history_edit::drop_confirmation_phrase(
             prediction.dropped_commits.len(),
             &branch.ref_name,
             &branch.tip_commit,
-        ),
-        None => preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit),
+        )
+    } else {
+        preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit)
     };
     if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
         return invalid_plan(
@@ -636,9 +721,12 @@ struct RebuildGroup {
     changed: bool,
 }
 
-/// Returns the rebuild groups plus the group count before the first `drop`
-/// (None when nothing is dropped) — the unchanged-prefix cap for replay.
-fn build_groups(plan: &HistoryEditPlan) -> Result<(Vec<RebuildGroup>, Option<usize>)> {
+/// Returns rebuild groups plus replay unchanged-prefix caps:
+/// - group count before the first `drop` (drop changes parents after it)
+/// - first position whose instruction order differs from the original range
+fn build_groups(
+    plan: &HistoryEditPlan,
+) -> Result<(Vec<RebuildGroup>, Option<usize>, Option<usize>)> {
     let instructions = plan
         .instructions
         .as_ref()
@@ -652,7 +740,16 @@ fn build_groups(plan: &HistoryEditPlan) -> Result<(Vec<RebuildGroup>, Option<usi
 
     let mut groups: Vec<RebuildGroup> = Vec::new();
     let mut groups_before_first_drop: Option<usize> = None;
-    for item in &instructions.items {
+    let mut first_reordered_position: Option<usize> = None;
+    for (index, item) in instructions.items.iter().enumerate() {
+        if plan
+            .range
+            .commits
+            .get(index)
+            .is_some_and(|original| original.commit != item.commit)
+        {
+            first_reordered_position.get_or_insert(index);
+        }
         let commit = by_oid.get(item.commit.as_str()).copied().ok_or_else(|| {
             SuperGitError::ExecutePlanInvalid {
                 code: "instruction_commit_not_in_range".to_string(),
@@ -706,7 +803,7 @@ fn build_groups(plan: &HistoryEditPlan) -> Result<(Vec<RebuildGroup>, Option<usi
             }
         }
     }
-    Ok((groups, groups_before_first_drop))
+    Ok((groups, groups_before_first_drop, first_reordered_position))
 }
 
 fn last_group(groups: &mut [RebuildGroup]) -> Result<&mut RebuildGroup> {
@@ -758,7 +855,7 @@ fn rebuild_replayed_commits(
     base_commit: &str,
     groups: &[RebuildGroup],
     steps: &[HistoryEditPredictionStep],
-    groups_before_first_drop: Option<usize>,
+    unchanged_prefix_cap: Option<usize>,
 ) -> Result<String> {
     // 예측 step과 kept 그룹은 1:1이어야 한다(fold는 drop과 혼용 불가이므로
     // 그룹 = 단일 커밋). 어긋나면 위조된 plan이거나 구현 버그다.
@@ -784,13 +881,14 @@ fn rebuild_replayed_commits(
         }
     }
 
-    // 첫 drop 앞의 unchanged pick들만 원래 oid를 유지한다: 첫 drop부터는
-    // parent가 달라지므로 이후 전부가 새 커밋이다.
+    // replay가 parent를 바꾸는 첫 지점 앞의 unchanged pick들만 원래 oid를
+    // 유지한다: drop은 첫 drop부터, reorder는 첫 위치 변화부터 parent 체인이
+    // 달라지므로 이후 전부가 새 커밋이다.
     let unchanged_prefix = groups
         .iter()
         .take_while(|group| !group.changed)
         .count()
-        .min(groups_before_first_drop.unwrap_or(usize::MAX));
+        .min(unchanged_prefix_cap.unwrap_or(usize::MAX));
     let mut parent = if unchanged_prefix == 0 {
         base_commit.to_string()
     } else {
@@ -907,7 +1005,11 @@ fn success_effects(plan: &HistoryEditPlan, branch_ref: &str, new_tip: &str) -> V
         .result_summary
         .as_ref()
         .expect("validated executable plan carries a result summary");
-    if let Some(prediction) = &plan.prediction {
+    if has_drop_instruction(plan) {
+        let prediction = plan
+            .prediction
+            .as_ref()
+            .expect("drop contract validated before success effects");
         return vec![
             format!(
                 "Rewrote {} commits on {} into {} commits at {}, removing {} commit's patch(es) from the final history.",
@@ -919,6 +1021,18 @@ fn success_effects(plan: &HistoryEditPlan, branch_ref: &str, new_tip: &str) -> V
             ),
             "Preserved every author identity on the kept commits.".to_string(),
             "Synchronized the index and working tree to the new tip.".to_string(),
+        ];
+    }
+    if instructions_reorder_range(plan) {
+        return vec![
+            format!(
+                "Reordered {} commits on {} at {}.",
+                summary.commits_before, branch_ref, new_tip
+            ),
+            "Preserved the final tree; working-tree files and the index are unchanged."
+                .to_string(),
+            "Changed commit object ids and intermediate history shape from the first reordered position."
+                .to_string(),
         ];
     }
     vec![
