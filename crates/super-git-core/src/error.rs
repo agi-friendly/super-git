@@ -97,6 +97,9 @@ pub enum SuperGitError {
     #[error("execute {0}")]
     ExecuteSyncPartialFailure(Box<SyncPartialFailureError>),
 
+    #[error("execute {0}")]
+    ExecuteRecordCleanupFailure(Box<RecordCleanupFailureError>),
+
     #[error("undo {0}")]
     UndoSyncPartialFailure(Box<SyncPartialFailureError>),
 
@@ -136,6 +139,23 @@ pub struct SyncPartialFailureError {
     pub safe_next: String,
 }
 
+/// Intent record cleanup failed after the primary state transition had already
+/// been handled. The branch state may be clean, but the leftover record blocks
+/// replay until a human or future cleanup command verifies and removes it.
+#[derive(Debug, Error)]
+#[error(
+    "record cleanup failure for {action}: {message}; phase={phase}; original_error={original_error}; cleanup_error={cleanup_error}; execution_record_path={execution_record_path}; safe_next={safe_next}"
+)]
+pub struct RecordCleanupFailureError {
+    pub action: String,
+    pub phase: String,
+    pub message: String,
+    pub original_error: String,
+    pub cleanup_error: String,
+    pub execution_record_path: PathBuf,
+    pub safe_next: String,
+}
+
 impl SuperGitError {
     /// Stable machine-readable error code for the JSON envelope, so agents can
     /// branch on `error.code` instead of regexing English prose. Variants that
@@ -164,6 +184,7 @@ impl SuperGitError {
             // "ref/대상은 이미 움직였고 자동 복구가 없다"는 한 가지다. 구분은
             // action 필드가 한다.
             Self::ExecuteSyncPartialFailure { .. } => "execute_partial_failure",
+            Self::ExecuteRecordCleanupFailure { .. } => "execute_record_cleanup_failed",
             Self::UndoSyncPartialFailure { .. } => "undo_partial_failure",
             Self::UndoTokenInvalid { code, .. } => code,
             Self::UndoPreconditionMismatch { .. } => "undo_precondition_mismatch",

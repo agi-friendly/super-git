@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -171,8 +172,11 @@ pub fn execute_history_edit_plan(
     if let Err(err) =
         compare_and_swap_ref(&git, &worktree_root, &branch_ref, &new_tip, &previous_tip)
     {
-        let _ = fs::remove_file(&record_path);
-        return Err(err);
+        return Err(remove_intent_record_or_cleanup_failure(
+            &record_path,
+            "ref_move_rejected",
+            err,
+        ));
     }
 
     if let Err(err) = post_verify(
@@ -995,13 +999,34 @@ fn rollback(
 ) -> SuperGitError {
     match compare_and_swap_ref(git, worktree_root, branch_ref, previous_tip, new_tip) {
         Ok(()) => {
-            let _ = fs::remove_file(record_path);
-            original
+            remove_intent_record_or_cleanup_failure(record_path, "rollback_succeeded", original)
         }
         Err(rollback_err) => SuperGitError::ExecuteRollbackFailed {
             original_error: original.to_string(),
             rollback_error: rollback_err.to_string(),
         },
+    }
+}
+
+fn remove_intent_record_or_cleanup_failure(
+    record_path: &Path,
+    phase: &str,
+    original: SuperGitError,
+) -> SuperGitError {
+    match fs::remove_file(record_path) {
+        Ok(()) => original,
+        Err(err) if err.kind() == ErrorKind::NotFound => original,
+        Err(err) => SuperGitError::ExecuteRecordCleanupFailure(Box::new(
+            crate::error::RecordCleanupFailureError {
+                action: ACTION_HISTORY_EDIT.to_string(),
+                phase: phase.to_string(),
+                message: "the branch state was handled, but the intent execution record could not be removed".to_string(),
+                original_error: original.to_string(),
+                cleanup_error: err.to_string(),
+                execution_record_path: record_path.to_path_buf(),
+                safe_next: "verify the branch tip and remove the stale intent record before re-running execute".to_string(),
+            },
+        )),
     }
 }
 
@@ -1419,6 +1444,34 @@ mod tests {
             matches!(returned, SuperGitError::ExecutePlanInvalid { .. }),
             "original error is surfaced after a successful rollback"
         );
+    }
+
+    #[test]
+    fn rollback_reports_record_cleanup_failure_after_ref_restore() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let (repo, c1, c2, _c3) = repo_with_three(tmp.path());
+        // Simulate execute having moved the branch to new_tip = c2.
+        git(&repo, &["update-ref", "refs/heads/main", &c2]);
+        let record = repo.join(".git/super-git/executions/intent-as-dir.json");
+        std::fs::create_dir_all(&record).expect("record dir");
+        let original = SuperGitError::ExecutePlanInvalid {
+            code: "original".to_string(),
+            message: "post-write failure".to_string(),
+        };
+
+        let returned = rollback(
+            &Git::default(),
+            &repo,
+            "refs/heads/main",
+            &c1,
+            &c2,
+            &record,
+            original,
+        );
+
+        assert_eq!(rev(&repo, "refs/heads/main"), c1, "ref restored to old tip");
+        assert!(record.is_dir(), "failed cleanup leaves the record path");
+        assert_eq!(returned.code(), "execute_record_cleanup_failed");
     }
 
     #[test]
