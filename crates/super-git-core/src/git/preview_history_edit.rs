@@ -384,7 +384,18 @@ fn build_plan(
     };
 
     let instructions = program.as_ref().map(plan_instructions);
-    let result_summary = program.as_ref().map(result_summary_view);
+    let mut result_summary = program.as_ref().map(result_summary_view);
+    if has_reorder {
+        if let (Some(summary), Some(prediction), Some(old_tree)) = (
+            result_summary.as_mut(),
+            prediction.as_ref(),
+            old_tree.as_deref(),
+        ) {
+            if let Some(final_tree) = prediction.final_tree.as_deref() {
+                summary.final_tree_unchanged = final_tree == old_tree;
+            }
+        }
+    }
 
     // Survey plans hand back a ready-to-edit instruction document (every range
     // commit as `pick`) so the agent never reconstructs the schema by hand.
@@ -1674,6 +1685,11 @@ mod tests {
         assert!(codes.contains(&"reorder_changes_final_tree"));
         assert!(codes.contains(&"reorder_creates_empty_commit"));
         assert!(!codes.contains(&"reorder_execute_unsupported"));
+        let summary = plan.result_summary.as_ref().expect("summary");
+        assert!(
+            !summary.final_tree_unchanged,
+            "blocked reorder evidence must not claim the final tree is preserved"
+        );
 
         let old_tree = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
         let prediction = plan.prediction.expect("prediction");
