@@ -171,18 +171,54 @@ range as a set but are not in oldest-first order, validation blocks with
 - A valid set-cover in non-natural order is a **reorder candidate** instead of
   `instructions_order_mismatch`.
 - Because a mistaken shuffle is now a meaningful plan rather than an error, the
-  plan must make the reorder loud:
-  - `result_summary.commits_reordered`: count of commits whose position
-    changed (vs the natural oldest-first order).
-  - an old-order / new-order summary the agent can diff.
-  - effects lead with an explicit line, e.g. "This plan changes commit
-    order on `<branch>`." (and never claims the tree changes).
+  plan must make the reorder loud, via a **new advisory `reorder` block** (not
+  `result_summary` — see "Plan id and the advisory block" below):
+  - `reorder.commits_reordered`: count of commits whose index differs from the
+    natural oldest-first order.
+  - `reorder.old_order` and `reorder.new_order`: the explicit oid arrays the
+    agent diffs. `old_order` = `range.commits` order; `new_order` =
+    `instructions.items` order. Those two bound fields are authoritative; the
+    arrays are a derived convenience.
+  - effects lead with an explicit line, e.g. "This plan changes commit order on
+    `<branch>`." (and never claims the tree changes).
 
-Plan_id binding: the new order is already bound (the `items` order lives in the
-plan's instructions, which are in the plan_id projection), and the prediction
-(per-step merged trees + `final_tree`) binds the same way drop's does. Execute
-re-derives both from fresh state, so neither order nor predicted trees can be
-forged.
+`instructions.order` stays `"oldest_first"`, and the contract pins its meaning:
+it is oldest-first **of the planned result history** — i.e. the order of the
+`items` array. For every non-reorder op the planned order equals the original
+range order, so nothing changes; for reorder the items are already the new
+oldest-first sequence, so the value stays accurate. The explicit
+`reorder.old_order`/`new_order` arrays remove any residual ambiguity (P3).
+
+### Plan id and the advisory block (compatibility — P1)
+
+The reorder advisory data is **excluded from the plan_id projection**, and the
+plan schema stays `super-git.plan.v0.5` with **no bump**. The reasoning is the
+binding rule, applied honestly:
+
+- The plan_id must bind exactly what determines the execute result: the
+  instructions (which already carry the new **order**) and the `prediction`
+  (per-step merged trees + `final_tree`). Both are already hashed. The new
+  order and the predicted trees therefore cannot be forged — execute
+  re-derives both from fresh state and requires the plan_id to match.
+- `reorder.commits_reordered`/`old_order`/`new_order` are **derivable** from
+  those already-bound fields (`range.commits` and `instructions.items`), so
+  they add no new authority. They belong in the non-hashed advisory tier with
+  `effects`, `limitations`, subjects, and author prose — fields execute
+  ignores and a tampered plan may set freely without changing the write.
+- Concretely: the `reorder` block is a new optional top-level plan field
+  (`#[serde(default, skip_serializing_if = "Option::is_none")]`), and it is
+  **not** added to the `HistoryEditPlanHashInput` projection. `result_summary`
+  is left byte-identical, so existing v0.5 plan ids stay valid.
+
+This is the explicit-compatibility-projection path, chosen over a
+`super-git.plan.v0.6` bump precisely because **no field that binds the execute
+result changed** — adding `commits_reordered` to the wholesale-hashed
+`result_summary` (the naive "v0.5 + serde default" move) would silently change
+the projection and re-hash old plans to a `plan_id` mismatch, the exact class
+of problem the C8-drop review caught. A B-slice test pins this: tampering with
+`reorder.commits_reordered`/`old_order`/`new_order` must **not** change the
+plan_id, while tampering with `instructions.items` order or the `prediction`
+**must**.
 
 ## Op-Mixing Boundary (v0)
 
@@ -210,19 +246,52 @@ A valid reorder candidate produces a plan classified as follows:
 - **Empty step** (Gate 2): `blocked`, `reorder_creates_empty_commit`.
 - **Final tree would change** (Gate 1): `blocked`,
   `reorder_changes_final_tree`, with `old_tree`/`predicted_final_tree`.
-- **Clean, tree-preserving reorder**: a normal write plan, gated only by the
-  existing published-range rule (below) — `executable` when unpublished,
-  `preview_only` + confirmation when published.
+- **Clean, tree-preserving reorder**: in the *final* contract (after
+  C8-reorder-C), a normal write plan gated only by the published-range rule —
+  `executable` when unpublished, `preview_only` + confirmation when published.
+  **In C8-reorder-B, execute is not implemented**, so the slice must not
+  advertise an executable plan (see "B advertisement" below): a clean reorder
+  is advertised with `execute_supported: false` and a dedicated
+  `reorder_execute_unsupported` advertisement, carrying the full prediction +
+  `reorder` block + effects so the agent sees exactly what the reorder would
+  do, while execute fail-closes.
 - The plan embeds the prediction evidence it was built from (per-step trees,
   `final_tree`), plan_id-bound, exactly like drop.
 - Working-tree state does **not** block preview (it stays read-only). It does
   not block execute either (see below) — unlike drop, reorder has no
   clean-tree requirement.
 
-Plan schema: reorder rides the existing history-edit plan family. The plan
-schema is already `super-git.plan.v0.5` (bumped during the C8-drop review for
-the prediction-aware projection); reorder adds no new top-level shape, only new
-block codes and `result_summary` fields under `#[serde(default)]`.
+### B advertisement: keep B strictly preview-only (decision pending lead)
+
+There is a real fork for how a *clean* reorder is advertised while execute is
+unimplemented (B), because reorder's unpublished tier is `executable` (no
+confirmation) — unlike drop, whose always-`preview_only` tier let drop-B
+advertise its final tier with `execute_supported: false` and no broken promise.
+
+- **Option A (recommended): keep B strictly preview-only.** A clean reorder is
+  advertised as `blocked` with reason `reorder_execute_unsupported` and
+  `execute_supported: false`, carrying full evidence. No plan claims
+  `executable` or `preview_only` in B. The risk *severity* is still set per
+  published state (medium/high) so the policy is visible, but the confirmation
+  *artifact mechanism* lands with execute in C. C8-reorder-C removes the
+  `reorder_execute_unsupported` advertisement and assigns the real tier.
+  Honors "preview must not promise what it can't keep" most strictly.
+- **Option B (drop-B-faithful): advertise the final tier now** —
+  `executable` (unpublished) / `preview_only` (published) with
+  `execute_supported: false`. This fully exercises the confirmation policy in
+  B, but advertises `executable` for unpublished reorder, which the lead
+  flagged as a possible broken promise.
+
+The lead reserved this decision ("pause if you'd advertise `executable`"). The
+recommendation is Option A; the choice is recorded here pending sign-off, and
+B's status/confirmation tests follow whichever is chosen.
+
+Plan schema: reorder rides the existing history-edit plan family at
+`super-git.plan.v0.5` with no bump. It adds new block codes and one new
+**non-hashed** advisory field (the `reorder` block above); it does **not** add
+fields to the hashed `result_summary`, so the plan_id projection is unchanged
+(see "Plan id and the advisory block"). New plans still fail closed on older
+binaries via `deny_unknown_fields`.
 
 Preview's read-only boundary keeps the precise drop wording: refs, index,
 working tree, and config are untouched, but the replay prediction may add
@@ -243,9 +312,16 @@ the v0 invariant):
   `git commit-tree`, one commit per step, using the fresh prediction's per-step
   `merged_tree`s (the intermediate trees differ from the originals because the
   order changed, so the tree-preserving ops' "reuse original tree" path cannot
-  be used here). Leading commits whose position is unchanged keep their
-  original object ids (the prefix before the first reordered position), exactly
-  like reword/fixup's unchanged prefix and drop's prefix cap.
+  be used here). **Unchanged-prefix rule (P2):** a leading commit keeps its
+  original object id only where **both** its position is unchanged (the new
+  index equals the natural index) **and** its op/message is unchanged (a plain
+  `pick`). The prefix ends at the first reordered position **or** the first
+  reworded commit, whichever comes first — because a `reword` at its natural
+  position still produces a new object id (the message changed), so "position
+  unchanged" alone is not sufficient to reuse the id. The preview's
+  `result_summary.unchanged_prefix_commits` must apply the identical cap (it
+  already caps at the first reword/fold; reorder adds a cap at the first
+  reordered position), so preview and execute agree on which ids are preserved.
 - **Post-verify is the tree-preserving invariant**: `tree(new tip) ==
   tree(old tip)`. This is the *same* check the existing reword/fold execute
   runs — reorder does not need drop's `final_tree` oracle, because the oracle
@@ -264,13 +340,15 @@ the v0 invariant):
   rolls the ref back (no sync stage exists, so drop's `execute_partial_failure`
   window does not arise). Completed-record write failure rolls back, as today.
 
-## Confirmation & Risk (Draft)
+## Confirmation & Risk
 
-**Recommendation (lead call):**
+**Decided (lead sign-off 2026-06-13):**
 
 - **Unpublished reorder**: `executable`, **no confirmation**, medium severity,
   `reversible_if_unchanged`, no human confirmation — identical to unpublished
-  reword/fold.
+  reword/fold. (In C8-reorder-B this tier is advertised with
+  `execute_supported: false` per the "B advertisement" decision; the
+  confirmation *mechanism* is exercised when execute lands in C.)
 - **Published reorder**: `preview_only` with the existing
   `super-git.confirmation.v0.1` artifact and the published-rewrite phrase —
   identical to any published history edit.
@@ -282,12 +360,11 @@ which reorder forbids; copying it here would be inconsistent with the rest of
 the tree-preserving family. **This is the clearest place not to inherit a drop
 decision by reflex.**
 
-**Documented alternative (conservative):** require confirmation for *all*
-reorders (a dedicated reorder phrase) and relax to the above after soak. Pick
-this if the "mistaken shuffle becomes a real plan" surface (now that order
-errors are no longer hard-blocked) is judged to warrant a human gate even
-unpublished. The lead recommendation is the consistency path; the alternative
-is recorded, not chosen.
+**Documented alternative (conservative, NOT chosen):** require confirmation for
+*all* reorders (a dedicated reorder phrase) and relax after soak. Recorded for
+provenance; the lead chose the consistency path above on 2026-06-13, reasoning
+that the `tree(new tip) == tree(old tip)` hard gate keeps reorder in the
+reword/fold risk class, not drop's content-deletion class.
 
 Risk vocabulary nuance (effects/limitations, not a severity bump): reorder
 changes every rebuilt commit's id and the **intermediate** trees, so
@@ -320,6 +397,28 @@ undo kinds), so reorder needs no new lifecycle work here.
   constraints carry over.
 - `split`/`edit` remain deferred.
 
+## Pre-B Review (Codex findings, 2026-06-13)
+
+Three findings were raised before C8-reorder-B and **all accepted**; the
+contract above is corrected accordingly. No production code changed yet (the
+fields they govern are implemented in B), so these are contract corrections:
+
+- **P1 (schema/plan_id).** Correct — adding `commits_reordered` to the
+  wholesale-hashed `result_summary` would re-hash existing v0.5 plans to a
+  `plan_id` mismatch. Resolution: the reorder advisory data lives in a new
+  **non-hashed** `reorder` block (excluded from the plan_id projection), so
+  v0.5 stays valid with **no bump** — the honest "explicit compatibility
+  projection" path, justified by the binding rule (the order and predicted
+  trees are already bound via instructions + prediction; the summary is
+  derived). See "Plan id and the advisory block".
+- **P2 (unchanged prefix).** Correct — "position unchanged" alone is wrong when
+  reorder mixes with `reword`. Fixed to "position **and** op/message unchanged",
+  with the prefix capped at the first reordered position or first reworded
+  commit. See the Execute Rebuild bullet.
+- **P3 (`instructions.order` ambiguity).** Correct — pinned to mean oldest-first
+  of the **planned** history, with explicit `reorder.old_order`/`new_order`
+  arrays removing residual ambiguity.
+
 ## Open Questions
 
 - **Empty-step policy beyond v0.** If a later slice relaxes Gate 2, it must
@@ -329,9 +428,13 @@ undo kinds), so reorder needs no new lifecycle work here.
   the natural order is the obvious metric, but a single swap of two adjacent
   commits "moves" two commits by that metric; the human summary should show
   old-order/new-order explicitly so the count is never the only signal.
-- **Confirmation for unpublished reorder** (recommendation vs conservative
-  alternative above) is the one decision worth an explicit lead sign-off before
-  C8-reorder-B, since it sets the risk posture.
+- **B advertisement (Option A vs B).** Whether a clean reorder in B is
+  `blocked` + `reorder_execute_unsupported` (Option A, recommended) or advertises
+  its final tier with `execute_supported: false` (Option B). The lead reserved
+  the "advertise `executable`" decision; see "B advertisement". **Resolved:**
+  unpublished-no-confirmation is signed off (Confirmation & Risk); the
+  A-vs-B advertisement is the remaining item before B's status/confirmation
+  tests are written.
 
 ## Slice Plan
 
