@@ -552,9 +552,15 @@ fn published_reorder_executes_with_the_standard_history_edit_confirmation() {
     );
     let plan = preview_plan(&repo, "main", &instructions_doc(&items));
     assert_eq!(plan["data"]["execution"]["status"], "preview_only");
+    let plan_id = plan["data"]["plan_id"].as_str().expect("plan id");
+    let plan_short = plan_id
+        .strip_prefix("sha256:")
+        .unwrap_or(plan_id)
+        .get(..12)
+        .expect("short plan id");
     assert_eq!(
         plan["data"]["confirmation"]["required_phrase"],
-        format!("rewrite published history on refs/heads/feature/login at {tip_before}")
+        format!("rewrite published history on refs/heads/feature/login at {tip_before} for plan {plan_short}")
     );
 
     let json = json_output(execute_with_confirmation(
@@ -805,8 +811,14 @@ fn drop_execute_with_the_published_phrase_is_rejected() {
     // the drop phrase. One plan, one phrase — this must not authorize a drop.
     let mut confirmation = confirmation_for(&plan);
     let branch_ref = plan["data"]["branch"]["ref"].as_str().expect("ref");
+    let plan_id = plan["data"]["plan_id"].as_str().expect("plan id");
+    let plan_short = plan_id
+        .strip_prefix("sha256:")
+        .unwrap_or(plan_id)
+        .get(..12)
+        .expect("short plan id");
     confirmation["acknowledgement"]["phrase"] = serde_json::json!(format!(
-        "rewrite published history on {branch_ref} at {tip_before}"
+        "rewrite published history on {branch_ref} at {tip_before} for plan {plan_short}"
     ));
 
     let json = error_json(execute_with_confirmation(&repo, &plan, &confirmation));

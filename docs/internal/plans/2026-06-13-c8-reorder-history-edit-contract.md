@@ -348,7 +348,8 @@ the v0 invariant):
   reword/fold.
 - **Published reorder**: `preview_only` with the existing
   `super-git.confirmation.v0.1` artifact and the published-rewrite phrase —
-  identical to any published history edit.
+  identical to any published history edit. The phrase includes the short
+  `plan_id` so same-tip plans cannot reuse a typed acknowledgement.
 
 Rationale: with `tree(new tip) == tree(old tip)` enforced as a hard invariant,
 reorder's worst case is "history shape changed", the same class as

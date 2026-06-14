@@ -253,7 +253,7 @@ deterministic and produced by a function shared between preview and execute
 (the established anti-drift pattern):
 
 ```text
-drop <N> commit(s) from <branch_ref> at <tip_commit>
+drop <N> commit(s) from <branch_ref> at <tip_commit> for plan <short-plan-id>
 ```
 
 When the range is also published, `confirmation_reason_codes` lists both

@@ -106,7 +106,8 @@ Implemented today:
     paths the new tip tracks, verifies the rebuilt tip against the predicted
     `final_tree` before the ref moves, and synchronizes the index and working
     tree to the new tip afterwards — the typed phrase
-    `drop <N> commit(s) from <branch_ref> at <tip>` is always required
+    `drop <N> commit(s) from <branch_ref> at <tip> for plan <short-plan-id>`
+    is always required
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current

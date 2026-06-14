@@ -425,16 +425,12 @@ fn build_plan(
         let (human_prompt, required_phrase) = if has_drop {
             (
                 format!("Drop {dropped_count} commit(s) from {branch_label}?"),
-                scan.branch.as_ref().map(|branch| {
-                    drop_confirmation_phrase(dropped_count, &branch.ref_name, &branch.tip_commit)
-                }),
+                None,
             )
         } else {
             (
                 format!("Rewrite published history on {branch_label}?"),
-                scan.branch
-                    .as_ref()
-                    .map(|branch| confirmation_phrase(&branch.ref_name, &branch.tip_commit)),
+                None,
             )
         };
         Some(PreviewConfirmation {
@@ -509,7 +505,44 @@ fn build_plan(
         undo_preview: undo_preview(has_drop, executable),
     };
     plan.plan_id = compute_history_edit_plan_id(&plan);
+    if let Some(required_phrase) = confirmation_required_phrase(
+        &plan,
+        has_drop,
+        plan.prediction.as_ref(),
+        plan.branch.as_ref(),
+    ) {
+        if let Some(confirmation) = plan.confirmation.as_mut() {
+            confirmation.required_phrase = Some(required_phrase);
+        }
+    }
     plan
+}
+
+fn confirmation_required_phrase(
+    plan: &HistoryEditPlan,
+    has_drop: bool,
+    prediction: Option<&HistoryEditPrediction>,
+    branch: Option<&HistoryEditPlanBranch>,
+) -> Option<String> {
+    let branch = branch?;
+    plan.confirmation.as_ref()?;
+    if has_drop {
+        let dropped_count = prediction
+            .map(|prediction| prediction.dropped_commits.len())
+            .unwrap_or(0);
+        Some(drop_confirmation_phrase(
+            dropped_count,
+            &branch.ref_name,
+            &branch.tip_commit,
+            &plan.plan_id,
+        ))
+    } else {
+        Some(confirmation_phrase(
+            &branch.ref_name,
+            &branch.tip_commit,
+            &plan.plan_id,
+        ))
+    }
 }
 
 fn plan_commit(commit: &HistoryEditCommit) -> HistoryEditPlanCommit {
@@ -825,14 +858,30 @@ fn undo_preview(has_drop: bool, executable: bool) -> HistoryEditUndoPreview {
 /// The deterministic typed phrase a published-range history_edit confirmation
 /// must carry. Shared by preview (which advertises it in the plan) and execute
 /// (which enforces it), so the two can never drift.
-pub fn confirmation_phrase(branch_ref: &str, tip_commit: &str) -> String {
-    format!("rewrite published history on {branch_ref} at {tip_commit}")
+pub fn confirmation_phrase(branch_ref: &str, tip_commit: &str, plan_id: &str) -> String {
+    format!(
+        "rewrite published history on {branch_ref} at {tip_commit} for plan {}",
+        short_plan_id(plan_id)
+    )
 }
 
 /// drop plan의 deterministic confirmation phrase (C8-drop 계약). published
 /// phrase와 같은 anti-drift 패턴: preview가 광고하고 execute가 강제한다.
-pub fn drop_confirmation_phrase(count: usize, branch_ref: &str, tip_commit: &str) -> String {
-    format!("drop {count} commit(s) from {branch_ref} at {tip_commit}")
+pub fn drop_confirmation_phrase(
+    count: usize,
+    branch_ref: &str,
+    tip_commit: &str,
+    plan_id: &str,
+) -> String {
+    format!(
+        "drop {count} commit(s) from {branch_ref} at {tip_commit} for plan {}",
+        short_plan_id(plan_id)
+    )
+}
+
+fn short_plan_id(plan_id: &str) -> &str {
+    let digest = plan_id.strip_prefix("sha256:").unwrap_or(plan_id);
+    &digest[..digest.len().min(12)]
 }
 
 pub fn compute_history_edit_plan_id(plan: &HistoryEditPlan) -> String {
@@ -1294,9 +1343,19 @@ mod tests {
         let confirmation = plan.confirmation.expect("confirmation");
         assert_eq!(confirmation.reason_codes, vec!["tree_changing_drop"]);
         let tip = git_stdout(&repo, &["rev-parse", "HEAD"]);
+        let plan_short = plan
+            .plan_id
+            .strip_prefix("sha256:")
+            .unwrap_or(&plan.plan_id);
+        let plan_short = &plan_short[..plan_short.len().min(12)];
         assert_eq!(
             confirmation.required_phrase.as_deref(),
-            Some(format!("drop 1 commit(s) from refs/heads/feature/login at {tip}").as_str())
+            Some(
+                format!(
+                    "drop 1 commit(s) from refs/heads/feature/login at {tip} for plan {plan_short}"
+                )
+                .as_str()
+            )
         );
 
         // 예측 증거: clean, kept 2 step, final_tree는 드랍된 파일이 없는 트리.
@@ -1577,10 +1636,18 @@ mod tests {
             .reason_codes
             .contains(&"rewrites_published_commits".to_string()));
         let tip = git_stdout(&repo, &["rev-parse", "HEAD"]);
+        let plan_short = plan
+            .plan_id
+            .strip_prefix("sha256:")
+            .unwrap_or(&plan.plan_id);
+        let plan_short = &plan_short[..plan_short.len().min(12)];
         assert_eq!(
             confirmation.required_phrase.as_deref(),
             Some(
-                format!("rewrite published history on refs/heads/feature/login at {tip}").as_str()
+                format!(
+                    "rewrite published history on refs/heads/feature/login at {tip} for plan {plan_short}"
+                )
+                .as_str()
             )
         );
     }

@@ -659,7 +659,7 @@ Published-history rewrites reuse the C7-C artifact shape:
   "acknowledged_undo_strategy": "restore_branch_tip_snapshot",
   "acknowledgement": {
     "method": "cli_typed_phrase",
-    "phrase": "rewrite published history on refs/heads/feature/login at ccc333"
+    "phrase": "rewrite published history on refs/heads/feature/login at ccc333 for plan a1b2c3d4e5f6"
   }
 }
 ```
@@ -667,7 +667,7 @@ Published-history rewrites reuse the C7-C artifact shape:
 The deterministic CLI phrase is:
 
 ```text
-rewrite published history on <branch.ref> at <branch.tip_commit>
+rewrite published history on <branch.ref> at <branch.tip_commit> for plan <short-plan-id>
 ```
 
 Static validation reuses the C7-C rule table with `history_edit` identity

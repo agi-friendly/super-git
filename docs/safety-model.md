@@ -153,7 +153,8 @@ steps block before execute. A clean reorder is ref-only and uses the normal
 state: the preview embeds a kept-commit replay prediction that is plan_id-bound,
 a predicted conflict blocks the plan, and a clean prediction still always
 requires the confirmation artifact with the typed phrase
-`drop <N> commit(s) from <branch_ref> at <tip>`. Drop execute requires a clean
+`drop <N> commit(s) from <branch_ref> at <tip> for plan <short-plan-id>`.
+Drop execute requires a clean
 working tree (untracked counts as dirty), and because
 ignored files are invisible to that status-based gate while
 `read-tree -u --reset` would silently overwrite an ignored file on a path

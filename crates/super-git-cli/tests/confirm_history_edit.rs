@@ -91,6 +91,13 @@ fn reword_items(oids: &[String]) -> String {
     ))
 }
 
+fn alternate_reword_items(oids: &[String]) -> String {
+    instructions_doc(&format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"reword","message":"alternate reword"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[1], oids[2]
+    ))
+}
+
 fn preview_plan(dir: &Path, base: &str, instructions: &str) -> serde_json::Value {
     let mut command = super_git(dir);
     command
@@ -124,8 +131,6 @@ fn preview_plan(dir: &Path, base: &str, instructions: &str) -> serde_json::Value
 /// Builds the deterministic, valid confirmation for a published plan envelope.
 fn confirmation_for(plan: &serde_json::Value) -> serde_json::Value {
     let data = &plan["data"];
-    let branch_ref = data["branch"]["ref"].as_str().expect("branch ref");
-    let tip = data["branch"]["tip_commit"].as_str().expect("tip");
     serde_json::json!({
         "schema_version": "super-git.confirmation.v0.1",
         "kind": "destructive_action_confirmation",
@@ -133,15 +138,15 @@ fn confirmation_for(plan: &serde_json::Value) -> serde_json::Value {
         "plan_schema_version": data["schema_version"],
         "plan_id": data["plan_id"],
         "target": {
-            "branch_ref": branch_ref,
+            "branch_ref": data["branch"]["ref"],
             "git_common_dir": data["repository"]["git_common_dir"],
-            "tip_commit": tip
+            "tip_commit": data["branch"]["tip_commit"]
         },
         "acknowledged_reason_codes": data["confirmation"]["reason_codes"],
         "acknowledged_undo_strategy": data["undo_strategy"]["kind"],
         "acknowledgement": {
             "method": "cli_typed_phrase",
-            "phrase": format!("rewrite published history on {branch_ref} at {tip}")
+            "phrase": data["confirmation"]["required_phrase"]
         }
     })
 }
@@ -257,6 +262,28 @@ fn published_plan_with_wrong_phrase_is_rejected() {
     let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
 
     let json = error_json(execute_with_confirmation(&repo, &plan, &confirmation));
+
+    assert!(cause_contains(&json, "confirmation_phrase_mismatch"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+#[test]
+fn published_confirmation_phrase_is_bound_to_the_exact_plan() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = published_feature_repo(tmp.path());
+    let plan_a = preview_plan(&repo, "main", &reword_items(&oids));
+    let plan_b = preview_plan(&repo, "main", &alternate_reword_items(&oids));
+    assert_ne!(plan_a["data"]["plan_id"], plan_b["data"]["plan_id"]);
+    assert_ne!(
+        plan_a["data"]["confirmation"]["required_phrase"],
+        plan_b["data"]["confirmation"]["required_phrase"]
+    );
+    let mut confirmation = confirmation_for(&plan_b);
+    confirmation["acknowledgement"]["phrase"] =
+        plan_a["data"]["confirmation"]["required_phrase"].clone();
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_with_confirmation(&repo, &plan_b, &confirmation));
 
     assert!(cause_contains(&json, "confirmation_phrase_mismatch"));
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);

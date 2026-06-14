@@ -627,9 +627,14 @@ fn validate_confirmation(
             prediction.dropped_commits.len(),
             &branch.ref_name,
             &branch.tip_commit,
+            &plan.plan_id,
         )
     } else {
-        preview_history_edit::confirmation_phrase(&branch.ref_name, &branch.tip_commit)
+        preview_history_edit::confirmation_phrase(
+            &branch.ref_name,
+            &branch.tip_commit,
+            &plan.plan_id,
+        )
     };
     if acknowledgement.phrase.as_deref() != Some(expected_phrase.as_str()) {
         return invalid_plan(

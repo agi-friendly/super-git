@@ -318,9 +318,9 @@ Drop-specific contract, visible in the plan itself:
   cannot be forged.
 - Drop is always confirmation-gated (`preview_only`), regardless of published
   state, with reason code `tree_changing_drop` and the deterministic phrase
-  `drop <N> commit(s) from <branch_ref> at <tip_commit>`. When the range is
-  also published, the reason codes name both, but the phrase stays the drop
-  phrase.
+  `drop <N> commit(s) from <branch_ref> at <tip_commit> for plan
+  <short-plan-id>`. When the range is also published, the reason codes name
+  both, but the phrase stays the drop phrase.
 - `drop` may be mixed with `pick` and `reword` only; mixing with
   `squash`/`fixup` blocks as `drop_with_fold_unsupported`. Dropping every
   commit in the range is allowed and moves the branch to `base` itself.
@@ -367,7 +367,8 @@ Reorder-specific contract:
   `reorder_with_fold_unsupported`.
 - Unpublished reorder plans execute directly. Published reorder plans use the
   standard published-history confirmation phrase:
-  `rewrite published history on <branch.ref> at <branch.tip_commit>`.
+  `rewrite published history on <branch.ref> at <branch.tip_commit> for plan
+  <short-plan-id>`.
 
 ## `predict merge --theirs <rev> [--ours <rev>]`
 
@@ -494,11 +495,12 @@ not carry a confirmation artifact. Published ranges and all drop plans
 (`execution.status: "preview_only"`) require a separate
 `super-git.confirmation.v0.1` artifact whose target, reason codes, undo
 strategy, and CLI phrase match the plan — the published phrase is
-`rewrite published history on <branch.ref> at <branch.tip_commit>`, the drop
-phrase is `drop <N> commit(s) from <branch.ref> at <branch.tip_commit>`; the
-confirmation is authorization only and never replaces fresh revalidation. The
-undo token still restores the local branch tip but cannot un-publish anything
-already pushed.
+`rewrite published history on <branch.ref> at <branch.tip_commit> for plan
+<short-plan-id>`, the drop phrase is `drop <N> commit(s) from <branch.ref> at
+<branch.tip_commit> for plan <short-plan-id>`; copy the exact
+`confirmation.required_phrase` from the plan. The confirmation is authorization
+only and never replaces fresh revalidation. The undo token still restores the
+local branch tip but cannot un-publish anything already pushed.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;
