@@ -317,10 +317,13 @@ the v0 invariant):
   `pick`). The prefix ends at the first reordered position **or** the first
   reworded commit, whichever comes first — because a `reword` at its natural
   position still produces a new object id (the message changed), so "position
-  unchanged" alone is not sufficient to reuse the id. The preview's
-  `result_summary.unchanged_prefix_commits` must apply the identical cap (it
-  already caps at the first reword/fold; reorder adds a cap at the first
-  reordered position), so preview and execute agree on which ids are preserved.
+  unchanged" alone is not sufficient to reuse the id. The internal
+  `HistoryEditProgram.summary.unchanged_prefix_commits` value must apply the
+  identical cap (it already caps at the first reword/fold; reorder adds a cap
+  at the first reordered position), so preview and execute agree on which ids
+  are preserved. This is not a public `result_summary` field in v0.5; the
+  public evidence is the reordered order plus the rebuilt commit ids after
+  execute.
 - **Post-verify is the tree-preserving invariant**: `tree(new tip) ==
   tree(old tip)`. This is the *same* check the existing reword/fold execute
   runs — reorder does not need drop's `final_tree` oracle, because the oracle
