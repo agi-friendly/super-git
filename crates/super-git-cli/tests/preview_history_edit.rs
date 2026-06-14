@@ -213,7 +213,7 @@ fn executable_plan_resolves_instructions_and_summary() {
 }
 
 #[test]
-fn reorder_preview_reports_order_and_prediction_but_no_execute_support() {
+fn reorder_preview_reports_order_prediction_and_execute_support() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());
     let items = format!(
@@ -228,11 +228,11 @@ fn reorder_preview_reports_order_and_prediction_but_no_execute_support() {
     ));
 
     let data = &json["data"];
-    assert_eq!(data["execution"]["status"], "blocked");
-    assert_eq!(data["execution"]["execute_supported"], false);
+    assert_eq!(data["execution"]["status"], "executable");
+    assert_eq!(data["execution"]["execute_supported"], true);
     assert_eq!(data["execution"]["requires_confirmation_artifact"], false);
     assert!(data.get("confirmation").is_none());
-    assert_eq!(blocked_codes(data), vec!["reorder_execute_unsupported"]);
+    assert!(blocked_codes(data).is_empty());
     assert_eq!(data["reorder"]["commits_reordered"], 2);
     assert_eq!(data["reorder"]["old_order"][0], oids[0]);
     assert_eq!(data["reorder"]["new_order"][0], oids[1]);
@@ -246,7 +246,7 @@ fn reorder_preview_reports_order_and_prediction_but_no_execute_support() {
     assert!(data["prediction"]["final_tree"].is_string());
     assert_eq!(data["result_summary"]["final_tree_unchanged"], true);
     assert_eq!(data["undo_strategy"]["kind"], "restore_branch_tip_snapshot");
-    assert_eq!(data["undo_preview"]["available_after_execute"], false);
+    assert_eq!(data["undo_preview"]["available_after_execute"], true);
 }
 
 #[test]

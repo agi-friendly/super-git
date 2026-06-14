@@ -270,24 +270,27 @@ history.
 
 ## History Edit Workflows
 
-`history_edit` is the fourth write action: a plan-based, tree-preserving
-rewrite of the `base..HEAD` range on the current branch.
+`history_edit` is the fourth write action: a plan-based rewrite of the
+`base..HEAD` range on the current branch.
 
 - `preview history-edit --base <ref>` without instructions returns a read-only
   survey of the range (commits, published state, signatures, hard blocks).
 - With a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
-  `fixup`/`drop` per commit), preview validates the instruction program against
-  the scanned range and freezes it into `super-git.plan.v0.5`. Unpublished
-  tree-preserving ranges are `executable`; published ranges and all `drop`
-  plans are `preview_only` and require a separate typed-phrase confirmation
-  artifact.
+  `fixup`/`drop` per commit, plus reorder by changing the item order), preview
+  validates the instruction program against the scanned range and freezes it
+  into `super-git.plan.v0.5`. Unpublished tree-preserving ranges, including
+  clean reorder, are `executable`; published ranges and all `drop` plans are
+  `preview_only` and require a separate typed-phrase confirmation artifact.
 - `execute` re-derives a fresh plan from the live repository and requires the
   plan id to match, rebuilds commits with `git commit-tree` preserving each
   original author, writes an intent record, moves the branch ref with a
-  compare-and-swap, and post-verifies the final tree. Tree-preserving ops must
-  keep it byte-identical to the pre-execute tree; `drop` must land on the
+  compare-and-swap, and post-verifies the final tree. Tree-preserving ops,
+  including clean reorder, must keep it byte-identical to the pre-execute tree
+  and leave the working tree/index untouched; `drop` must land on the
   prediction's `final_tree` oracle and then synchronizes the working tree to
-  the new tip (after a clean-tree and ignored-collision gate).
+  the new tip (after a clean-tree and ignored-collision gate). Reorder uses the
+  replay prediction's per-step trees to rebuild from the first moved position,
+  but it is still ref-only because the final tree is unchanged.
 - Undo restores the pre-execute branch tip (and, for `drop`, the working tree),
   then consumes the execution record so the same plan can be executed again, as
   described above.

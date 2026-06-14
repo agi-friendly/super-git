@@ -1,9 +1,10 @@
 # C8-reorder History Edit Reorder Contract
 
 > **Status:** Active contract checkpoint for the `reorder` history-edit op.
-> C8-reorder-B preview behavior has landed; execute/undo behavior remains
-> blocked until C8-reorder-C. (Filename dated by authoring day, 2026-06-13;
-> the original proposal named 06-14.)
+> C8-reorder-C has landed: clean, tree-preserving reorder previews execute via
+> the ref-only history-edit path and reuse `restore_branch_tip_snapshot` undo.
+> (Filename dated by authoring day, 2026-06-13; the original proposal named
+> 06-14.)
 
 **Goal:** Unlock reordering commits in a `history_edit` range, consuming the
 Stage 7 replay predictor that C8-drop already proved out.
@@ -245,22 +246,18 @@ A valid reorder candidate produces a plan classified as follows:
 - **Empty step** (Gate 2): `blocked`, `reorder_creates_empty_commit`.
 - **Final tree would change** (Gate 1): `blocked`,
   `reorder_changes_final_tree`, with `old_tree`/`predicted_final_tree`.
-- **Clean, tree-preserving reorder**: in the *final* contract (after
-  C8-reorder-C), a normal write plan gated only by the published-range rule —
-  `executable` when unpublished, `preview_only` + confirmation when published.
-  **In C8-reorder-B, execute is not implemented**, so the slice must not
-  advertise an executable plan (see "B advertisement" below): a clean reorder
-  is advertised with `execute_supported: false` and a dedicated
-  `reorder_execute_unsupported` advertisement, carrying the full prediction +
-  `reorder` block + effects so the agent sees exactly what the reorder would
-  do, while execute fail-closes.
+- **Clean, tree-preserving reorder**: a normal write plan gated only by the
+  published-range rule — `executable` when unpublished, `preview_only` +
+  confirmation when published. Earlier C8-reorder-B builds advertised this as
+  blocked with `reorder_execute_unsupported`; C8-reorder-C removed that block
+  and assigned the final executable/preview-only tier.
 - The plan embeds the prediction evidence it was built from (per-step trees,
   `final_tree`), plan_id-bound, exactly like drop.
 - Working-tree state does **not** block preview (it stays read-only). It does
   not block execute either (see below) — unlike drop, reorder has no
   clean-tree requirement.
 
-### B advertisement: keep B strictly preview-only (Option A chosen)
+### Historical B advertisement: keep B strictly preview-only (Option A chosen)
 
 There is a real fork for how a *clean* reorder is advertised while execute is
 unimplemented (B), because reorder's unpublished tier is `executable` (no
@@ -282,9 +279,11 @@ advertise its final tier with `execute_supported: false` and no broken promise.
   flagged as a possible broken promise.
 
 Lead sign-off chose Option A before C8-reorder-B implementation. The B tests
-therefore pin a clean reorder as `blocked` with `reorder_execute_unsupported`,
-`execute_supported: false`, no confirmation artifact, and full prediction +
-`reorder` evidence.
+therefore pinned a clean reorder as `blocked` with
+`reorder_execute_unsupported`, `execute_supported: false`, no confirmation
+artifact, and full prediction + `reorder` evidence. C8-reorder-C supersedes
+that temporary advertisement: clean reorder now reaches the final tier and
+execute supports it.
 
 Plan schema: reorder rides the existing history-edit plan family at
 `super-git.plan.v0.5` with no bump. It adds new block codes and one new
@@ -346,9 +345,7 @@ the v0 invariant):
 
 - **Unpublished reorder**: `executable`, **no confirmation**, medium severity,
   `reversible_if_unchanged`, no human confirmation — identical to unpublished
-  reword/fold. (In C8-reorder-B this tier is advertised with
-  `execute_supported: false` per the "B advertisement" decision; the
-  confirmation *mechanism* is exercised when execute lands in C.)
+  reword/fold.
 - **Published reorder**: `preview_only` with the existing
   `super-git.confirmation.v0.1` artifact and the published-rewrite phrase —
   identical to any published history edit.
@@ -428,11 +425,6 @@ fields they govern are implemented in B), so these are contract corrections:
   the natural order is the obvious metric, but a single swap of two adjacent
   commits "moves" two commits by that metric; the human summary should show
   old-order/new-order explicitly so the count is never the only signal.
-- **B advertisement.** Resolved before implementation: Option A is chosen.
-  Clean reorder preview stays `blocked` with `reorder_execute_unsupported`;
-  C8-reorder-C removes that block and assigns the final executable/preview-only
-  tier.
-
 ## Slice Plan
 
 - [x] **C8-reorder-A** — this contract checkpoint plus the Git-behavior spikes
@@ -445,10 +437,7 @@ fields they govern are implemented in B), so these are contract corrections:
       `predicted_conflict` blocks with step evidence, `commits_reordered` +
       old/new-order summary + effects, plan_id-bound prediction. Execute stays
       rejected for reorder plans until C.
-- [ ] **C8-reorder-C** — execute (drop-style replay rebuild + tree-preserving
+- [x] **C8-reorder-C** — execute (drop-style replay rebuild + tree-preserving
       post-verify, ref-only move, no worktree sync), undo
       (`restore_branch_tip_snapshot` reuse), public docs
       (README / command-reference / safety-model), and lifecycle hardening.
-- Alternative: if C grows (e.g. the unchanged-prefix rebuild or the
-  old/new-order evidence needs more surface than expected), split execute (C)
-  from undo + public docs + hardening (D), mirroring the drop series.

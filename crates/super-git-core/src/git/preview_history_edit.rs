@@ -308,14 +308,6 @@ fn build_plan(
         scan.blocks.iter().map(|block| block.code.clone()).collect();
     block_codes.extend(instruction_blocks.iter().map(|block| block.code.clone()));
     block_codes.extend(prediction_blocks.iter().map(|block| block.code.clone()));
-    if has_reorder
-        && prediction
-            .as_ref()
-            .is_some_and(|prediction| prediction.status == "clean")
-        && prediction_blocks.is_empty()
-    {
-        block_codes.insert("reorder_execute_unsupported".to_string());
-    }
     let has_blocks = !block_codes.is_empty();
 
     let published_in_range = scan.range.commits.iter().any(|commit| commit.published);
@@ -340,22 +332,7 @@ fn build_plan(
     let requires_confirmation_artifact = status == "preview_only";
     let executable = status == "executable" || status == "preview_only";
 
-    let mut execution_only_blocks = Vec::new();
-    if block_codes.contains("reorder_execute_unsupported") {
-        execution_only_blocks.push(history_edit::HistoryEditBlock {
-            code: "reorder_execute_unsupported".to_string(),
-            severity: "hard_block".to_string(),
-            details: Some(json!({
-                "execute_phase": "C8-reorder-C",
-            })),
-        });
-    }
-    let blocked_reasons = blocked_reasons(
-        &scan,
-        &instruction_blocks,
-        &prediction_blocks,
-        &execution_only_blocks,
-    );
+    let blocked_reasons = blocked_reasons(&scan, &instruction_blocks, &prediction_blocks);
     let suggested_super_git_command = suggested_command(status, base);
     let execution = HistoryEditExecution {
         status: status.to_string(),
@@ -516,12 +493,7 @@ fn build_plan(
         risk,
         confirmation,
         warnings,
-        effects: effects(
-            status,
-            program.as_ref(),
-            &branch_label,
-            block_codes.contains("reorder_execute_unsupported"),
-        ),
+        effects: effects(status, program.as_ref(), &branch_label, has_reorder),
         limitations: limitations(has_drop, has_reorder),
         reference_commands: WorktreeReferenceCommands {
             semantics: "documentation_only".to_string(),
@@ -585,13 +557,11 @@ fn blocked_reasons(
     scan: &HistoryEditScan,
     instruction_blocks: &[history_edit::HistoryEditBlock],
     prediction_blocks: &[history_edit::HistoryEditBlock],
-    execution_only_blocks: &[history_edit::HistoryEditBlock],
 ) -> Vec<HistoryEditBlockedReason> {
     scan.blocks
         .iter()
         .chain(instruction_blocks.iter())
         .chain(prediction_blocks.iter())
-        .chain(execution_only_blocks.iter())
         .map(|block| HistoryEditBlockedReason {
             code: block.code.clone(),
             severity: block.severity.clone(),
@@ -723,9 +693,9 @@ fn effects(
     status: &str,
     program: Option<&HistoryEditProgram>,
     branch_label: &str,
-    reorder_execute_unsupported: bool,
+    has_reorder: bool,
 ) -> Vec<String> {
-    match (status, program, reorder_execute_unsupported) {
+    match (status, program, has_reorder) {
         // tree-changing(drop) plan은 효과 설명도 달라야 한다: 트리가 보존된다는
         // 문장은 거짓이 되고, execute의 워킹트리 동기화가 새로 등장한다.
         ("executable" | "preview_only", Some(program), _)
@@ -745,6 +715,18 @@ fn effects(
                 "Execute will require a clean working tree and will synchronize it to the new tip.".to_string(),
             ]
         }
+        ("executable" | "preview_only", Some(program), true) => {
+            let summary = &program.summary;
+            vec![
+                format!(
+                    "Reorder {} commits on {}.",
+                    summary.commits_before, branch_label
+                ),
+                "Preserve the final tree; working-tree files and the index do not change."
+                    .to_string(),
+                "Change commit object ids and intermediate history shape from the first reordered position.".to_string(),
+            ]
+        }
         ("executable" | "preview_only", Some(program), _) => {
             let summary = &program.summary;
             vec![
@@ -759,18 +741,6 @@ fn effects(
                 "Preserve every author name, email, and date.".to_string(),
                 "Preserve the final tree; working-tree files and the index do not change."
                     .to_string(),
-            ]
-        }
-        ("blocked", Some(program), true) => {
-            let summary = &program.summary;
-            vec![
-                format!(
-                    "Preview a reorder of {} commits on {}.",
-                    summary.commits_before, branch_label
-                ),
-                "Preserve the final tree; working-tree files and the index do not change."
-                    .to_string(),
-                "Execution is not available until C8-reorder-C lands.".to_string(),
             ]
         }
         ("survey", _, _) => vec![
@@ -800,8 +770,6 @@ fn limitations(has_drop: bool, has_reorder: bool) -> Vec<String> {
     }
     if has_reorder {
         limitations.extend([
-            "Reorder preview blocks execution until C8-reorder-C implements the write path."
-                .to_string(),
             "Reorder preserves the final tree only; intermediate commit trees and object ids may change."
                 .to_string(),
         ]);
@@ -1554,11 +1522,11 @@ mod tests {
     // ---- C8-reorder-B: reorder preview ----
 
     #[test]
-    fn clean_reorder_is_preview_blocked_until_execute_lands() {
+    fn clean_reorder_is_executable_after_execute_lands() {
         let temp = tempfile::tempdir().expect("temp");
         let (repo, oids) = feature_repo(temp.path());
         // feature_repo's commits touch independent files, so swapping c1/c2 is a
-        // clean tree-preserving reorder. B still advertises no execute support.
+        // clean tree-preserving reorder.
         let items = format!(
             r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
             oids[1], oids[0], oids[2]
@@ -1566,17 +1534,11 @@ mod tests {
 
         let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
 
-        assert_eq!(plan.execution.status, "blocked");
-        assert!(!plan.execution.execute_supported);
+        assert_eq!(plan.execution.status, "executable");
+        assert!(plan.execution.execute_supported);
         assert!(!plan.execution.requires_confirmation_artifact);
         assert!(plan.confirmation.is_none());
-        let codes: Vec<&str> = plan
-            .execution
-            .blocked_reasons
-            .iter()
-            .map(|reason| reason.code.as_str())
-            .collect();
-        assert_eq!(codes, vec!["reorder_execute_unsupported"]);
+        assert!(plan.execution.blocked_reasons.is_empty());
         assert!(plan.instructions.is_some());
         assert!(plan.result_summary.is_some());
         let prediction = plan.prediction.expect("prediction");
@@ -1586,11 +1548,11 @@ mod tests {
         assert!(prediction.final_tree.is_some());
         assert_eq!(prediction.steps.len(), 3);
         assert_eq!(plan.undo_strategy.kind, "restore_branch_tip_snapshot");
-        assert!(!plan.undo_preview.available_after_execute);
+        assert!(plan.undo_preview.available_after_execute);
     }
 
     #[test]
-    fn published_reorder_is_high_risk_but_still_no_confirmation_artifact_in_b() {
+    fn published_reorder_requires_the_standard_history_edit_confirmation() {
         let temp = tempfile::tempdir().expect("temp");
         let (repo, oids) = feature_repo(temp.path());
         git(
@@ -1604,19 +1566,23 @@ mod tests {
 
         let plan = preview_history_edit(&repo, "main", Some(&instructions(&items))).expect("plan");
 
-        assert_eq!(plan.execution.status, "blocked");
-        assert!(!plan.execution.execute_supported);
-        assert!(!plan.execution.requires_confirmation_artifact);
-        assert!(plan.confirmation.is_none());
+        assert_eq!(plan.execution.status, "preview_only");
+        assert!(plan.execution.execute_supported);
+        assert!(plan.execution.requires_confirmation_artifact);
         assert_eq!(plan.risk.severity, "high");
         assert!(plan.risk.requires_human_confirmation);
-        let codes: Vec<&str> = plan
-            .execution
-            .blocked_reasons
-            .iter()
-            .map(|reason| reason.code.as_str())
-            .collect();
-        assert_eq!(codes, vec!["reorder_execute_unsupported"]);
+        assert!(plan.execution.blocked_reasons.is_empty());
+        let confirmation = plan.confirmation.expect("confirmation");
+        assert!(confirmation
+            .reason_codes
+            .contains(&"rewrites_published_commits".to_string()));
+        let tip = git_stdout(&repo, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            confirmation.required_phrase.as_deref(),
+            Some(
+                format!("rewrite published history on refs/heads/feature/login at {tip}").as_str()
+            )
+        );
     }
 
     #[test]
