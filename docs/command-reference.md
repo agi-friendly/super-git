@@ -362,6 +362,10 @@ Reorder-specific contract:
   position using the prediction's per-step trees, moves only the branch ref,
   and leaves the working tree and index untouched. Dirty working trees are
   allowed with the same warning as other tree-preserving history edits.
+- The top-level `reorder` block and `effects` strings are display evidence,
+  not authority. Execute revalidates from the bound `instructions` and
+  `prediction`; tampering with advisory order summaries does not change what
+  gets replayed.
 - Reorder may mix with `pick` and `reword`. Mixing reorder with `drop` blocks
   as `reorder_with_drop_unsupported`; mixing with `squash`/`fixup` blocks as
   `reorder_with_fold_unsupported`.

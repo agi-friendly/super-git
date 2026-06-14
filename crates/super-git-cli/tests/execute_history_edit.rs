@@ -494,6 +494,42 @@ fn reorder_executes_ref_only_and_preserves_dirty_worktree() {
 }
 
 #[test]
+fn tampered_reorder_advisory_is_ignored_in_favor_of_bound_instructions() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+    let mut plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    // The reorder block and effects are display evidence only. A forged copy
+    // must not change execute semantics; the bound instructions still drive
+    // the actual replay order.
+    plan["data"]["reorder"]["commits_reordered"] = serde_json::json!(0);
+    plan["data"]["reorder"]["old_order"] = serde_json::json!([]);
+    plan["data"]["reorder"]["new_order"] =
+        serde_json::json!([oids[0].clone(), oids[1].clone(), oids[2].clone()]);
+    plan["data"]["effects"] = serde_json::json!(["forged: no commits will move"]);
+
+    let json = json_output(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before
+    );
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "fix typo".to_string(),
+            "feat(login): add form".to_string(),
+            "wip".to_string()
+        ]
+    );
+}
+
+#[test]
 fn reorder_rebuilds_from_the_first_moved_position() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());
