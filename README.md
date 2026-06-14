@@ -65,8 +65,9 @@ Implemented today:
     builds a rewrite plan; `pick`/`reword`/`squash`/`fixup` and clean reorder
     plans are tree-preserving, while `drop` removes a commit's patch from the
     final history
-  - unpublished ranges produce an executable plan; published ranges produce a
-    `preview_only` plan that requires a separate human confirmation artifact
+  - unpublished tree-preserving plans execute directly; published ranges and
+    all `drop` plans produce a `preview_only` plan that requires a separate
+    human confirmation artifact
   - `drop` and reorder plans embed replay predictions (a predicted conflict
     blocks the plan; nothing is ever auto-resolved); drop carries the predicted
     `final_tree` that execute must land on, while reorder is allowed only when

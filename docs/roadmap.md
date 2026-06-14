@@ -172,9 +172,9 @@ Why this is next:
 - History editing is where IDE users gain the most over plain CLI users:
   rewording intermediate commits, squashing, dropping, and reordering. Agents
   deserve the same leverage through a structured contract.
-- Unlike worktree removal, history edit has an honestly provable undo: rebase
-  moves a branch pointer without deleting objects, so a pre-execute branch
-  snapshot can restore the previous tip.
+- Unlike worktree removal, history edit has honestly scoped undo contracts:
+  tree-preserving edits restore the previous branch tip, while tree-changing
+  `drop` also restores the index and working tree to that previous tip.
 
 Implemented so far:
 
@@ -203,13 +203,15 @@ Planned shape:
   reconstruct history from `git log` parsing by hand
 - a declarative instruction list inside the plan: `pick`, `reword`, `squash`,
   `fixup`, `drop`, and reordering, instead of todo-file strings
-- the first op set never changes any tree, so `execute` rebuilds the commit
-  chain with Git plumbing and moves the branch ref atomically; interactive
-  rebase machinery is never invoked, and plan-provided text is never executed
-  directly
+- v0 splits history edit into tree-preserving ops (`pick`/`reword`/`squash`/
+  `fixup`/clean reorder) and the tree-changing `drop` op; `execute` rebuilds
+  the commit chain with Git plumbing and moves the branch ref by
+  compare-and-swap, interactive rebase machinery is never invoked, and
+  plan-provided text is never executed directly
 - hard blocks first: in-progress operations, conflicted paths, and merge
-  commits in range; staged and unstaged changes are allowed with a warning
-  because the mechanism never touches files
+  commits in range; staged and unstaged changes are allowed with a warning for
+  tree-preserving plans, while `drop` requires a clean working tree and syncs
+  the index and working tree to the new tip
 - rewriting commits already on an upstream requires the destructive
   confirmation contract from Stage 5 instead of a silent allow
 - undo token restores the pre-execute branch tip after provenance checks

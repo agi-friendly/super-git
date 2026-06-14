@@ -38,7 +38,7 @@ pub fn execute_history_edit_plan(
             let Some(bytes) = confirmation_bytes else {
                 return invalid_plan(
                     "confirmation_required",
-                    "history_edit execute for a published range requires a separate confirmation artifact",
+                    "history_edit execute for this confirmation-gated plan requires a separate confirmation artifact",
                 );
             };
             let confirmation = parse_confirmation(bytes)?;

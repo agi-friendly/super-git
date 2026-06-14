@@ -169,7 +169,7 @@ fn reject_unexpected_confirmation(confirmation_bytes: Option<&[u8]>) -> Result<(
     if confirmation_bytes.is_some() {
         return invalid_plan(
             "confirmation_not_supported",
-            "confirmation artifacts are supported only for worktree_remove plans and published-range history_edit plans",
+            "confirmation artifacts are supported only for worktree_remove plans and confirmation-gated history_edit plans",
         );
     }
     Ok(())
