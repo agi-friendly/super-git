@@ -1,10 +1,9 @@
 # C8-reorder History Edit Reorder Contract
 
 > **Status:** Active contract checkpoint for the `reorder` history-edit op.
-> No `reorder` preview, execute, or undo behavior exists yet; this document
-> fixes the contract — and the Git behavior it rests on — before any of it is
-> implemented. (Filename dated by authoring day, 2026-06-13; the original
-> proposal named 06-14.)
+> C8-reorder-B preview behavior has landed; execute/undo behavior remains
+> blocked until C8-reorder-C. (Filename dated by authoring day, 2026-06-13;
+> the original proposal named 06-14.)
 
 **Goal:** Unlock reordering commits in a `history_edit` range, consuming the
 Stage 7 replay predictor that C8-drop already proved out.
@@ -261,7 +260,7 @@ A valid reorder candidate produces a plan classified as follows:
   not block execute either (see below) — unlike drop, reorder has no
   clean-tree requirement.
 
-### B advertisement: keep B strictly preview-only (decision pending lead)
+### B advertisement: keep B strictly preview-only (Option A chosen)
 
 There is a real fork for how a *clean* reorder is advertised while execute is
 unimplemented (B), because reorder's unpublished tier is `executable` (no
@@ -282,9 +281,10 @@ advertise its final tier with `execute_supported: false` and no broken promise.
   B, but advertises `executable` for unpublished reorder, which the lead
   flagged as a possible broken promise.
 
-The lead reserved this decision ("pause if you'd advertise `executable`"). The
-recommendation is Option A; the choice is recorded here pending sign-off, and
-B's status/confirmation tests follow whichever is chosen.
+Lead sign-off chose Option A before C8-reorder-B implementation. The B tests
+therefore pin a clean reorder as `blocked` with `reorder_execute_unsupported`,
+`execute_supported: false`, no confirmation artifact, and full prediction +
+`reorder` evidence.
 
 Plan schema: reorder rides the existing history-edit plan family at
 `super-git.plan.v0.5` with no bump. It adds new block codes and one new
@@ -428,19 +428,16 @@ fields they govern are implemented in B), so these are contract corrections:
   the natural order is the obvious metric, but a single swap of two adjacent
   commits "moves" two commits by that metric; the human summary should show
   old-order/new-order explicitly so the count is never the only signal.
-- **B advertisement (Option A vs B).** Whether a clean reorder in B is
-  `blocked` + `reorder_execute_unsupported` (Option A, recommended) or advertises
-  its final tier with `execute_supported: false` (Option B). The lead reserved
-  the "advertise `executable`" decision; see "B advertisement". **Resolved:**
-  unpublished-no-confirmation is signed off (Confirmation & Risk); the
-  A-vs-B advertisement is the remaining item before B's status/confirmation
-  tests are written.
+- **B advertisement.** Resolved before implementation: Option A is chosen.
+  Clean reorder preview stays `blocked` with `reorder_execute_unsupported`;
+  C8-reorder-C removes that block and assigns the final executable/preview-only
+  tier.
 
 ## Slice Plan
 
 - [x] **C8-reorder-A** — this contract checkpoint plus the Git-behavior spikes
       that fix the two gates (docs only; no production behavior change).
-- [ ] **C8-reorder-B** — preview accepts a reordered instruction list: relax
+- [x] **C8-reorder-B** — preview accepts a reordered instruction list: relax
       `instructions_order_mismatch` into reorder detection (set-cover preserved),
       op-mixing blocks (`reorder_with_drop_unsupported`,
       `reorder_with_fold_unsupported`), the two content gates

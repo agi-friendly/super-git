@@ -447,6 +447,24 @@ fn survey_plan_cannot_be_executed() {
 }
 
 #[test]
+fn reorder_preview_plan_cannot_execute_until_reorder_execute_lands() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let json = error_json(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], false);
+    assert!(cause_contains(&json, "not_executable"));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+}
+
+#[test]
 fn tampered_advisory_fields_are_ignored_in_favor_of_authentic_repo_values() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());

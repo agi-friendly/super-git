@@ -232,8 +232,8 @@ Slicing direction:
   which puts it in the reword/fold safety class, not drop's. Contract
   checkpoint:
   `docs/internal/plans/2026-06-13-c8-reorder-history-edit-contract.md`
-  (C8-reorder-A: contract + Git-behavior spikes done; B preview / C execute
-  open)
+  (C8-reorder-A: contract + Git-behavior spikes done; C8-reorder-B preview
+  done with execute fail-closed; C execute open)
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
