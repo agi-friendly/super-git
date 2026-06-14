@@ -172,9 +172,9 @@ Why this is next:
 - History editing is where IDE users gain the most over plain CLI users:
   rewording intermediate commits, squashing, dropping, and reordering. Agents
   deserve the same leverage through a structured contract.
-- Unlike worktree removal, history edit has an honestly provable undo: rebase
-  moves a branch pointer without deleting objects, so a pre-execute branch
-  snapshot can restore the previous tip.
+- Unlike worktree removal, history edit has honestly scoped undo contracts:
+  tree-preserving edits restore the previous branch tip, while tree-changing
+  `drop` also restores the index and working tree to that previous tip.
 
 Implemented so far:
 
@@ -203,13 +203,15 @@ Planned shape:
   reconstruct history from `git log` parsing by hand
 - a declarative instruction list inside the plan: `pick`, `reword`, `squash`,
   `fixup`, `drop`, and reordering, instead of todo-file strings
-- the first op set never changes any tree, so `execute` rebuilds the commit
-  chain with Git plumbing and moves the branch ref atomically; interactive
-  rebase machinery is never invoked, and plan-provided text is never executed
-  directly
+- v0 splits history edit into tree-preserving ops (`pick`/`reword`/`squash`/
+  `fixup`/clean reorder) and the tree-changing `drop` op; `execute` rebuilds
+  the commit chain with Git plumbing and moves the branch ref by
+  compare-and-swap, interactive rebase machinery is never invoked, and
+  plan-provided text is never executed directly
 - hard blocks first: in-progress operations, conflicted paths, and merge
-  commits in range; staged and unstaged changes are allowed with a warning
-  because the mechanism never touches files
+  commits in range; staged and unstaged changes are allowed with a warning for
+  tree-preserving plans, while `drop` requires a clean working tree and syncs
+  the index and working tree to the new tip
 - rewriting commits already on an upstream requires the destructive
   confirmation contract from Stage 5 instead of a silent allow
 - undo token restores the pre-execute branch tip after provenance checks
@@ -228,7 +230,12 @@ Slicing direction:
   re-execute, public docs, and lifecycle hardening). The full
   preview→confirm→execute→undo→re-execute drop lifecycle is covered by tests.
 - reordering is the remaining replay consumer; it reuses the same machinery
-  and gets its own checkpoint once drop has soaked
+  but is tree-preserving by contract (final tree must equal the old tip's),
+  which puts it in the reword/fold safety class, not drop's. Contract
+  checkpoint:
+  `docs/internal/plans/2026-06-13-c8-reorder-history-edit-contract.md`
+  (C8-reorder-A: contract + Git-behavior spikes done; C8-reorder-B preview
+  done; C8-reorder-C execute/undo/public docs done with ref-only semantics)
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
@@ -240,14 +247,14 @@ Done so far: the C9-A merge prediction core
 the C9-C rebase-chain prediction core
 (`super-git.rebase-prediction.v0.1`, per-step replay that stops at the first
 predicted conflict), and the C9-D `predict rebase` CLI verb. The Stage 6
-`drop` consumer has since landed (the C8-drop series); `inspect` integration
-and the `reorder` consumer remain open.
+`drop` and reorder consumers have since landed; `inspect` integration remains
+open.
 
 - `git merge-tree`-based dry-run prediction for merge and rebase previews
 - per-file predicted conflicts with both contributing commits
 - prediction feeds Stage 6 `drop`/reorder steps and standalone merge or rebase
-  previews; the safe `drop` for wip commits — the highest-demand consumer —
-  has landed, with `reorder` still to follow
+  previews; the safe `drop` for wip commits and the tree-preserving reorder
+  consumer have landed
 - `inspect` gains the branch-relationship context prediction needs, such as
   merge-base and shared-upstream hints
 - safe branch refresh from

@@ -130,25 +130,32 @@ return an automatic undo token.
 
 `history_edit` rewrites the `base..HEAD` range of the current branch from a
 `super-git.plan.v0.5` built out of declarative
-`pick`/`reword`/`squash`/`fixup`/`drop` instructions. Execute re-derives a
-fresh plan from the live repository and requires its plan id to match (so
-author identity, messages, and the embedded replay prediction cannot be forged
-through a tampered plan), rebuilds the commits with `git commit-tree` while
-preserving each original author, writes an intent record, then moves the branch
-ref with a compare-and-swap against the pre-execute tip. A post-verify check
-proves the final tree is exactly the expected one; any failure after the ref
-moved but before working-tree synchronization starts rolls the branch back.
-Published ranges are `preview_only` and require a separate
+`pick`/`reword`/`squash`/`fixup`/`drop` instructions, plus reorder by changing
+the instruction list order. Execute re-derives a fresh plan from the live
+repository and requires its plan id to match (so author identity, messages, the
+instruction order, and embedded replay predictions cannot be forged through a
+tampered plan), rebuilds the commits with `git commit-tree` while preserving
+each original author, writes an intent record, then moves the branch ref with a
+compare-and-swap against the pre-execute tip. A post-verify check proves the
+final tree is exactly the expected one; any failure after the ref moved but
+before working-tree synchronization starts rolls the branch back. Published
+ranges are `preview_only` and require a separate
 `super-git.confirmation.v0.1` artifact with a typed phrase.
 
-The tree-preserving ops (`pick`/`reword`/`squash`/`fixup`) keep the final tree
-identical to the pre-execute tree and never touch the working tree or index.
-`drop` is the one tree-changing op and is gated harder, regardless of
-published state: the preview embeds a kept-commit replay prediction (Stage 7
-machinery) that is plan_id-bound, a predicted conflict blocks the plan, and a
-clean prediction still always requires the confirmation artifact with the
-typed phrase `drop <N> commit(s) from <branch_ref> at <tip>`. Drop execute
-requires a clean working tree (untracked counts as dirty), and because
+The tree-preserving ops (`pick`/`reword`/`squash`/`fixup`) and clean reorder
+keep the final tree identical to the pre-execute tree and never touch the
+working tree or index. Reorder still uses the Stage 7 replay predictor as a
+guard: predicted conflicts, predicted final-tree changes, and v0 empty replay
+steps block before execute. A clean reorder is ref-only and uses the normal
+`restore_branch_tip_snapshot` undo token.
+
+`drop` is the one tree-changing op and is gated harder, regardless of published
+state: the preview embeds a kept-commit replay prediction that is plan_id-bound,
+a predicted conflict blocks the plan, and a clean prediction still always
+requires the confirmation artifact with the typed phrase
+`drop <N> commit(s) from <branch_ref> at <tip> for plan <short-plan-id>`.
+Drop execute requires a clean
+working tree (untracked counts as dirty), and because
 ignored files are invisible to that status-based gate while
 `read-tree -u --reset` would silently overwrite an ignored file on a path
 the new tip tracks, it additionally hard-blocks ignored-path collisions
@@ -275,12 +282,13 @@ The project is converging on a two-axis risk model:
 
 The current implementation already separates read-only inspect data, preview
 plans, guarded execute, and registry-backed undo. `history_edit` exercises both
-axes: an unpublished tree-preserving range is medium severity and
-`reversible_if_unchanged` with no human confirmation, while a published range or
-any `drop` is high severity, still `reversible_if_unchanged` locally, and
-requires explicit human confirmation — for a published range because local undo
-cannot un-publish remote history, and for `drop` because it changes the final
-tree and synchronizes the working tree. Future work will expand this into
+axes: an unpublished tree-preserving range, including clean reorder, is medium
+severity and `reversible_if_unchanged` with no human confirmation, while a
+published range or any `drop` is high severity, still
+`reversible_if_unchanged` locally, and requires explicit human confirmation —
+for a published range because local undo cannot un-publish remote history, and
+for `drop` because it changes the final tree and synchronizes the working tree.
+Future work will expand this into
 richer warnings and human-confirmation rules for high-risk actions.
 
 ## Untrusted Repositories

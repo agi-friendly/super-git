@@ -77,13 +77,14 @@ path-disjoint `drop` cases that look safe: any drop changes the final tree
 and silently reverts content without a conflict signal, which is exactly the
 class of surprise this op set excludes by construction.
 
-> **Status update (2026-06-12):** Stage 7 prediction exists, and `drop` now
-> has its own contract checkpoint
-> (`2026-06-12-c8-drop-history-edit-contract.md`). As of C8-drop-B,
-> `preview history-edit` accepts `drop` as a prediction-gated, always
-> confirmation-required tree-changing plan; execute still rejects drop
-> plans until C8-drop-C. The tree-preserving invariant in this document is
-> unchanged for `pick`/`reword`/`squash`/`fixup` plans.
+> **Status update (2026-06-14):** Stage 7 prediction exists. `drop` has its
+> own checkpoint (`2026-06-12-c8-drop-history-edit-contract.md`) and is now
+> implemented through preview, execute, and undo. `reorder` has its own
+> checkpoint (`2026-06-13-c8-reorder-history-edit-contract.md`) and is now
+> implemented as a prediction-gated, tree-preserving, ref-only history edit.
+> The tree-preserving invariant in this document remains the baseline for
+> `pick`/`reword`/`squash`/`fixup` and clean reorder plans; `drop` is the
+> explicit tree-changing exception.
 
 ## Non-negotiable Rules
 
@@ -218,8 +219,8 @@ Op support in the first implementation:
 | `reword` | supported | supported |
 | `squash` | supported | supported |
 | `fixup` | supported | supported |
-| `drop` | blocked | blocked until Stage 7 conflict prediction |
-| reorder (list order change) | blocked | blocked until Stage 7 conflict prediction |
+| `drop` | supported via C8-drop checkpoint | supported with confirmation + worktree sync |
+| reorder (list order change) | supported via C8-reorder checkpoint | supported when prediction preserves final tree |
 | `edit` / `split` | blocked | deferred |
 
 ## Published Commit Policy
@@ -255,11 +256,11 @@ Policy:
 | `merge_commit_in_range` | Merge topology preservation is out of scope. |
 | `commit_signing_enabled` | `commit.gpgsign` is set; rebuilt commits cannot honestly honor it without interactive key access. Deferred. |
 | `committer_identity_missing` | `user.name` or `user.email` is not configured. |
-| `instruction_op_unsupported` | `drop`, reorder, `edit`, `split`, or unknown ops. |
+| `instruction_op_unsupported` | `edit`, `split`, or unknown ops. `drop` moved to the C8-drop checkpoint; reorder moved to the C8-reorder checkpoint. |
 | `instructions_incomplete` | One or more range commits are missing from the list. |
 | `instructions_unknown_commit` | An item references a commit outside the range. |
 | `instructions_duplicate_commit` | A commit appears more than once. |
-| `instructions_order_mismatch` | Item order differs from the range order; reordering is not supported yet. |
+| `instructions_order_mismatch` | Baseline C8-0 order guard for non-reorder instruction mistakes. Current reorder plans are handled by the C8-reorder checkpoint and may instead be accepted or blocked by reorder-specific reasons. |
 | `instruction_fold_without_predecessor` | The first item is `squash` or `fixup`. |
 | `instruction_message_missing` | `reword` or `squash` without a message. |
 | `instruction_message_empty` | A message is empty after trimming. |
@@ -658,7 +659,7 @@ Published-history rewrites reuse the C7-C artifact shape:
   "acknowledged_undo_strategy": "restore_branch_tip_snapshot",
   "acknowledgement": {
     "method": "cli_typed_phrase",
-    "phrase": "rewrite published history on refs/heads/feature/login at ccc333"
+    "phrase": "rewrite published history on refs/heads/feature/login at ccc333 for plan a1b2c3d4e5f6"
   }
 }
 ```
@@ -666,7 +667,7 @@ Published-history rewrites reuse the C7-C artifact shape:
 The deterministic CLI phrase is:
 
 ```text
-rewrite published history on <branch.ref> at <branch.tip_commit>
+rewrite published history on <branch.ref> at <branch.tip_commit> for plan <short-plan-id>
 ```
 
 Static validation reuses the C7-C rule table with `history_edit` identity
@@ -815,8 +816,6 @@ Acceptance:
 
 These are product ideas, not part of the first history edit implementation:
 
-- `drop` and reordering (wait for Stage 7 conflict prediction; safe `drop`
-  for wip commits is known high demand and should land early in Stage 7)
 - `edit` and commit `split`
 - autosquash from `fixup!`/`squash!` subjects
 - `--onto` and rebasing onto a moved base

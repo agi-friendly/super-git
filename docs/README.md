@@ -31,6 +31,9 @@ Implementation plans and design checkpoints live under:
 - [Worktree remove preview contract](internal/plans/2026-06-07-c7-0-worktree-remove-preview-contract.md)
 - [Worktree remove confirmation contract](internal/plans/2026-06-07-c7-c-worktree-remove-confirmation-contract.md)
 - [History edit preview contract](internal/plans/2026-06-10-c8-0-history-edit-preview-contract.md)
+- [History edit drop contract](internal/plans/2026-06-12-c8-drop-history-edit-contract.md)
+- [History edit reorder contract](internal/plans/2026-06-13-c8-reorder-history-edit-contract.md)
+- [Conflict prediction contract](internal/plans/2026-06-12-c9-0-conflict-prediction-contract.md)
 
 These files are useful for project history and implementation context, but the
 public-facing contract should be reflected in the main docs listed above.

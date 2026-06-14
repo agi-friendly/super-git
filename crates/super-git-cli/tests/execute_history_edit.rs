@@ -447,6 +447,184 @@ fn survey_plan_cannot_be_executed() {
 }
 
 #[test]
+fn reorder_executes_ref_only_and_preserves_dirty_worktree() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+    std::fs::write(repo.join("a.txt"), "dirty but local\n").expect("dirty tracked file");
+    let status_before = git_stdout(&repo, &["status", "--porcelain=v1"]);
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+
+    assert_eq!(plan["data"]["execution"]["status"], "executable");
+    assert_eq!(
+        plan["data"]["undo_strategy"]["kind"],
+        "restore_branch_tip_snapshot"
+    );
+    let json = json_output(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], true);
+    let tip_after = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    assert_ne!(tip_after, tip_before);
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before
+    );
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain=v1"]),
+        status_before,
+        "reorder execute is ref-only; it must not clean or sync the worktree"
+    );
+    assert_eq!(
+        json["data"]["undo_token"]["kind"],
+        "restore_branch_tip_snapshot"
+    );
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "fix typo".to_string(),
+            "feat(login): add form".to_string(),
+            "wip".to_string()
+        ]
+    );
+}
+
+#[test]
+fn tampered_reorder_advisory_is_ignored_in_favor_of_bound_instructions() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+    let mut plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    // The reorder block and effects are display evidence only. A forged copy
+    // must not change execute semantics; the bound instructions still drive
+    // the actual replay order.
+    plan["data"]["reorder"]["commits_reordered"] = serde_json::json!(0);
+    plan["data"]["reorder"]["old_order"] = serde_json::json!([]);
+    plan["data"]["reorder"]["new_order"] =
+        serde_json::json!([oids[0].clone(), oids[1].clone(), oids[2].clone()]);
+    plan["data"]["effects"] = serde_json::json!(["forged: no commits will move"]);
+
+    let json = json_output(execute_plan_from_stdin(&repo, &plan));
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before
+    );
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "fix typo".to_string(),
+            "feat(login): add form".to_string(),
+            "wip".to_string()
+        ]
+    );
+}
+
+#[test]
+fn reorder_rebuilds_from_the_first_moved_position() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[0], oids[2], oids[1]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+
+    json_output(execute_plan_from_stdin(&repo, &plan));
+
+    let new_oids: Vec<String> = git_stdout(&repo, &["rev-list", "--reverse", "main..HEAD"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        new_oids[0], oids[0],
+        "unchanged prefix before the first moved position keeps its original id"
+    );
+    assert_ne!(
+        new_oids[1], oids[2],
+        "the first moved commit is replayed onto a new parent"
+    );
+    assert_ne!(
+        new_oids[2], oids[1],
+        "commits after the first moved position are rebuilt too"
+    );
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "feat(login): add form".to_string(),
+            "wip".to_string(),
+            "fix typo".to_string()
+        ]
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before
+    );
+}
+
+#[test]
+fn published_reorder_executes_with_the_standard_history_edit_confirmation() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/feature/login", &oids[2]],
+    );
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+    let plan = preview_plan(&repo, "main", &instructions_doc(&items));
+    assert_eq!(plan["data"]["execution"]["status"], "preview_only");
+    let plan_id = plan["data"]["plan_id"].as_str().expect("plan id");
+    let plan_short = plan_id
+        .strip_prefix("sha256:")
+        .unwrap_or(plan_id)
+        .get(..12)
+        .expect("short plan id");
+    assert_eq!(
+        plan["data"]["confirmation"]["required_phrase"],
+        format!("rewrite published history on refs/heads/feature/login at {tip_before} for plan {plan_short}")
+    );
+
+    let json = json_output(execute_with_confirmation(
+        &repo,
+        &plan,
+        &confirmation_for(&plan),
+    ));
+
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        json["data"]["undo_token"]["kind"],
+        "restore_branch_tip_snapshot"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before
+    );
+    assert_eq!(
+        subjects(&repo, "main..HEAD"),
+        vec![
+            "fix typo".to_string(),
+            "feat(login): add form".to_string(),
+            "wip".to_string()
+        ]
+    );
+}
+
+#[test]
 fn tampered_advisory_fields_are_ignored_in_favor_of_authentic_repo_values() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());
@@ -669,8 +847,14 @@ fn drop_execute_with_the_published_phrase_is_rejected() {
     // the drop phrase. One plan, one phrase — this must not authorize a drop.
     let mut confirmation = confirmation_for(&plan);
     let branch_ref = plan["data"]["branch"]["ref"].as_str().expect("ref");
+    let plan_id = plan["data"]["plan_id"].as_str().expect("plan id");
+    let plan_short = plan_id
+        .strip_prefix("sha256:")
+        .unwrap_or(plan_id)
+        .get(..12)
+        .expect("short plan id");
     confirmation["acknowledgement"]["phrase"] = serde_json::json!(format!(
-        "rewrite published history on {branch_ref} at {tip_before}"
+        "rewrite published history on {branch_ref} at {tip_before} for plan {plan_short}"
     ));
 
     let json = error_json(execute_with_confirmation(&repo, &plan, &confirmation));

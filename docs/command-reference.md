@@ -257,9 +257,10 @@ read-only and includes high-risk metadata, explicit confirmation requirements,
 
 Builds a read-only `super-git.plan.v0.5` plan for editing commit history on the
 branch checked out in the current worktree. The op set is `pick`, `reword`,
-`squash`, `fixup`, and `drop`. The first four preserve every tree object, so
-those edits can never produce a content conflict; `drop` removes a commit's
-patch from the final history and is gated by conflict prediction (below).
+`squash`, `fixup`, and `drop`; reorder is expressed by changing the order of
+the instruction `items` array itself. `pick`/`reword`/`squash`/`fixup` and
+clean reorder plans preserve the final tree; `drop` removes a commit's patch
+from the final history and is gated by conflict prediction (below).
 
 ```bash
 super-git preview history-edit --base <ref>
@@ -282,14 +283,13 @@ an instruction list that does not cover the range) returns
 `execution.status: "blocked"` with structured, repairable reason codes.
 
 Staged and unstaged changes are allowed with a `working_tree_dirty` warning.
-Preview never touches refs, the index, the working tree, or config. A
-tree-preserving preview reads only; a `drop` preview additionally runs the
-kept-commit replay prediction, which — like `predict rebase` — may write
-unreferenced, gc-collectable objects into the object database (each clean
-replay step wraps its result tree in a synthetic commit). Only malformed or
-wrong-schema instruction input fails with `{ ok: false, error }`; content
-problems become blocked plans instead. `reference_commands` are documentation
-only.
+Preview never touches refs, the index, the working tree, or config. The basic
+tree-preserving preview reads only; `drop` and reorder previews additionally
+run replay prediction, which — like `predict rebase` — may write unreferenced,
+gc-collectable objects into the object database (each clean replay step wraps
+its result tree in a synthetic commit). Only malformed or wrong-schema
+instruction input fails with `{ ok: false, error }`; content problems become
+blocked plans instead. `reference_commands` are documentation only.
 
 ### Dropping commits
 
@@ -318,9 +318,9 @@ Drop-specific contract, visible in the plan itself:
   cannot be forged.
 - Drop is always confirmation-gated (`preview_only`), regardless of published
   state, with reason code `tree_changing_drop` and the deterministic phrase
-  `drop <N> commit(s) from <branch_ref> at <tip_commit>`. When the range is
-  also published, the reason codes name both, but the phrase stays the drop
-  phrase.
+  `drop <N> commit(s) from <branch_ref> at <tip_commit> for plan
+  <short-plan-id>`. When the range is also published, the reason codes name
+  both, but the phrase stays the drop phrase.
 - `drop` may be mixed with `pick` and `reword` only; mixing with
   `squash`/`fixup` blocks as `drop_with_fold_unsupported`. Dropping every
   commit in the range is allowed and moves the branch to `base` itself.
@@ -329,6 +329,50 @@ Drop-specific contract, visible in the plan itself:
   first history-edit family that touches the working tree. The plan states
   this as the non-volatile precondition
   `working_tree_clean_required_at_execute`.
+
+### Reordering commits
+
+Reorder changes commit order by permuting the `items` array. There is no
+separate `op: "reorder"` and no position field; the list order is the planned
+history order. Example: to swap the first two commits while keeping all three,
+submit the same three `pick` items in the new order:
+
+```json
+{
+  "schema_version": "super-git.instructions.v0.1",
+  "action": "history_edit",
+  "base": "main",
+  "items": [
+    { "commit": "<second-oldest>", "op": "pick" },
+    { "commit": "<oldest>", "op": "pick" },
+    { "commit": "<newest>", "op": "pick" }
+  ]
+}
+```
+
+Reorder-specific contract:
+
+- Preview replays the commits internally and embeds a
+  `prediction.kind: "reordered_commit_replay"` evidence block. A predicted
+  conflict blocks with `predicted_conflict`; a clean replay is still blocked if
+  it would change the final tree (`reorder_changes_final_tree`) or create an
+  empty replay step in v0 (`reorder_creates_empty_commit`).
+- Clean reorder is tree-preserving by contract: execute verifies
+  `tree(new tip) == tree(old tip)`. It rebuilds commits from the first moved
+  position using the prediction's per-step trees, moves only the branch ref,
+  and leaves the working tree and index untouched. Dirty working trees are
+  allowed with the same warning as other tree-preserving history edits.
+- The top-level `reorder` block and `effects` strings are display evidence,
+  not authority. Execute revalidates from the bound `instructions` and
+  `prediction`; tampering with advisory order summaries does not change what
+  gets replayed.
+- Reorder may mix with `pick` and `reword`. Mixing reorder with `drop` blocks
+  as `reorder_with_drop_unsupported`; mixing with `squash`/`fixup` blocks as
+  `reorder_with_fold_unsupported`.
+- Unpublished reorder plans execute directly. Published reorder plans use the
+  standard published-history confirmation phrase:
+  `rewrite published history on <branch.ref> at <branch.tip_commit> for plan
+  <short-plan-id>`.
 
 ## `predict merge --theirs <rev> [--ours <rev>]`
 
@@ -433,10 +477,11 @@ For `history_edit`, execute re-derives the plan from fresh state and requires an
 identical plan id before writing, then rebuilds the commit chain with Git
 plumbing (`commit-tree`), moves the branch ref by compare-and-swap, and
 post-verifies the final tree. Leading unchanged picks keep their original
-object ids; author identity is preserved on every rewritten commit. For the
-tree-preserving ops the final tree must be byte-identical to the pre-execute
-tree and the working tree and index are never touched; successful results
-carry a `restore_branch_tip_snapshot` undo token.
+object ids; reorder additionally caps that prefix at the first moved position.
+Author identity is preserved on every rewritten commit. For the tree-preserving
+ops, including clean reorder, the final tree must be byte-identical to the
+pre-execute tree and the working tree and index are never touched; successful
+results carry a `restore_branch_tip_snapshot` undo token.
 
 For plans containing `drop`, execute additionally requires a clean working
 tree (untracked counts as dirty, surfacing as `working_tree_clean`), blocks
@@ -454,11 +499,12 @@ not carry a confirmation artifact. Published ranges and all drop plans
 (`execution.status: "preview_only"`) require a separate
 `super-git.confirmation.v0.1` artifact whose target, reason codes, undo
 strategy, and CLI phrase match the plan — the published phrase is
-`rewrite published history on <branch.ref> at <branch.tip_commit>`, the drop
-phrase is `drop <N> commit(s) from <branch.ref> at <branch.tip_commit>`; the
-confirmation is authorization only and never replaces fresh revalidation. The
-undo token still restores the local branch tip but cannot un-publish anything
-already pushed.
+`rewrite published history on <branch.ref> at <branch.tip_commit> for plan
+<short-plan-id>`, the drop phrase is `drop <N> commit(s) from <branch.ref> at
+<branch.tip_commit> for plan <short-plan-id>`; copy the exact
+`confirmation.required_phrase` from the plan. The confirmation is authorization
+only and never replaces fresh revalidation. The undo token still restores the
+local branch tip but cannot un-publish anything already pushed.
 
 Successful execute results currently use `schema_version` value
 `"super-git.execute.v0.2"`. Undoable actions include an `undo_token`;

@@ -119,6 +119,19 @@ fn structured_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
                     "safe_next": details.safe_next,
                 }
             })),
+            SuperGitError::ExecuteRecordCleanupFailure(details) => Some(json!({
+                "status": "failed_partial",
+                "action": details.action,
+                "message": details.message,
+                "phase": details.phase,
+                "execution_record_path": details.execution_record_path,
+                "cleanup": {
+                    "automatic_undo_available": false,
+                    "safe_next": details.safe_next,
+                    "original_error": details.original_error,
+                    "cleanup_error": details.cleanup_error,
+                }
+            })),
             _ => None,
         }
     })
@@ -865,6 +878,37 @@ mod tests {
             details["cleanup"]["safe_next"],
             "finish synchronizing to the recorded tip"
         );
+    }
+
+    #[test]
+    fn execute_record_cleanup_failure_exposes_recovery_details() {
+        let err = anyhow::Error::new(SuperGitError::ExecuteRecordCleanupFailure(Box::new(
+            super_git_core::error::RecordCleanupFailureError {
+                action: "history_edit".to_string(),
+                phase: "rollback_succeeded".to_string(),
+                message: "record cleanup failed".to_string(),
+                original_error: "post-write failure".to_string(),
+                cleanup_error: "is a directory".to_string(),
+                execution_record_path: PathBuf::from("/repo/.git/super-git/executions/x.json"),
+                safe_next: "verify and remove stale record".to_string(),
+            },
+        )));
+
+        assert_eq!(
+            structured_error_code(&err).as_deref(),
+            Some("execute_record_cleanup_failed")
+        );
+        let details = structured_error_details(&err).expect("details");
+        assert_eq!(details["status"], "failed_partial");
+        assert_eq!(details["action"], "history_edit");
+        assert_eq!(details["phase"], "rollback_succeeded");
+        assert_eq!(details["cleanup"]["automatic_undo_available"], false);
+        assert_eq!(
+            details["cleanup"]["safe_next"],
+            "verify and remove stale record"
+        );
+        assert_eq!(details["cleanup"]["original_error"], "post-write failure");
+        assert_eq!(details["cleanup"]["cleanup_error"], "is a directory");
     }
 
     /// The undo variant shares the payload and the JSON shape but reports the

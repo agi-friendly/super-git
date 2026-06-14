@@ -213,6 +213,43 @@ fn executable_plan_resolves_instructions_and_summary() {
 }
 
 #[test]
+fn reorder_preview_reports_order_prediction_and_execute_support() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let items = format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    );
+
+    let json = json_output(preview_with_instructions(
+        &repo,
+        "main",
+        &instructions_doc(&items),
+    ));
+
+    let data = &json["data"];
+    assert_eq!(data["execution"]["status"], "executable");
+    assert_eq!(data["execution"]["execute_supported"], true);
+    assert_eq!(data["execution"]["requires_confirmation_artifact"], false);
+    assert!(data.get("confirmation").is_none());
+    assert!(blocked_codes(data).is_empty());
+    assert_eq!(data["reorder"]["commits_reordered"], 2);
+    assert_eq!(data["reorder"]["old_order"][0], oids[0]);
+    assert_eq!(data["reorder"]["new_order"][0], oids[1]);
+    assert_eq!(data["prediction"]["kind"], "reordered_commit_replay");
+    assert_eq!(data["prediction"]["status"], "clean");
+    assert_eq!(
+        data["prediction"]["steps"].as_array().expect("steps").len(),
+        3
+    );
+    assert_eq!(data["prediction"]["dropped_commits"], serde_json::json!([]));
+    assert!(data["prediction"]["final_tree"].is_string());
+    assert_eq!(data["result_summary"]["final_tree_unchanged"], true);
+    assert_eq!(data["undo_strategy"]["kind"], "restore_branch_tip_snapshot");
+    assert_eq!(data["undo_preview"]["available_after_execute"], true);
+}
+
+#[test]
 fn published_range_marks_preview_only_and_confirmation() {
     let tmp = tempfile::tempdir().expect("temp");
     let (repo, oids) = feature_repo(tmp.path());

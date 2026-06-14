@@ -177,6 +177,13 @@ fn reword_fixup_items(oids: &[String]) -> String {
     ))
 }
 
+fn reorder_items(oids: &[String]) -> String {
+    instructions_doc(&format!(
+        r#"[{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}},{{"commit":"{}","op":"pick"}}]"#,
+        oids[1], oids[0], oids[2]
+    ))
+}
+
 #[test]
 fn execute_then_undo_restores_exact_pre_edit_tip() {
     let tmp = tempfile::tempdir().expect("temp");
@@ -606,6 +613,41 @@ fn undo_consumes_the_record_so_the_same_plan_re_executes() {
 
     let rerun = execute(&repo, &plan);
     assert_eq!(rerun["ok"], true);
+}
+
+#[test]
+fn reorder_execute_undo_re_execute_roundtrip() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let (repo, oids) = feature_repo(tmp.path());
+    let tip_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let tree_before = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let plan = preview_plan(&repo, "main", &reorder_items(&oids));
+
+    let result = execute(&repo, &plan);
+    assert_ne!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]),
+        tree_before,
+        "reorder execute preserves the final tree"
+    );
+
+    let undone = json_output(undo(&repo, &result));
+    assert_eq!(undone["ok"], true);
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), tip_before);
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain=v1"]),
+        "",
+        "snapshot undo leaves the clean working tree clean"
+    );
+
+    let rerun = execute(&repo, &plan);
+    assert_eq!(rerun["ok"], true);
+    assert_eq!(
+        git_stdout(&repo, &["log", "--reverse", "--format=%s", "main..HEAD"])
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["fix typo", "feat(login): add form", "wip"]
+    );
 }
 
 #[test]

@@ -707,7 +707,8 @@ pub struct HistoryEditConfirmationTarget {
 
 /// `super-git.plan.v0.5` 히스토리 편집 계획.
 /// pick/reword/squash/fixup는 트리를 보존해 분기 ref만 이동하고, drop은 patch를
-/// 최종 history에서 제거한다(prediction이 plan_id에 바인딩된다).
+/// 최종 history에서 제거한다(prediction이 plan_id에 바인딩된다). reorder는
+/// prediction과 instruction order로 바인딩되고, reorder 요약은 advisory다.
 /// instructions/result_summary는 survey 모드에서 null로 명시된다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -726,9 +727,13 @@ pub struct HistoryEditPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions_template: Option<HistoryEditInstructionsTemplate>,
     pub result_summary: Option<HistoryEditResultSummaryView>,
-    /// drop 포함(tree-changing) plan에만 채워지는 replay 예측 증거.
+    /// Reorder 전용 agent-facing summary. Advisory only: the authoritative
+    /// order is `instructions.items`, and the replay prediction is plan-id bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorder: Option<HistoryEditReorderAdvisory>,
+    /// drop/reorder replay plan에 채워지는 예측 증거.
     /// advisory가 아니라 plan-binding이다: plan_id projection에 포함되고,
-    /// `final_tree`는 C8-drop-C execute의 post-verify 오라클이 된다.
+    /// `final_tree`는 replay-backed execute의 post-verify 오라클이 된다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prediction: Option<HistoryEditPrediction>,
     pub preconditions: Vec<HistoryEditPrecondition>,
@@ -853,12 +858,20 @@ pub struct HistoryEditResultSummaryView {
     pub final_tree_unchanged: bool,
 }
 
-/// drop 포함 plan의 kept-commit replay 예측 (C8-drop 계약).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEditReorderAdvisory {
+    pub commits_reordered: u32,
+    pub old_order: Vec<String>,
+    pub new_order: Vec<String>,
+}
+
+/// history_edit replay 예측 (C8-drop / C8-reorder 계약).
 /// C9 rebase-chain과 같은 per-step shape를 쓰되 plan에 바인딩된다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryEditPrediction {
-    /// 항상 "kept_commit_replay".
+    /// "kept_commit_replay" | "reordered_commit_replay".
     pub kind: String,
     /// "clean" | "conflicted".
     pub status: String,

@@ -295,14 +295,6 @@ pub fn validate_instructions(
         );
     }
 
-    // C8-drop v0 경계: fold(squash/fixup)는 원래 트리를 재사용하고 drop은
-    // kept 커밋들을 새 트리로 replay한다. 한 리스트에 두 rebuild 모델을
-    // 섞으면 검증 표면이 곱으로 늘어 일단 막는다(나중에 풀 수 있는 확장).
-    let has_drop = document.items.iter().any(|item| item.op == "drop");
-    if has_drop && document.items.iter().any(|item| is_fold_op(&item.op)) {
-        push_block(&mut blocks, "drop_with_fold_unsupported", None);
-    }
-
     let resolutions: Vec<Option<&HistoryEditCommit>> = document
         .items
         .iter()
@@ -360,18 +352,25 @@ pub fn validate_instructions(
         && duplicates.is_empty()
         && missing.is_empty()
         && resolved_oids.len() == range_commits.len();
-    if covers_range_exactly {
-        let range_order: Vec<&str> = range_commits
-            .iter()
-            .map(|commit| commit.commit.as_str())
-            .collect();
-        if resolved_oids != range_order {
-            push_block(
-                &mut blocks,
-                "instructions_order_mismatch",
-                Some(json!({ "expected_order": range_order })),
-            );
-        }
+    let range_order: Vec<&str> = range_commits
+        .iter()
+        .map(|commit| commit.commit.as_str())
+        .collect();
+    let is_reorder_candidate = covers_range_exactly && resolved_oids != range_order;
+
+    let has_drop = document.items.iter().any(|item| item.op == "drop");
+    let has_fold = document.items.iter().any(|item| is_fold_op(&item.op));
+    if is_reorder_candidate && has_drop {
+        push_block(&mut blocks, "reorder_with_drop_unsupported", None);
+    }
+    if is_reorder_candidate && has_fold {
+        push_block(&mut blocks, "reorder_with_fold_unsupported", None);
+    }
+    // C8-drop v0 경계: fold(squash/fixup)는 원래 트리를 재사용하고 drop은
+    // kept 커밋들을 새 트리로 replay한다. 한 리스트에 두 rebuild 모델을
+    // 섞으면 검증 표면이 곱으로 늘어 일단 막는다(나중에 풀 수 있는 확장).
+    if !is_reorder_candidate && has_drop && has_fold {
+        push_block(&mut blocks, "drop_with_fold_unsupported", None);
     }
 
     if document
@@ -412,7 +411,10 @@ pub fn validate_instructions(
         }
     }
 
-    if !document.items.is_empty() && document.items.iter().all(|item| item.op == "pick") {
+    if !document.items.is_empty()
+        && !is_reorder_candidate
+        && document.items.iter().all(|item| item.op == "pick")
+    {
         push_block(&mut blocks, "instructions_no_effective_change", None);
     }
 
@@ -435,10 +437,17 @@ fn build_program(
     // 첫 drop 이후의 커밋들은 replay로 새 oid를 받으므로, unchanged prefix는
     // 첫 drop 앞에서 끝난다. fold 기준 prefix와 별도로 추적해 min을 취한다.
     let mut groups_before_first_drop: Option<usize> = None;
+    let mut first_reordered_position: Option<usize> = None;
 
-    for item in &document.items {
+    for (index, item) in document.items.iter().enumerate() {
         let commit = resolve_range_commit(range_commits, &item.commit)
             .expect("validated instruction must resolve");
+        if range_commits
+            .get(index)
+            .is_some_and(|original| original.commit != commit.commit)
+        {
+            first_reordered_position.get_or_insert(index);
+        }
         let normalized_message = item.message.as_deref().map(normalize_message);
         steps.push(ResolvedInstruction {
             commit: commit.commit.clone(),
@@ -489,6 +498,7 @@ fn build_program(
         .take_while(|group| !group.message_changed && group.folded_commits.is_empty())
         .count()
         .min(groups_before_first_drop.unwrap_or(usize::MAX))
+        .min(first_reordered_position.unwrap_or(usize::MAX))
         as u32;
 
     let summary = HistoryEditResultSummary {
@@ -1404,12 +1414,56 @@ mod tests {
         )))
         .expect("parse");
         let validation = validate_instructions(&scan.range.commits, &swapped);
+        assert!(
+            validation.blocks.is_empty(),
+            "same-set reorder is a valid program now: {:?}",
+            validation.blocks
+        );
+        let program = validation.program.expect("program");
+        assert_eq!(program.steps[0].commit, oids[1]);
+        assert_eq!(program.summary.unchanged_prefix_commits, 0);
+    }
+
+    #[test]
+    fn validate_blocks_reorder_mixed_with_drop_or_fold() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let (repo, oids) = repo_with_feature_range(temp_dir.path());
+        let scan = scan_history_edit_range(&repo, "main").expect("scan");
+
+        let reorder_with_drop = parse_instructions(&instructions_json(&format!(
+            r#"[
+              {{ "commit": "{}", "op": "drop" }},
+              {{ "commit": "{}", "op": "pick" }},
+              {{ "commit": "{}", "op": "pick" }}
+            ]"#,
+            oids[1], oids[0], oids[2],
+        )))
+        .expect("parse");
+        let validation = validate_instructions(&scan.range.commits, &reorder_with_drop);
         let codes: Vec<&str> = validation
             .blocks
             .iter()
             .map(|block| block.code.as_str())
             .collect();
-        assert!(codes.contains(&"instructions_order_mismatch"));
+        assert!(codes.contains(&"reorder_with_drop_unsupported"));
+        assert!(validation.program.is_none());
+
+        let reorder_with_fold = parse_instructions(&instructions_json(&format!(
+            r#"[
+              {{ "commit": "{}", "op": "pick" }},
+              {{ "commit": "{}", "op": "squash", "message": "folded" }},
+              {{ "commit": "{}", "op": "pick" }}
+            ]"#,
+            oids[1], oids[0], oids[2],
+        )))
+        .expect("parse");
+        let validation = validate_instructions(&scan.range.commits, &reorder_with_fold);
+        let codes: Vec<&str> = validation
+            .blocks
+            .iter()
+            .map(|block| block.code.as_str())
+            .collect();
+        assert!(codes.contains(&"reorder_with_fold_unsupported"));
         assert!(validation.program.is_none());
     }
 

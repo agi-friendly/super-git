@@ -61,14 +61,17 @@ Implemented today:
   - without `--instructions`, returns a read-only survey of the editable
     `base..HEAD` range (commits, published state, signatures, hard blocks)
   - with a `super-git.instructions.v0.1` document (`pick`/`reword`/`squash`/
-    `fixup`/`drop` per commit), builds a rewrite plan; the first four ops are
-    tree-preserving, `drop` removes a commit's patch from the final history
-  - unpublished ranges produce an executable plan; published ranges produce a
-    `preview_only` plan that requires a separate human confirmation artifact
-  - `drop` plans are always confirmation-gated, embed a kept-commit replay
-    prediction (a predicted conflict blocks the plan; nothing is ever
-    auto-resolved), and carry the predicted `final_tree` that execute must
-    land on
+    `fixup`/`drop` per commit, plus reorder by changing the item order),
+    builds a rewrite plan; `pick`/`reword`/`squash`/`fixup` and clean reorder
+    plans are tree-preserving, while `drop` removes a commit's patch from the
+    final history
+  - unpublished tree-preserving plans execute directly; published ranges and
+    all `drop` plans produce a `preview_only` plan that requires a separate
+    human confirmation artifact
+  - `drop` and reorder plans embed replay predictions (a predicted conflict
+    blocks the plan; nothing is ever auto-resolved); drop carries the predicted
+    `final_tree` that execute must land on, while reorder is allowed only when
+    the predicted final tree equals the old tip's tree
 - `super-git predict merge --theirs <rev> [--ours <rev>]`
   - predicts merge conflicts between two commits via `git merge-tree`,
     reporting per-file conflicts by index stage; a predicted conflict is a
@@ -96,12 +99,16 @@ Implemented today:
     preserved), moves the branch ref with compare-and-swap, verifies the final
     tree against the expected one, and requires the confirmation artifact when
     the range is published
+  - for `history_edit` reorder plans, uses the replay prediction to rebuild
+    commits in the requested order while keeping the final tree identical; it
+    is ref-only and does not require or clean the working tree
   - for `history_edit` plans containing `drop`, additionally requires a clean
     working tree (untracked counts as dirty), blocks ignored files sitting on
     paths the new tip tracks, verifies the rebuilt tip against the predicted
     `final_tree` before the ref moves, and synchronizes the index and working
     tree to the new tip afterwards — the typed phrase
-    `drop <N> commit(s) from <branch_ref> at <tip>` is always required
+    `drop <N> commit(s) from <branch_ref> at <tip> for plan <short-plan-id>`
+    is always required
 - `super-git undo --token <file|->`
   - treats token input as untrusted
   - for `stage_changes`, validates repository, snapshot checksums, current
