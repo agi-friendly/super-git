@@ -228,7 +228,12 @@ Slicing direction:
   re-execute, public docs, and lifecycle hardening). The full
   preview→confirm→execute→undo→re-execute drop lifecycle is covered by tests.
 - reordering is the remaining replay consumer; it reuses the same machinery
-  and gets its own checkpoint once drop has soaked
+  but is tree-preserving by contract (final tree must equal the old tip's),
+  which puts it in the reword/fold safety class, not drop's. Contract
+  checkpoint:
+  `docs/internal/plans/2026-06-13-c8-reorder-history-edit-contract.md`
+  (C8-reorder-A: contract + Git-behavior spikes done; B preview / C execute
+  open)
 - commit `split` is intentionally deferred
 
 ## Stage 7: Merge And Rebase Conflict Prediction
