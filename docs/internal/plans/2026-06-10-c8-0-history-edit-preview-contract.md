@@ -256,11 +256,11 @@ Policy:
 | `merge_commit_in_range` | Merge topology preservation is out of scope. |
 | `commit_signing_enabled` | `commit.gpgsign` is set; rebuilt commits cannot honestly honor it without interactive key access. Deferred. |
 | `committer_identity_missing` | `user.name` or `user.email` is not configured. |
-| `instruction_op_unsupported` | `drop`, reorder, `edit`, `split`, or unknown ops. |
+| `instruction_op_unsupported` | `edit`, `split`, or unknown ops. `drop` moved to the C8-drop checkpoint; reorder moved to the C8-reorder checkpoint. |
 | `instructions_incomplete` | One or more range commits are missing from the list. |
 | `instructions_unknown_commit` | An item references a commit outside the range. |
 | `instructions_duplicate_commit` | A commit appears more than once. |
-| `instructions_order_mismatch` | Item order differs from the range order; reordering is not supported yet. |
+| `instructions_order_mismatch` | Baseline C8-0 order guard for non-reorder instruction mistakes. Current reorder plans are handled by the C8-reorder checkpoint and may instead be accepted or blocked by reorder-specific reasons. |
 | `instruction_fold_without_predecessor` | The first item is `squash` or `fixup`. |
 | `instruction_message_missing` | `reword` or `squash` without a message. |
 | `instruction_message_empty` | A message is empty after trimming. |
